@@ -13,7 +13,7 @@
 #include "fontIds.h"
 
 namespace {
-constexpr const char* HOSTNAME = "crosspoint";
+constexpr const char* HOSTNAME = "crossmosa";
 }  // namespace
 
 void CalibreConnectActivity::onEnter() {
@@ -192,10 +192,10 @@ void CalibreConnectActivity::render(RenderLock&&) {
     renderer.drawText(UI_12_FONT_ID, metrics.contentSidePadding, y, tr(STR_CALIBRE_SETUP), true, EpdFontFamily::BOLD);
     y += heightText12 + metrics.verticalSpacing * 2;
 
-    renderer.drawText(SMALL_FONT_ID, metrics.contentSidePadding, y, tr(STR_CALIBRE_INSTRUCTION_1));
-    renderer.drawText(SMALL_FONT_ID, metrics.contentSidePadding, y + height, tr(STR_CALIBRE_INSTRUCTION_2));
-    renderer.drawText(SMALL_FONT_ID, metrics.contentSidePadding, y + height * 2, tr(STR_CALIBRE_INSTRUCTION_3));
-    renderer.drawText(SMALL_FONT_ID, metrics.contentSidePadding, y + height * 3, tr(STR_CALIBRE_INSTRUCTION_4));
+    renderer.drawText(UI_10_FONT_ID, metrics.contentSidePadding, y, tr(STR_CALIBRE_INSTRUCTION_1));
+    renderer.drawText(UI_10_FONT_ID, metrics.contentSidePadding, y + height, tr(STR_CALIBRE_INSTRUCTION_2));
+    renderer.drawText(UI_10_FONT_ID, metrics.contentSidePadding, y + height * 2, tr(STR_CALIBRE_INSTRUCTION_3));
+    renderer.drawText(UI_10_FONT_ID, metrics.contentSidePadding, y + height * 3, tr(STR_CALIBRE_INSTRUCTION_4));
 
     y += height * 3 + metrics.verticalSpacing * 4;
     renderer.drawText(UI_12_FONT_ID, metrics.contentSidePadding, y, tr(STR_CALIBRE_STATUS), true, EpdFontFamily::BOLD);
@@ -205,10 +205,10 @@ void CalibreConnectActivity::render(RenderLock&&) {
       std::string label = tr(STR_CALIBRE_RECEIVING);
       if (!currentUploadName.empty()) {
         label += ": " + currentUploadName;
-        label = renderer.truncatedText(SMALL_FONT_ID, label.c_str(), pageWidth - metrics.contentSidePadding * 2,
+        label = renderer.truncatedText(UI_10_FONT_ID, label.c_str(), pageWidth - metrics.contentSidePadding * 2,
                                        EpdFontFamily::REGULAR);
       }
-      renderer.drawText(SMALL_FONT_ID, metrics.contentSidePadding, y, label.c_str());
+      renderer.drawText(UI_10_FONT_ID, metrics.contentSidePadding, y, label.c_str());
       GUI.drawProgressBar(renderer,
                           Rect{metrics.contentSidePadding, y + height + metrics.verticalSpacing,
                                pageWidth - metrics.contentSidePadding * 2, metrics.progressBarHeight},
@@ -218,9 +218,9 @@ void CalibreConnectActivity::render(RenderLock&&) {
 
     if (lastCompleteAt > 0 && (millis() - lastCompleteAt) < 6000) {
       std::string msg = std::string(tr(STR_CALIBRE_RECEIVED)) + lastCompleteName;
-      msg = renderer.truncatedText(SMALL_FONT_ID, msg.c_str(), pageWidth - metrics.contentSidePadding * 2,
+      msg = renderer.truncatedText(UI_10_FONT_ID, msg.c_str(), pageWidth - metrics.contentSidePadding * 2,
                                    EpdFontFamily::REGULAR);
-      renderer.drawText(SMALL_FONT_ID, metrics.contentSidePadding, y, msg.c_str());
+      renderer.drawText(UI_10_FONT_ID, metrics.contentSidePadding, y, msg.c_str());
     }
 
     const auto labels = mappedInput.mapLabels(tr(STR_EXIT), "", "", "");

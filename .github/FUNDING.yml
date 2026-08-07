@@ -1,1 +1,15 @@
-custom: ["https://app.royalty.dev/crosspoint-reader/crosspoint-reader"]
+# CrossMosa 的贊助連結。
+#
+# 目前全部註解掉 = GitHub 不會顯示 Sponsor 按鈕。維護者在上架前後填入 handle
+# 取消註解即可生效(README 的「☕ 覺得好用的話」一節寫的是「連結籌備中」,
+# 填好之後記得一起更新那句)。
+#
+# ⚠️ 這個檔案原本繼承自上游 CrossPoint,內容是上游的 royalty.dev 連結。
+#    留著的話,CrossMosa 的頁面會出現一顆把錢送去上游的 Sponsor 按鈕——
+#    對訪客是誤導,對上游也不是他們同意的事。所以清空成模板。
+#    要贊助上游 CrossPoint 請直接到上游 repo,那裡的按鈕才是他們自己設的。
+
+# ko_fi: <handle>
+# buy_me_a_coffee: <handle>
+# github: [<handle>]
+# custom: ["https://example.com/donate"]

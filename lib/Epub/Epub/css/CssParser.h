@@ -33,7 +33,7 @@
 class CssParser {
  public:
   // Bump when CSS cache format or rules change; section caches are invalidated when this changes
-  static constexpr uint8_t CSS_CACHE_VERSION = 6;
+  static constexpr uint8_t CSS_CACHE_VERSION = 8;
 
   explicit CssParser(std::string cachePath) : cachePath(std::move(cachePath)) {}
   ~CssParser() = default;
@@ -80,7 +80,10 @@ class CssParser {
   /**
    * Clear all loaded rules
    */
-  void clear() { rulesBySelector_.clear(); }
+  void clear() {
+    rulesBySelector_.clear();
+    heapFloorHit_ = false;
+  }
 
   /**
    * Check if CSS rules cache file exists
@@ -140,10 +143,23 @@ class CssParser {
   // Storage: maps selector -> style properties. Hash/equal are case-insensitive.
   std::unordered_map<std::string, CssStyle, SvHash, SvEqual> rulesBySelector_;
 
+  // Sticky: set once rule accumulation has hit the heap floor for the current
+  // load. Reset in clear(). Keeps a pathological stylesheet from consuming the
+  // contiguous heap the chapter build needs. See cssHeapExhausted().
+  bool heapFloorHit_ = false;
+
   std::string cachePath;
 
   // Internal parsing helpers
   void processRuleBlockWithStyle(std::string_view selectorGroup, const CssStyle& style);
+
+  // Trips heapFloorHit_ (sticky) once the largest contiguous free block falls to
+  // MIN_MAXBLOCK_FOR_CSS, so rule accumulation stops before it starves the chapter
+  // build. CSS rules stay resident for the whole build; a pathological stylesheet
+  // (seen: a 148KB Kobo KePub) would otherwise grow the map until no contiguous
+  // block remains for ParsedText/layout — an on-screen "lowmem" build failure.
+  // Sampled every few rules; getMaxAllocHeap walks the free list, so not per-rule.
+  bool cssHeapExhausted();
   static CssStyle parseDeclarations(std::string_view declBlock);
   static void parseDeclarationIntoStyle(std::string_view decl, CssStyle& style);
 

@@ -118,12 +118,12 @@ void FontSelectionActivity::loop() {
   });
 
   buttonNavigator_.onNextContinuous([this, listSize, pageItems] {
-    selectedIndex_ = ButtonNavigator::nextPageIndex(selectedIndex_, listSize, pageItems);
+    selectedIndex_ = ButtonNavigator::nextPageIndexClamped(selectedIndex_, listSize, pageItems);
     requestUpdate();
   });
 
   buttonNavigator_.onPreviousContinuous([this, listSize, pageItems] {
-    selectedIndex_ = ButtonNavigator::previousPageIndex(selectedIndex_, listSize, pageItems);
+    selectedIndex_ = ButtonNavigator::previousPageIndexClamped(selectedIndex_, listSize, pageItems);
     requestUpdate();
   });
 }

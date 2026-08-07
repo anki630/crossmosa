@@ -3,6 +3,7 @@
 #include <GfxRenderer.h>
 #include <I18n.h>
 
+#include "CrossPointSettings.h"
 #include "MappedInputManager.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
@@ -15,6 +16,9 @@ EpubReaderMenuActivity::EpubReaderMenuActivity(GfxRenderer& renderer, MappedInpu
       menuItems(buildMenuItems(hasFootnotes, hasBookmarks)),
       title(title),
       pendingOrientation(currentOrientation),
+      pendingFontSize(SETTINGS.fontSize),
+      pendingLineSpacing(SETTINGS.lineSpacing),
+      pendingBoldBody(SETTINGS.boldBodyText),
       currentPage(currentPage),
       totalPages(totalPages),
       bookProgressPercent(bookProgressPercent) {}
@@ -22,7 +26,7 @@ EpubReaderMenuActivity::EpubReaderMenuActivity(GfxRenderer& renderer, MappedInpu
 std::vector<EpubReaderMenuActivity::MenuItem> EpubReaderMenuActivity::buildMenuItems(bool hasFootnotes,
                                                                                      bool hasBookmarks) {
   std::vector<MenuItem> items;
-  items.reserve(12);
+  items.reserve(14);
   items.push_back({MenuAction::SELECT_CHAPTER, StrId::STR_SELECT_CHAPTER});
   if (hasFootnotes) {
     items.push_back({MenuAction::FOOTNOTES, StrId::STR_FOOTNOTES});
@@ -31,14 +35,17 @@ std::vector<EpubReaderMenuActivity::MenuItem> EpubReaderMenuActivity::buildMenuI
     items.push_back({MenuAction::BOOKMARKS, StrId::STR_BOOKMARKS});
   }
   items.push_back({MenuAction::TOGGLE_BOOKMARK, StrId::STR_TOGGLE_BOOKMARK});
+  items.push_back({MenuAction::FONT_SIZE, StrId::STR_FONT_SIZE});  // v38:閱讀中最高頻的調整免退書
+  items.push_back({MenuAction::LINE_SPACING, StrId::STR_LINE_SPACING});  // v41:同字級機制
+  items.push_back({MenuAction::BOLD_TEXT, StrId::STR_BOLD_TEXT});        // v41:同字級機制
   items.push_back({MenuAction::ROTATE_SCREEN, StrId::STR_ORIENTATION});
   items.push_back({MenuAction::AUTO_PAGE_TURN, StrId::STR_AUTO_TURN_PAGES_PER_MIN});
   items.push_back({MenuAction::GO_TO_PERCENT, StrId::STR_GO_TO_PERCENT});
+  items.push_back({MenuAction::GO_HOME, StrId::STR_GO_HOME_BUTTON});
+  items.push_back({MenuAction::DELETE_CACHE, StrId::STR_DELETE_CACHE});
+  // 低頻項降位到選單尾(v38)
   items.push_back({MenuAction::SCREENSHOT, StrId::STR_SCREENSHOT_BUTTON});
   items.push_back({MenuAction::DISPLAY_QR, StrId::STR_DISPLAY_QR});
-  items.push_back({MenuAction::GO_HOME, StrId::STR_GO_HOME_BUTTON});
-  items.push_back({MenuAction::SYNC, StrId::STR_SYNC_PROGRESS});
-  items.push_back({MenuAction::DELETE_CACHE, StrId::STR_DELETE_CACHE});
   return items;
 }
 
@@ -50,6 +57,8 @@ void EpubReaderMenuActivity::onEnter() {
 void EpubReaderMenuActivity::onExit() { Activity::onExit(); }
 
 void EpubReaderMenuActivity::loop() {
+  if (optionPopup.handleInput(mappedInput, [this] { requestUpdate(); })) return;
+
   // Handle navigation
   buttonNavigator.onNext([this] {
     selectedIndex = ButtonNavigator::nextIndex(selectedIndex, static_cast<int>(menuItems.size()));
@@ -64,25 +73,64 @@ void EpubReaderMenuActivity::loop() {
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
     const auto selectedAction = menuItems[selectedIndex].action;
     if (selectedAction == MenuAction::ROTATE_SCREEN) {
-      // Cycle orientation preview locally; actual rotation happens on menu exit.
-      pendingOrientation = (pendingOrientation + 1) % orientationLabels.size();
+      optionPopup.show(StrId::STR_ORIENTATION, orientationLabels.data(), static_cast<int>(orientationLabels.size()),
+                       pendingOrientation, [this](int idx) {
+                         pendingOrientation = idx;
+                         requestUpdate();
+                       });
+      requestUpdate();
+      return;
+    }
+
+    if (selectedAction == MenuAction::FONT_SIZE) {
+      optionPopup.show(StrId::STR_FONT_SIZE, fontSizeLabels.data(), static_cast<int>(fontSizeLabels.size()),
+                       pendingFontSize, [this](int idx) {
+                         pendingFontSize = static_cast<uint8_t>(idx);
+                         requestUpdate();
+                       });
+      requestUpdate();
+      return;
+    }
+
+    if (selectedAction == MenuAction::LINE_SPACING) {
+      optionPopup.show(StrId::STR_LINE_SPACING, lineSpacingLabels.data(), static_cast<int>(lineSpacingLabels.size()),
+                       pendingLineSpacing, [this](int idx) {
+                         pendingLineSpacing = static_cast<uint8_t>(idx);
+                         requestUpdate();
+                       });
+      requestUpdate();
+      return;
+    }
+
+    if (selectedAction == MenuAction::BOLD_TEXT) {
+      optionPopup.show(StrId::STR_BOLD_TEXT, boldTextLabels.data(), static_cast<int>(boldTextLabels.size()),
+                       pendingBoldBody, [this](int idx) {
+                         pendingBoldBody = static_cast<uint8_t>(idx);
+                         requestUpdate();
+                       });
       requestUpdate();
       return;
     }
 
     if (selectedAction == MenuAction::AUTO_PAGE_TURN) {
-      selectedPageTurnOption = (selectedPageTurnOption + 1) % pageTurnLabels.size();
+      optionPopup.show(I18N.get(StrId::STR_AUTO_TURN_PAGES_PER_MIN), pageTurnLabels.data(),
+                       static_cast<int>(pageTurnLabels.size()), selectedPageTurnOption, [this](int idx) {
+                         selectedPageTurnOption = idx;
+                         requestUpdate();
+                       });
       requestUpdate();
       return;
     }
 
-    setResult(MenuResult{static_cast<int>(selectedAction), pendingOrientation, selectedPageTurnOption});
+    setResult(MenuResult{static_cast<int>(selectedAction), pendingOrientation, selectedPageTurnOption, pendingFontSize,
+                         pendingLineSpacing, pendingBoldBody});
     finish();
     return;
   } else if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
     ActivityResult result;
     result.isCancelled = true;
-    result.data = MenuResult{-1, pendingOrientation, selectedPageTurnOption};
+    result.data =
+        MenuResult{-1, pendingOrientation, selectedPageTurnOption, pendingFontSize, pendingLineSpacing, pendingBoldBody};
     setResult(std::move(result));
     finish();
     return;
@@ -90,6 +138,8 @@ void EpubReaderMenuActivity::loop() {
 }
 
 void EpubReaderMenuActivity::render(RenderLock&&) {
+  if (optionPopup.processRender(renderer, mappedInput)) return;
+
   renderer.clearScreen();
 
   auto metrics = UITheme::getInstance().getMetrics();
@@ -122,6 +172,13 @@ void EpubReaderMenuActivity::render(RenderLock&&) {
         if (value == MenuAction::ROTATE_SCREEN) {
           // Render current orientation value on the right edge of the content area.
           return I18N.get(orientationLabels[pendingOrientation]);
+        } else if (value == MenuAction::FONT_SIZE) {
+          // Render current / pending font size on the right edge of the content area.
+          return I18N.get(fontSizeLabels[pendingFontSize]);
+        } else if (value == MenuAction::LINE_SPACING) {
+          return I18N.get(lineSpacingLabels[pendingLineSpacing]);
+        } else if (value == MenuAction::BOLD_TEXT) {
+          return I18N.get(boldTextLabels[pendingBoldBody]);
         } else if (value == MenuAction::AUTO_PAGE_TURN) {
           // Render current page turn value on the right edge of the content area.
           return pageTurnLabels[selectedPageTurnOption];

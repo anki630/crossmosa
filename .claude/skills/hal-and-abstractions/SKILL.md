@@ -18,9 +18,9 @@ This is when and how to route through them, and where to draw a new boundary.
 - **Display:** `HalDisplay` over `EInkDisplay`. **Input:** `HalGPIO` over
   `InputManager`.
 - **Rendering:** everything through the `GUI` macro (UITheme) and the renderer's
-  oriented metrics. No hardcoded fonts, colors, coordinates, or 800/480
-  literals; ask the renderer for width/height and use the oriented viewable
-  area.
+  oriented metrics. No hardcoded fonts, colors, coordinates, or 792/528
+  (this project's X3 panel resolution) literals; ask the renderer for
+  width/height and use the oriented viewable area.
 - **Input in activities:** `MappedInputManager::Button` logical enums
   (`Button::Confirm`, `Button::PageForward`, ...). Never raw `HalGPIO::BTN_*`
   indices outside `ButtonRemapActivity`. Logical buttons survive user remapping
@@ -52,7 +52,7 @@ it carries one of those contracts or hides a real implementation choice.
 - [ ] File access uses `HalFile`; no `.close()` on a local handle
       (DESTRUCTOR_CLOSES_FILE); members closed in `onExit`.
 - [ ] Input uses `MappedInputManager::Button`, not raw `BTN_*` indices.
-- [ ] Rendering goes through GUI/UITheme and oriented metrics; no 800/480 or
+- [ ] Rendering goes through GUI/UITheme and oriented metrics; no 792/528 or
       hardcoded fonts/coords.
 - [ ] User-facing strings use `tr(STR_*)`; new keys added to YAML and
       regenerated.

@@ -355,30 +355,70 @@ int jpegDrawCallback(JPEGDRAW* pDraw) {
 }  // namespace
 
 bool JpegToFramebufferConverter::getDimensionsStatic(const std::string& imagePath, ImageDimensions& out) {
-  size_t freeHeap = ESP.getFreeHeap();
-  if (freeHeap < MIN_FREE_HEAP_FOR_JPEG) {
-    LOG_ERR("JPG", "Not enough heap for JPEG decoder (%u free, need %u)", freeHeap, MIN_FREE_HEAP_FOR_JPEG);
+  // Read dimensions straight from the JPEG frame header (the SOFn marker) rather
+  // than allocating the ~20 KB JPEGDEC object. This removes the free-heap gate
+  // from the layout/build path so an image is never dropped from a chapter's
+  // cached layout under memory pressure (see the PNG counterpart for the full
+  // rationale). The pixel decode still uses JPEGDEC and its own heap check.
+  HalFile file;
+  if (!Storage.openFileForRead("JPG", imagePath, file)) {
+    LOG_ERR("JPG", "Failed to open JPEG for dimensions: %s", imagePath.c_str());
     return false;
   }
 
-  std::unique_ptr<JPEGDEC> jpeg(new (std::nothrow) JPEGDEC());
-  if (!jpeg) {
-    LOG_ERR("JPG", "Failed to allocate JPEG decoder for dimensions");
+  uint8_t soi[2];
+  if (file.read(soi, 2) != 2 || soi[0] != 0xFF || soi[1] != 0xD8) {  // Start Of Image
+    LOG_ERR("JPG", "Not a valid JPEG (no SOI): %s", imagePath.c_str());
     return false;
   }
 
-  int rc = jpeg->open(imagePath.c_str(), jpegOpen, jpegClose, jpegRead, jpegSeek, nullptr);
-  const ScopedCleanup cleanup{[&jpeg]() { jpeg->close(); }};
-  if (rc != 1) {
-    LOG_ERR("JPG", "Failed to open JPEG for dimensions (err=%d): %s", jpeg->getLastError(), imagePath.c_str());
-    return false;
+  // Walk marker segments until a Start-Of-Frame (SOF0..SOF15, excluding
+  // DHT=0xC4, JPG=0xC8, DAC=0xCC) which carries precision, height and width.
+  for (int guard = 0; guard < 8192; guard++) {
+    uint8_t b;
+    if (file.read(&b, 1) != 1) break;
+    if (b != 0xFF) continue;  // resync onto a marker prefix
+
+    uint8_t marker;
+    do {
+      if (file.read(&marker, 1) != 1) {
+        marker = 0xD9;  // treat EOF as EOI to stop cleanly
+        break;
+      }
+    } while (marker == 0xFF);  // 0xFF fill bytes may repeat before the marker code
+
+    if (marker == 0x00) continue;                                     // stuffed byte, not a marker
+    if (marker == 0xD9) break;                                        // EOI
+    if (marker == 0x01 || (marker >= 0xD0 && marker <= 0xD8)) continue;  // standalone markers, no length
+
+    uint8_t lenb[2];
+    if (file.read(lenb, 2) != 2) break;
+    const int segLen = (static_cast<int>(lenb[0]) << 8) | lenb[1];
+    if (segLen < 2) break;
+
+    const bool isSOF = (marker >= 0xC0 && marker <= 0xCF) && marker != 0xC4 && marker != 0xC8 && marker != 0xCC;
+    if (isSOF) {
+      uint8_t sof[5];  // precision(1) height(2 BE) width(2 BE)
+      if (file.read(sof, 5) != 5) break;
+      const uint32_t height = (static_cast<uint32_t>(sof[1]) << 8) | sof[2];
+      const uint32_t width = (static_cast<uint32_t>(sof[3]) << 8) | sof[4];
+      if (width == 0 || height == 0 ||
+          static_cast<uint64_t>(width) * height > static_cast<uint64_t>(MAX_SOURCE_PIXELS)) {
+        LOG_ERR("JPG", "Invalid JPEG dimensions %ux%u: %s", width, height, imagePath.c_str());
+        return false;
+      }
+      out.width = static_cast<int16_t>(width);
+      out.height = static_cast<int16_t>(height);
+      LOG_DBG("JPG", "Image dimensions: %dx%d", out.width, out.height);
+      return true;
+    }
+
+    // Skip the rest of this segment (segLen includes the 2 length bytes just read).
+    if (!file.seek(file.position() + static_cast<size_t>(segLen - 2))) break;
   }
 
-  out.width = jpeg->getWidth();
-  out.height = jpeg->getHeight();
-  LOG_DBG("JPG", "Image dimensions: %dx%d", out.width, out.height);
-
-  return true;
+  LOG_ERR("JPG", "No SOF marker found: %s", imagePath.c_str());
+  return false;
 }
 
 bool JpegToFramebufferConverter::decodeToFramebuffer(const std::string& imagePath, GfxRenderer& renderer,

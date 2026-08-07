@@ -27,20 +27,15 @@ void UITheme::reload() {
 
 void UITheme::setTheme(CrossPointSettings::UI_THEME type) {
   switch (type) {
+    // v52:Classic(BaseTheme 直用)與 RoundedRaff 退役——不再實例化,linker --gc-sections
+    // 回收 RoundedRaffTheme 整條鏈(v27 手法,檔案保留可回退);殘存設定值 fallback Formosa。
+    // BaseTheme 類別本身是 Lyra 家族的父類,持續存活。
     case CrossPointSettings::UI_THEME::CLASSIC:
-      LOG_DBG("UI", "Using Classic theme");
-      currentTheme = std::make_unique<BaseTheme>();
-      currentMetrics = &BaseMetrics::values;
-      break;
+    case CrossPointSettings::UI_THEME::ROUNDEDRAFF:
     case CrossPointSettings::UI_THEME::LYRA:
-      LOG_DBG("UI", "Using Lyra theme");
+      LOG_DBG("UI", "Using Formosa theme");
       currentTheme = std::make_unique<LyraTheme>();
       currentMetrics = &LyraMetrics::values;
-      break;
-    case CrossPointSettings::UI_THEME::ROUNDEDRAFF:
-      LOG_DBG("UI", "Using RoundedRaff theme");
-      currentTheme = std::make_unique<RoundedRaffTheme>();
-      currentMetrics = &RoundedRaffMetrics::values;
       break;
     case CrossPointSettings::UI_THEME::LYRA_3_COVERS:
       LOG_DBG("UI", "Using Lyra 3 Covers theme");
@@ -115,7 +110,7 @@ UIIcon UITheme::getFileIcon(const std::string& filename) {
   if (filename.back() == '/') {
     return Folder;
   }
-  if (FsHelpers::hasEpubExtension(filename) || FsHelpers::hasXtcExtension(filename)) {
+  if (FsHelpers::hasEpubExtension(filename)) {
     return Book;
   }
   if (FsHelpers::hasTxtExtension(filename) || FsHelpers::hasMarkdownExtension(filename)) {
@@ -153,4 +148,13 @@ void UITheme::drawCenteredText(const GfxRenderer& renderer, Rect screen, int fon
                                bool black, EpdFontFamily::Style style) {
   const int x = screen.x + (screen.width - renderer.getTextWidth(fontId, text, style)) / 2;
   renderer.drawText(fontId, x, y, text, black, style);
+}
+
+std::string UITheme::pageIndicatorText(const int selectedIndex, const int itemCount, const int pageItems) {
+  if (pageItems <= 0 || itemCount <= pageItems) {
+    return "";
+  }
+  const int totalPages = (itemCount + pageItems - 1) / pageItems;
+  const int currentPage = selectedIndex / pageItems + 1;
+  return std::to_string(currentPage) + "/" + std::to_string(totalPages);
 }

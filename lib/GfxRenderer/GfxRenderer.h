@@ -27,7 +27,13 @@ enum Color : uint8_t { Clear = 0x00, White = 0x01, LightGray = 0x05, DarkGray = 
 
 class GfxRenderer {
  public:
-  enum RenderMode { BW, GRAYSCALE_LSB, GRAYSCALE_MSB };
+  // GRAYSCALE_BOTH (v60) renders the LSB and MSB planes in a SINGLE traversal
+  // instead of two. Both plane bits come from the same sampled glyph/image
+  // value, so the second traversal was pure duplication: same layout walk, same
+  // getGlyph lookups, same bitmap decode. Only valid with a two-buffer strip
+  // target (beginStripTarget's 4-arg overload) — the non-strip fallback would
+  // need a second full framebuffer, which SINGLE_BUFFER_MODE does not have.
+  enum RenderMode { BW, GRAYSCALE_LSB, GRAYSCALE_MSB, GRAYSCALE_BOTH };
 
   // Logical screen orientation from the perspective of callers
   enum Orientation {
@@ -70,6 +76,14 @@ class GfxRenderer {
   // the BW framebuffer (no storeBwBuffer). Mutable because the render path is
   // const. See beginStripTarget()/endStripTarget().
   mutable uint8_t* _stripBuf = nullptr;
+  // Second plane for GRAYSCALE_BOTH. INVARIANT: non-null ONLY while _stripActive
+  // is true and _stripBuf points at the matching LSB scratch of identical
+  // geometry. drawPixel() relies on this to mirror mode-blind writes with a
+  // single null check instead of re-testing _stripActive on the hot path — a
+  // stale non-null here would index a band-local offset into a freed or
+  // wrong-sized buffer. Set only by the 4-arg beginStripTarget, cleared by
+  // endStripTarget.
+  mutable uint8_t* _stripBufMsb = nullptr;
   mutable int _stripY0 = 0;
   mutable int _stripRows = 0;
   mutable bool _stripActive = false;
@@ -148,6 +162,12 @@ class GfxRenderer {
   // after the orientation rotate, so it is orientation-agnostic. Used to render
   // grayscale planes band-by-band without a full second buffer.
   void beginStripTarget(uint8_t* scratch, int stripY0, int stripRows) const;
+  // Two-plane form for GRAYSCALE_BOTH: `scratchLsb` and `scratchMsb` must each
+  // be panelWidthBytes * stripRows bytes and cover the same band. Mode-blind
+  // drawing (fillRect/drawLine/drawRect — anything not going through
+  // markGrayPixel) is mirrored into both planes, reproducing what the two
+  // separate LSB and MSB traversals used to write.
+  void beginStripTarget(uint8_t* scratchLsb, uint8_t* scratchMsb, int stripY0, int stripRows) const;
   void endStripTarget() const;
 
   // Band culling for tiled grayscale. Takes a glyph bounding box in logical
@@ -163,11 +183,21 @@ class GfxRenderer {
   // framebuffer ([0, panelHeight)). Writers subtract the origin and clip to the
   // extent, so they honor tiled-grayscale banding without per-pixel method calls.
   uint8_t* getWriteTarget() const { return _stripActive ? _stripBuf : frameBuffer; }
+  // MSB plane target for GRAYSCALE_BOTH; nullptr in every other mode. Raw
+  // writers must treat a null here as "single-plane" and fall back to the
+  // per-mode selection they used before.
+  uint8_t* getWriteTargetMsb() const { return _stripBufMsb; }
   int getWriteOriginY() const { return _stripActive ? _stripY0 : 0; }
   int getWriteRows() const { return _stripActive ? _stripRows : panelHeight; }
 
   // Drawing
   void drawPixel(int x, int y, bool state = true) const;
+  // Grayscale plane marking. `setLsb`/`setMsb` say which planes this pixel
+  // belongs in (dark gray = both, light gray = MSB only), letting one traversal
+  // feed both. In GRAYSCALE_LSB/GRAYSCALE_MSB it degrades to exactly the single
+  // drawPixel(x, y, false) those modes issued before, so the legacy two-pass
+  // path is bit-for-bit unchanged. A no-op in BW.
+  void markGrayPixel(int x, int y, bool setLsb, bool setMsb) const;
   void drawLine(int x1, int y1, int x2, int y2, bool state = true) const;
   void drawLine(int x1, int y1, int x2, int y2, int lineWidth, bool state) const;
   void drawArc(int maxRadius, int cx, int cy, int xDir, int yDir, int lineWidth, bool state) const;
@@ -183,11 +213,26 @@ class GfxRenderer {
   void fillRoundedRect(int x, int y, int width, int height, int cornerRadius, bool roundTopLeft, bool roundTopRight,
                        bool roundBottomLeft, bool roundBottomRight, Color color) const;
   void drawImage(const uint8_t bitmap[], int x, int y, int width, int height) const;
-  void drawIcon(const uint8_t bitmap[], int x, int y, int width, int height) const;
+  // Flash-resident 2bpp grayscale image (4 px/byte, MSB-first pairs, row
+  // stride (width+3)/4; values 0=black..3=white — same encoding
+  // Bitmap::readNextRow produces). Honors the active render mode with the
+  // same per-mode pixel selection as drawBitmap, so the BW base +
+  // GRAYSCALE_LSB/MSB passes compose identically to the BMP pipeline.
+  void drawImageGray(const uint8_t data[], int x, int y, int width, int height) const;
+  void drawIcon(const uint8_t bitmap[], int x, int y, int size) const;
   void drawBitmap(const Bitmap& bitmap, int x, int y, int maxWidth, int maxHeight, float cropX = 0,
                   float cropY = 0) const;
   void drawBitmap1Bit(const Bitmap& bitmap, int x, int y, int maxWidth, int maxHeight) const;
   void fillPolygon(const int* xPoints, const int* yPoints, int numPoints, bool state = true) const;
+
+  // Snapshot / restore a screen-coordinate framebuffer region (byte-aligned in
+  // panel memory). readFramebufferRegion returns the bytes written to dst, or
+  // 0 when the region is empty, offscreen, or exceeds dstCapacity. Pass the
+  // same rectangle to writeFramebufferRegion to restore the saved pixels.
+  // Enables partial-repaint patterns (e.g. moving a selection highlight)
+  // without re-rendering the whole page.
+  size_t readFramebufferRegion(int x, int y, int w, int h, uint8_t* dst, size_t dstCapacity) const;
+  void writeFramebufferRegion(int x, int y, int w, int h, const uint8_t* src);
 
   // Text
   int getTextWidth(int fontId, const char* text, EpdFontFamily::Style style = EpdFontFamily::REGULAR,
@@ -249,6 +294,34 @@ class GfxRenderer {
 
   // Font helpers
   const uint8_t* getGlyphBitmap(const EpdFontData* fontData, const EpdGlyph* glyph) const;
+
+  // Lend the 48 KB framebuffer's bytes to a memory-hungry phase (chapter
+  // builds) WITHOUT freeing the allocation, so it never moves and repeated
+  // loans cannot fragment the heap. Between release and restore NOTHING may
+  // draw or display — the panel keeps showing its last refreshed image. The
+  // lent bytes are published via buildscratch::claim() for consumers like
+  // InflateStream. restore returns the buffer white, so the caller must
+  // redraw the full screen; it cannot fail (no allocation involved).
+  void releaseFrameBufferForBuild();
+  bool restoreFrameBufferAfterBuild();
+  bool hasFrameBuffer() const { return frameBuffer != nullptr; }
+
+  // RAII form of the loan above, for blocking build regions with early-return
+  // error paths: restores on scope exit (or explicitly via end()). Display the
+  // popup/screen the panel should hold BEFORE constructing one. Constructing
+  // while the framebuffer is already lent yields an inert loan (nesting-safe).
+  class FrameBufferLoan {
+   public:
+    explicit FrameBufferLoan(GfxRenderer& renderer);
+    ~FrameBufferLoan() { end(); }
+    void end();
+    FrameBufferLoan(const FrameBufferLoan&) = delete;
+    FrameBufferLoan& operator=(const FrameBufferLoan&) = delete;
+
+   private:
+    GfxRenderer& renderer_;
+    bool active_ = false;
+  };
 
   // Low level functions
   uint8_t* getFrameBuffer() const;

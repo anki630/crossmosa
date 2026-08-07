@@ -2,6 +2,8 @@
 
 #include <GfxRenderer.h>
 #include <Logging.h>
+#include <SdCardFont.h>
+#include "util/DiagLog.h"
 
 #include "CrossPointSettings.h"
 
@@ -34,10 +36,12 @@ void SdCardFontSystem::begin(GfxRenderer& renderer) {
       } else {
         LOG_ERR("SDFS", "Failed to load SD font family: %s (clearing)", SETTINGS.sdFontFamilyName);
         SETTINGS.sdFontFamilyName[0] = '\0';
+        SETTINGS.saveToFile();
       }
     } else {
       LOG_DBG("SDFS", "SD font family not found on card: %s (clearing)", SETTINGS.sdFontFamilyName);
       SETTINGS.sdFontFamilyName[0] = '\0';
+      SETTINGS.saveToFile();
     }
   }
 
@@ -76,6 +80,7 @@ void SdCardFontSystem::ensureLoaded(GfxRenderer& renderer) {
       LOG_DBG("SDFS", "SD font family disappeared: %s (clearing)", wantedFamily);
       manager_.unloadAll(renderer);
       SETTINGS.sdFontFamilyName[0] = '\0';
+      SETTINGS.saveToFile();
       return;
     }
     const auto* selected = family->findClosestReaderSize(sizeEnum);
@@ -96,11 +101,31 @@ void SdCardFontSystem::ensureLoaded(GfxRenderer& renderer) {
     } else {
       LOG_ERR("SDFS", "Failed to load SD font family: %s (clearing)", wantedFamily);
       SETTINGS.sdFontFamilyName[0] = '\0';
+      SETTINGS.saveToFile();
     }
   } else {
     LOG_DBG("SDFS", "SD font family not found: %s (clearing)", wantedFamily);
     SETTINGS.sdFontFamilyName[0] = '\0';
+    SETTINGS.saveToFile();
   }
+}
+
+void SdCardFontSystem::unloadForLowMemory(GfxRenderer& renderer) {
+  // Reclaims the resident SD reader font (interval tables + advance/glyph
+  // caches, tens of KB) so a RAM-hungry phase like WiFi bringup gets contiguous
+  // heap. The saved selection (SETTINGS.sdFontFamilyName) is left untouched, so
+  // begin() (after the WiFi-session reboot) or ensureLoaded() (next reader
+  // entry) reloads it automatically — no explicit reload needed here.
+  if (!manager_.currentFamilyName().empty()) {
+    LOG_DBG("SDFS", "Unloading SD reader font to free heap (reloads on next reader entry)");
+    manager_.unloadAll(renderer);
+  }
+}
+
+
+size_t SdCardFontSystem::residentBytes() const {
+  const auto* f = manager_.currentFont();
+  return f ? f->residentBytes() : 0;
 }
 
 int SdCardFontSystem::resolveFontId(const char* familyName, uint8_t /*fontSizeEnum*/) const {
@@ -108,4 +133,14 @@ int SdCardFontSystem::resolveFontId(const char* familyName, uint8_t /*fontSizeEn
   // enum is implicit — always return the single loaded font ID for this family.
   // ensureLoaded() must have been called with the current settings before this.
   return manager_.getFontId(familyName);
+}
+
+bool SdCardFontSystem::sizeChangeTakesEffect(const uint8_t oldSizeEnum, const uint8_t newSizeEnum) const {
+  if (SETTINGS.sdFontFamilyName[0] == '\0') return false;  // 內建備援
+  const auto* family = registry_.findFamily(SETTINGS.sdFontFamilyName);
+  if (!family) return false;  // 卡上找不到 → 實際走內建備援
+  const auto* oldSel = family->findClosestReaderSize(oldSizeEnum);
+  const auto* newSel = family->findClosestReaderSize(newSizeEnum);
+  // 單一尺寸的字型家族兩級會映到同一檔 → 沒有實際變化,不必重排重啟
+  return oldSel && newSel && oldSel->pointSize != newSel->pointSize;
 }

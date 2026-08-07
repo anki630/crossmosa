@@ -1,0 +1,320 @@
+<!doctype html>
+<html lang="zh-Hant-TW">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CrossMosa — 終於，你的 X3 能好好讀中文了</title>
+<meta name="description" content="Xteink X3 的繁體中文開源韌體：七千四百字介面字集、三套內文字型、50 張名畫待機、無線收書。免費開源，附一本教你上手的書。">
+<meta property="og:title" content="CrossMosa — 終於，你的 X3 能好好讀中文了">
+<meta property="og:description" content="滿頁方塊字的日子結束了。免費開源，刷完就是一台真正的中文閱讀器。">
+<meta property="og:url" content="https://anki630.github.io/crossmosa/">
+<meta property="og:image" content="https://anki630.github.io/crossmosa/promo/hero-photo.jpg">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="CrossMosa — 終於，你的 X3 能好好讀中文了">
+<meta name="twitter:description" content="滿頁方塊字的日子結束了。免費開源，刷完就是一台真正的中文閱讀器。">
+<meta name="twitter:image" content="https://anki630.github.io/crossmosa/promo/hero-photo.jpg">
+<link rel="icon" href="promo/logo.png">
+<style>
+  :root { --paper:#fbfbfd; --ink:#1d1d1f; --gray:#6e6e73; --line:#e8e8ed; --dark:#0b0b0c; --darktext:#f5f5f7; }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html { scroll-behavior:smooth; }
+  body { background:var(--paper); color:var(--ink); font-family:"PingFang TC","Noto Sans TC","Microsoft JhengHei",sans-serif; line-height:1.7; -webkit-font-smoothing:antialiased; }
+  h1,h2 { font-weight:700; letter-spacing:-.02em; line-height:1.18; }
+  .wrap { max-width:1020px; margin:0 auto; padding:0 24px; }
+  section { padding:110px 0; }
+  .kicker { letter-spacing:.32em; font-size:.78rem; color:var(--gray); margin-bottom:16px; text-transform:uppercase; }
+  h2 { font-size:clamp(1.9rem,4vw,2.8rem); margin-bottom:14px; }
+  .sub { color:var(--gray); margin-bottom:48px; max-width:640px; font-size:1.05rem; }
+  img { max-width:100%; height:auto; display:block; }
+  /* 預留長寬比:lazy 圖載入不位移,錨點跳轉才會準 */
+  .hero .devices img { aspect-ratio:2400/1038; width:100%; }
+  .ba img, .trio img { aspect-ratio:3/4; width:100%; object-fit:contain; }
+  .wp-grid img { aspect-ratio:2/3; width:100%; object-fit:cover; }
+  sup.fn { font-size:.62em; color:var(--gray); }
+  sup.fn a { text-decoration:none; }
+
+  .dark { background:var(--dark); color:var(--darktext); }
+  .dark .sub, .dark .kicker { color:#a1a1a6; }
+
+  /* hero */
+  .hero { text-align:center; padding:110px 0 80px; }
+  .hero img.logo { width:92px; margin:0 auto 28px; }
+  .hero h1 { font-size:clamp(2.2rem,6vw,3.8rem); margin-bottom:20px; }
+  .hero p.lead { color:var(--gray); font-size:clamp(1.05rem,2vw,1.3rem); max-width:600px; margin:0 auto 14px; }
+  .hero p.axis { color:var(--ink); font-size:1rem; margin:0 auto 40px; }
+  .btns { display:flex; gap:16px; justify-content:center; flex-wrap:wrap; margin-bottom:64px; }
+  .btn { display:inline-block; padding:14px 34px; border-radius:999px; text-decoration:none; font-weight:600; font-size:1.02rem; }
+  .btn.primary { background:var(--ink); color:#fff; }
+  .btn.ghost { color:var(--ink); box-shadow:inset 0 0 0 1.5px var(--ink); }
+  .btn:hover { opacity:.85; }
+  .dark .btn.primary { background:#fff; color:var(--ink); }
+  .hero .devices { max-width:1000px; margin:0 auto; }
+  .note { font-size:.85rem; color:var(--gray); margin-top:14px; }
+
+  .ba { display:grid; grid-template-columns:1fr 1fr; gap:44px; max-width:780px; margin:0 auto; }
+  .ba figure { text-align:center; }
+  .ba figcaption { margin-top:16px; font-weight:600; font-size:1.05rem; }
+  .ba .cap-sub, .trio .cap-sub { font-size:.88rem; color:var(--gray); font-weight:400; margin-top:2px; }
+
+  .trio { display:grid; grid-template-columns:repeat(3,1fr); gap:36px; }
+  .trio figure { text-align:center; }
+  .trio figcaption { margin-top:16px; font-weight:600; font-size:1.05rem; }
+
+  .wp-grid { display:grid; grid-template-columns:repeat(6,1fr); gap:12px; }
+  .wp-grid img { border-radius:6px; }
+  .dark .wp-grid img { box-shadow:0 2px 14px rgba(0,0,0,.55); }
+  details.more { margin-top:16px; }
+  details.more summary { cursor:pointer; font-weight:600; padding:12px 0; list-style:none; color:inherit; }
+  details.more summary::after { content:" ▾"; }
+  details.more[open] summary::after { content:" ▴"; }
+  details.more .wp-grid { margin-top:12px; }
+
+  /* features:去卡片,Apple 式大字宣言 */
+  .feats { max-width:760px; margin:0 auto; }
+  .feat { padding:44px 0; border-top:1px solid var(--line); display:grid; grid-template-columns:230px 1fr; gap:28px; align-items:baseline; }
+  .feat:first-child { border-top:none; }
+  .feat h3 { font-size:1.35rem; font-weight:700; letter-spacing:-.01em; }
+  .feat p { color:var(--gray); font-size:1rem; }
+
+  .story { max-width:640px; margin:0 auto; font-family:"Noto Serif TC","Songti TC",serif; font-size:1.12rem; line-height:2; }
+  .story p + p { margin-top:1.3em; }
+  .story .sig { text-align:right; color:var(--gray); margin-top:1.8em; font-size:.95rem; }
+
+  .steps { counter-reset:s; max-width:640px; margin:0 auto; }
+  .step { display:flex; gap:22px; padding:26px 0; align-items:flex-start; }
+  .step + .step { border-top:1px solid var(--line); }
+  .step::before { counter-increment:s; content:counter(s); flex:0 0 44px; height:44px; background:var(--ink); color:#fff; border-radius:50%; display:flex; align-items:center; justify-content:center; font-weight:700; font-size:1.15rem; }
+  .warn { background:#fff; border:1px solid var(--line); border-radius:16px; padding:18px 22px; margin:30px auto 0; max-width:640px; font-size:.92rem; color:var(--gray); }
+
+  .faq { max-width:700px; margin:0 auto; }
+  .faq details { border-bottom:1px solid var(--line); }
+  .faq summary { cursor:pointer; font-weight:600; padding:18px 0; list-style:none; font-size:1.05rem; }
+  .faq summary::before { content:"＋ "; color:var(--gray); }
+  .faq details[open] summary::before { content:"－ "; }
+  .faq .a { padding:0 0 18px; color:var(--gray); font-size:.96rem; }
+
+  .support { text-align:center; max-width:620px; margin:0 auto; }
+  .fnotes { max-width:700px; margin:0 auto; font-size:.82rem; color:var(--gray); line-height:1.9; }
+  .fnotes p { margin-top:4px; }
+  footer { padding:48px 0 64px; font-size:.8rem; color:var(--gray); border-top:1px solid var(--line); }
+  footer p + p { margin-top:8px; }
+  a { color:inherit; }
+
+  .reveal { opacity:0; transform:translateY(18px); transition:opacity .7s ease, transform .7s ease; }
+  .reveal.in { opacity:1; transform:none; }
+  @media (prefers-reduced-motion: reduce) { .reveal { opacity:1; transform:none; transition:none; } }
+
+  @media (max-width:820px) {
+    section { padding:70px 0; }
+    .trio { grid-template-columns:1fr; max-width:340px; margin:0 auto; }
+    .wp-grid { grid-template-columns:repeat(3,1fr); }
+    .feat { grid-template-columns:1fr; gap:8px; padding:32px 0; }
+    .ba { grid-template-columns:1fr; max-width:340px; }
+  }
+</style>
+</head>
+<body>
+
+<header class="hero wrap">
+  <img class="logo" src="promo/logo-light.png" alt="CrossMosa — 台灣黑熊與月牙">
+  <h1>終於，你的 X3<br>能好好讀中文了</h1>
+  <p class="lead">刷一次機，從選單、內文到翻頁，一路順到底。口袋裡那台 X3，這下是一台真正的中文閱讀器了。</p>
+  <p class="axis">零碎時間已經夠少了，不該花在跟機器搏鬥上。</p>
+  <div class="btns" style="margin-bottom:10px">
+    <a class="btn primary" href="https://github.com/anki630/crossmosa/releases/latest">下載 CrossMosa 1.0</a>
+    <a class="btn ghost" href="#install">怎麼安裝？三步驟 →</a>
+  </div>
+  <p class="note" style="margin:0 0 52px">免費開源・機器免接電腦・隨時刷得回去</p>
+  <div class="devices"><img src="promo/hero-photo.jpg" alt="CrossMosa 實機：全繁中主畫面、明體內文、名畫待機"></div>
+  <p class="note">實際拍攝。</p>
+</header>
+
+<section>
+  <div class="wrap">
+    <p class="kicker">BEFORE / AFTER</p>
+    <h2>你買它是為了讀中文書，結果打開是這樣</h2>
+    <p class="sub">不是書壞了，也不是你不會設定——原版根本沒帶中文字型，整頁都是方塊。刷了 CrossMosa，選單說中文，內文用你挑的字型好好顯示。差別，看圖就好。</p>
+    <div class="ba">
+      <figure>
+        <img src="promo/compare-tofu.jpg" alt="原版：滿頁方塊字" loading="lazy">
+        <figcaption>刷機前<div class="cap-sub">同一本書，原版韌體</div></figcaption>
+      </figure>
+      <figure>
+        <img src="promo/compare-serif.jpg" alt="CrossMosa:正常明體內文" loading="lazy">
+        <figcaption>刷機後<div class="cap-sub">CrossMosa + 明體</div></figcaption>
+      </figure>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <p class="kicker">TYPEFACES</p>
+    <h2>換一套字，換一種心情</h2>
+    <p class="sub">明體耐讀、黑體耐小、硬筆楷書像手寫。字型放在 SD 卡上，隨時換，不用重刷機。挑一套，開始暢讀。</p>
+    <div class="trio">
+      <figure>
+        <img src="promo/compare-serif.jpg" alt="明體 NotoSerifTC" loading="lazy">
+        <figcaption>明體<div class="cap-sub">22,219 個漢字，再冷僻的字幾乎都在。長篇首選</div></figcaption>
+      </figure>
+      <figure>
+        <img src="promo/compare-sans.jpg" alt="黑體 NotoSansTC" loading="lazy">
+        <figcaption>黑體<div class="cap-sub">粗細一致，小字級最不糊</div></figcaption>
+      </figure>
+      <figure>
+        <img src="promo/compare-iansui.jpg" alt="硬筆楷書 芫荽" loading="lazy">
+        <figcaption>硬筆楷書(芫荽)<div class="cap-sub">像原子筆寫在紙上。5,366 個常用字。冷僻字多的書，建議用明體</div></figcaption>
+      </figure>
+    </div>
+  </div>
+</section>
+
+<section class="dark">
+  <div class="wrap">
+    <p class="kicker">SLEEP GALLERY</p>
+    <h2>口袋裡的小美術館</h2>
+    <p class="sub">待機的時候，展出一幅世界名畫——精選 50 幅館藏<sup class="fn"><a href="#fn-p3">3</a></sup>，逐張裁構圖、調層次，為電子紙重新詮釋。放進 SD 卡，今天梵谷，明天北齋。</p>
+    <div class="wp-grid">
+      <img src="promo/wp/great_wave.jpg" alt="神奈川沖浪裏" loading="lazy">
+      <img src="promo/wp/girl_pearl_earring.jpg" alt="戴珍珠耳環的少女" loading="lazy">
+      <img src="promo/wp/starry_night.jpg" alt="星夜" loading="lazy">
+      <img src="promo/wp/wanderer_sea_of_fog.jpg" alt="霧海上的旅人" loading="lazy">
+      <img src="promo/wp/mona_lisa.jpg" alt="蒙娜麗莎" loading="lazy">
+      <img src="promo/wp/peacock_skirt.jpg" alt="孔雀裙" loading="lazy">
+      <img src="promo/wp/cafe_terrace_night.jpg" alt="夜間咖啡館" loading="lazy">
+      <img src="promo/wp/american_gothic.jpg" alt="美國哥德式" loading="lazy">
+      <img src="promo/wp/bocklin_isle.jpg" alt="死之島" loading="lazy">
+      <img src="promo/wp/arnolfini.jpg" alt="阿爾諾非尼夫婦" loading="lazy">
+      <img src="promo/wp/birth_of_venus_botticelli.jpg" alt="維納斯的誕生" loading="lazy">
+      <img src="promo/wp/twittering_machine.jpg" alt="吱喳機器" loading="lazy">
+    </div>
+    <details class="more">
+      <summary>展開全部 50 張</summary>
+      <div class="wp-grid" id="wp-rest"></div>
+    </details>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <p class="kicker">EXPERIENCE</p>
+    <h2>一路順到底</h2>
+    <p class="sub">113 個版本磨的是同一件事：讓機器消失，只剩下書。</p>
+    <div class="feats">
+      <div class="feat"><h3>整台機器，說中文</h3><p>開機第一眼就是繁體中文。選單、設定、每一句提示，全是台灣用語。連「憨」「璐」這類書名裡的冷僻字，都顯示得出來<sup class="fn"><a href="#fn-p2">2</a></sup>。</p></div>
+      <div class="feat"><h3>翻頁，跟得上你</h3><p>你還在讀這一頁，下一頁已經備好。大多時候更快；任何時候，都不會更慢<sup class="fn"><a href="#fn-p1">1</a></sup>。</p></div>
+      <div class="feat"><h3>無線傳書，無限藏書</h3><p>電腦或手機連上機器的網址，書拖進去就傳好了。不裝 App、不拔卡。</p></div>
+      <div class="feat"><h3>查註腳，不怕迷路</h3><p>正文與註釋，像實體書一樣往返——短按電源鍵跳過去、再跳回來，讀到哪裡不會丟。譯注多的書，終於好讀了。</p></div>
+      <div class="feat"><h3>你的書庫，無線上架</h3><p>電腦上用 Calibre(免費書庫軟體)管書的話，X3 直接連上它：瀏覽、下載、開書，全在機器上完成(OPDS)。</p></div>
+      <div class="feat"><h3>十分鐘，變熟手</h3><p>附一本《歡迎使用 CrossMosa》：十三個短章，一邊讀一邊按。連刷壞了怎麼救回來，都有教。</p></div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <p class="kicker">STORY</p>
+    <h2>為什麼會有這個版本</h2>
+    <div class="story">
+      <p>我是電子書閱讀器的愛用者。有工作、有小孩，能讀書的時間都是擠出來的零碎片段——通勤的路上、孩子睡著後的半小時。X3 這種放得進口袋的機器，就是為這些片段準備的。</p>
+      <p>但買來才發現，它不是為中文讀者做的：選單是英文，中文書打開是滿頁方塊。零碎時間已經夠少了，不該再花在跟機器搏鬥上。</p>
+      <p>原版 CrossPoint 是個很好的開源起點，所以我從它出發，為自己改了一版。字型放不下就重做字集，記憶體不夠就一 KB 一 KB 地省，翻頁慢就去面板刷新的空檔裡偷時間。改到第 113 個內部版本<sup class="fn"><a href="#fn-p4">4</a></sup>，我覺得可以拿出來了。</p>
+      <p>這一版叫 CrossMosa:Cross 來自它的起點，Mosa 來自 Formosa。開機畫面上那隻是台灣黑熊，牠頭上有一彎月牙。</p>
+      <p>如果你的閱讀時間也是擠出來的，這一版就是為你調的。</p>
+      <p class="sig">—— <a href="https://github.com/anki630">anki630</a>，CrossMosa 維護者</p>
+    </div>
+  </div>
+</section>
+
+<section id="install">
+  <div class="wrap">
+    <p class="kicker">INSTALL</p>
+    <h2>三步驟，十五分鐘裝好</h2>
+    <p class="sub">機器你已經有了，SD 卡就插在上面。剩下的只有三步。</p>
+    <div class="steps">
+      <div class="step"><div><strong>刷韌體</strong><br>把 zip 裡的 <code>update.bin</code> 用讀卡機放進 SD 卡根目錄，插回機器。關機，按住左側鍵+電源。五分鐘後，它就是 CrossMosa 了。</div></div>
+      <div class="step"><div><strong>放字型(跳過這步，書打開仍是方塊)</strong><br>把字型包解壓縮到 SD 卡的 <code>/.fonts/</code>。內文字型在 SD 卡上、不在韌體裡。刷完看到方塊不是刷壞了，是字型還沒放。</div></div>
+      <div class="step"><div><strong>讀第一本書</strong><br>把附的《歡迎使用 CrossMosa》複製進 SD 卡，開機就是繁體中文，打開它。再花十分鐘讀完，你就是熟手。</div></div>
+    </div>
+    <div class="warn" style="background:var(--paper)">
+      <strong>開始讀之前，對一下這張清單——五格全勾，體驗最完整；前四格就能開讀：</strong><br>
+      ☐ 韌體已刷(<code>update.bin</code> 放 SD 根目錄)<br>
+      ☐ 字型資料夾在 <code>/.fonts/</code>(缺這步=滿頁方塊)<br>
+      ☐ 《歡迎使用 CrossMosa》已複製進 SD 卡<br>
+      ☐ 閱讀字型已選：<strong>設定 → 閱讀器 → 閱讀字型</strong><br>
+      ☐ (可選)名畫放進 <code>/.sleep/</code>，待機變畫框<br>
+      開機就是繁體中文，不用設定——它本來就該如此。
+    </div>
+    <div style="display:none">
+    </div>
+    <div class="warn"><strong>電腦偵測不到機器？本來就不用接。</strong>首刷全程走 SD 卡，檔案用讀卡機放進卡。維護者的 Mac 接了 Hub 也偵測不到，索性整個流程改走 SD。線材、Hub、甚至 USB 被鎖，都不影響。完整說明與退路在 <a href="https://github.com/anki630/crossmosa#%E5%AE%89%E8%A3%9D">安裝文件</a>。</div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <p class="kicker">FAQ</p>
+    <h2>猶豫的話，先看這裡</h2>
+    <div class="faq">
+      <details><summary>會把機器刷壞嗎？</summary><div class="a">風險很低。首刷用的是原廠韌體自己的 SD 更新機制；而且 CrossMosa 保留了救援模式：關機後按住左側翻頁鍵再開機，直接進 SD 卡韌體選擇畫面——就算刷了一版開不了機的韌體，也有路回來。風險與退路，安裝文件寫得很白。</div></details>
+      <details><summary>可以刷回去嗎？</summary><div class="a">可以，隨時。SD 卡救援模式(關機按住左側鍵再開機)能刷回原版 CrossPoint 韌體，不用電腦；要回原廠韌體，用原廠的更新檔或網頁 flasher。來去自由。</div></details>
+      <details><summary>跟原版 CrossPoint 差在哪？</summary><div class="a">CrossMosa 基於 CrossPoint 1.4.1，重做了中文字集與介面翻譯、加了翻頁預取、OPDS 中文書庫體驗、名畫待機策展、隨附教學書，並修了一批記憶體與穩定性問題。完整差異列表在 <a href="https://github.com/anki630/crossmosa#%E8%88%87%E5%8E%9F%E7%89%88-crosspoint-%E7%9A%84%E9%97%9C%E4%BF%82">GitHub</a>。</div></details>
+      <details><summary>要錢嗎？</summary><div class="a">免費，開源(MIT 授權)，原始碼全部公開。覺得好用的話，頁尾有幾種支持的方式，完全自願。</div></details>
+      <details><summary>書從哪裡來？</summary><div class="a">本專案不提供書，也不處理 DRM。請向正版管道購買、認明「無 DRM」的書(Readmoo、樂天 Kobo、Google Play 圖書都有部分書籍如此，依平台與書而定)，搭配 Calibre 整理後用網頁上傳或 OPDS 傳進機器。有 DRM 的書，這台機器讀不了。</div></details>
+      <details><summary>沒有 X3 也能用嗎？</summary><div class="a">CrossMosa 目前只為 Xteink X3 調校。X3 是一台口袋大小、58 克的電子紙閱讀器，在 Xteink 官方通路買得到——本專案與 Xteink 無任何關係，純粹是為這台機器做的愛好者韌體。</div></details>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap support">
+    <p class="kicker">SUPPORT</p>
+    <h2>如果它讓你的 X3 變好用了</h2>
+    <p class="sub" style="margin:0 auto 14px">三件事任何一件都是支持：到 <a href="https://github.com/anki630/crossmosa/discussions">Discussions</a> 留句話說你用得如何；推薦給另一個有 X3 的朋友；或請維護者喝杯咖啡(連結籌備中)。</p>
+    <p class="sub" style="margin:0 auto 30px">這一頁沒有使用者見證——因為我們不編故事。第一句真話，可以是你的。</p>
+    <div class="btns" style="margin-bottom:18px">
+      <a class="btn primary" href="https://github.com/anki630/crossmosa/releases/latest">下載 CrossMosa 1.0</a>
+    </div>
+    <p style="font-weight:600">接下來，把零碎時間還給書。</p>
+  </div>
+</section>
+
+<section style="padding:56px 0">
+  <div class="wrap fnotes" id="fnotes">
+    <p id="fn-p1">1. 機制：面板刷新的空檔預先載入下一頁字型。實機量測(320 次翻頁):預載完成的頁面繪製中位 952ms，未完成 1,278ms；未完成時走原路徑，無額外代價。</p>
+    <p id="fn-p2">2. 介面字集共 7,413 字 = BIG5 一級全收 + 依教育部標準字體表選出的二級常用字 + 書庫掃描補字；內文另由 SD 卡字型涵蓋(明體 22,219 字)。常見人名用字「喆」「堃」「彣」已於 build 115 補入;其餘 BIG5 範圍外的字為已知缺口。</p>
+    <p id="fn-p3">3. 名畫皆取自公共領域(Wikimedia Commons)，逐張調整對比與構圖裁切以適配 4 階灰階電子紙。</p>
+    <p id="fn-p4">4. 完整版本紀錄公開於 <a href="https://github.com/anki630/crossmosa/blob/main/CHANGELOG.md">GitHub 的 CHANGELOG</a>。</p>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <p>CrossMosa 是社群維護的開源韌體，與 Xteink 及原版 CrossPoint 專案均無隸屬關係。刷機有風險，風險自負。首刷走 SD 卡，機器不用接電腦；要用原廠網頁 flasher 刷回原廠韌體時，才需要裝置未鎖 USB。</p>
+    <p>本專案不提供任何書籍內容。名畫待機圖均取自公共領域(Wikimedia Commons)。字型：Noto Sans/Serif TC、芫荽 Iansui、IBM Plex Sans TC(SIL OFL 1.1)。</p>
+    <p><a href="https://github.com/anki630/crossmosa">GitHub</a> · <a href="https://github.com/anki630/crossmosa/releases/latest">下載</a> · <a href="https://github.com/anki630/crossmosa/discussions">討論區</a> · MIT License</p>
+  </div>
+</footer>
+
+<script>
+// 展開時才載入其餘 37 張(檔名清單由建置時注入)
+const REST = ["birth_of_venus_bouguereau.jpg", "caillebotte_rainy.jpg", "caravaggio_judith.jpg", "cezanne_cardplayers.jpg", "composition_viii.jpg", "creation_of_adam.jpg", "degas_star.jpg", "dore_dante_inferno.jpg", "durer_melencolia.jpg", "ejiri_suruga.jpg", "gauguin_vision.jpg", "goya_third_may.jpg", "gulf_stream.jpg", "hay_wain.jpg", "hunters_snow.jpg", "las_meninas.jpg", "last_supper.jpg", "lautrec_moulin.jpg", "manet_dejeuner.jpg", "milkmaid.jpg", "millais_ophelia.jpg", "modigliani.jpg", "munch_scream.jpg", "night_watch.jpg", "plum_park_kameido.jpg", "red_fuji.jpg", "rousseau_gypsy.jpg", "sargent_madame_x.jpg", "school_of_athens.jpg", "sharaku_otani_oniji.jpg", "starry_night_rhone.jpg", "sudden_shower_shin_ohashi.jpg", "takiyasha_skeleton.jpg", "the_kiss.jpg", "tower_of_babel.jpg", "water_lily_pond.jpg", "whistlers_mother.jpg", "zodiac.jpg"];
+document.querySelector('details.more').addEventListener('toggle', function () {
+  const grid = document.getElementById('wp-rest');
+  if (this.open && !grid.childElementCount) {
+    for (const f of REST) {
+      const img = document.createElement('img');
+      img.src = 'promo/wp/' + f;
+      img.loading = 'lazy';
+      img.alt = f.replace('.jpg', '');
+      grid.appendChild(img);
+    }
+  }
+}, { once: false });
+</script>
+<script>
+const io = new IntersectionObserver(es => es.forEach(e => { if (e.isIntersecting) { e.target.classList.add('in'); io.unobserve(e.target); } }), { threshold: .12 });
+document.querySelectorAll('section .wrap').forEach(el => { el.classList.add('reveal'); io.observe(el); });
+</script>
+</body>
+</html>

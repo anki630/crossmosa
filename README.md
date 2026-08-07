@@ -1,272 +1,560 @@
-# CrossPoint Reader
+![CrossMosa — 台灣黑熊與月牙](docs/promo/logo.png)
 
-[![Fund contributors](https://img.shields.io/badge/%F0%9F%91%91_Fund_contributors-royalty.dev-BB953A?style=for-the-badge&labelColor=1a1a1a)](https://app.royalty.dev/crosspoint-reader/crosspoint-reader)
+# CrossMosa
 
-CrossPoint is open-source e-reader firmware - community-built, fully hackable, free forever. It's maintained by a growing community of developers and readers who believe your device should do what you want - not what a manufacturer decided for you.
+**終於,你的 X3 能好好讀中文了。**
 
-**Now running on:** ESP32C3-based Xteink [X4](https://www.xteink.com/products/xteink-x4) and [X3](https://www.xteink.com/products/xteink-x3).
+給 Xteink X3 的繁體中文系統——免費、開源,刷一次機就有。
 
-![CrossPoint Reader running on Xteink device](./docs/images/cover.jpg)
+![CrossMosa 實機照:全繁中主畫面、明體內文、名畫待機](docs/promo/hero-photo.jpg)
 
-## What can CrossPoint do?
+你的 X3,書名還是一排 □□□ 嗎?
 
-- **Reader engine**: EPUB 2/3 rendering with embedded-style option, image handling, hyphenation, kerning, chapter navigation, footnotes, bookmarks, go-to-percent, auto page turn, orientation control, focus reading, KOReader progress sync and more. 
+CrossMosa 只做一件事:**讓 X3 把繁體中文書讀好。**
 
-- **Various formats**: native handling for `.epub`, `.xtc/.xtch`, `.txt`, and `.bmp`.
+- **書名、選單、目錄,說中文**——內建 7,413 個漢字(BIG5 一級全收+二級常用 2,000 字),連「憨」「璐」這類冷僻字都有。
+- **內文想用什麼字體就用什麼**——明體、黑體、硬筆楷書三套中文字型,各四個字級。
+- **翻頁更快了**——下一頁的字趁你還在讀時先備好;備妥的頁面快 0.3 秒,沒備妥也不會更慢。
+- **讀到最精彩的一章,不會突然重開機**——排版、圖片、字型快取全都有記憶體不足時的退路。
+- **闔上機器,它是一幅畫**——50 張世界名畫待機壁紙,每一張都為這塊 4 階灰階螢幕挑過、裁過、調過;今天梵谷,明天北齋。
 
-- **Screenshots.**
+安裝就三步:刷韌體 → 複製字型 → 開機切中文。今晚就能開始讀。
+刷壞了也有退路:SD 卡救援模式隨時能換回任何韌體;首刷機器不用接電腦(SD 卡就能刷,見安裝章方法 A)。
 
-- **Custom fonts**: install your favorite fonts on the SD card.
-
-- **Tilt page turn (X3 only)**.
-
-- **Library workflow**: folder browser, hidden-file toggle, long-press delete, recent books, SD-cache management.
-
-- **Wireless workflows**:
-  
-  - File transfer web UI
-  - EPUB Optimizer
-  - Web settings UI/API (edit many device settings from browser)
-  - WebSocket fast uploads
-  - WebDAV handler
-  - AP mode (hotspot) and STA mode (join existing Wi-Fi), both with QR helpers
-  - Calibre wireless connect flow
-  - OPDS browser with saved servers (up to 8), search, pagination, and direct download
-  - OTA update checks and installs from GitHub releases
-
-- **Customization**: multiple themes (Classic, Lyra, Lyra Extended, RoundedRaff), sleep screen modes, front/side button remapping, status bar controls, power-button behavior, refresh cadence, and more.
-
-- **Localization**: 24 UI languages and counting. RTL support.
-
-### Coming soon:
-
-- Dictionary lookup — inline word lookup without leaving the reader.
-
-- More themes.
-
-- Much more! stay tuned.
+這是個人專案,免費開源,不是產品——但上面每一項,都在真機上量測過。
 
 ---
 
-## USB-locked devices (Xteink Unlocker)
+## 這些痛,你遇過幾個?
 
-Some Xteink units purchased from third-party stores (e.g. AliExpress) ship with USB flashing locked from the factory.
-If your device is locked, you will need to use the **Xteink Unlocker** tool available at
-https://crosspointreader.com/#unlock-tool before you can flash CrossPoint.
+用電子書機讀中文,大概都撞過這幾件事:
 
-**You do not need this tool if you bought your device directly from xteink.com.** Those units are not locked.
+- 書名在檔案清單裡是一排方塊,要一本本點開用猜的。
+- 某些書就是打不開;或讀到一半,整台機器突然重開。
+- 連上 Wi-Fi 想抓書,機器直接當掉。
+- 長篇小說讀到後半,翻頁越來越卡。
+- 選單是英文或簡體;內文沒有台灣讀者習慣的明體。
 
-**Not sure if your device is locked?** Power it on, connect the USB-C cable, and try flashing via the web flasher first (see
-[Install firmware](#install-firmware) below). If the browser's serial device picker does not show your device, try a different
-USB port or browser before assuming the device is locked. Only reach for the unlocker if the device still doesn't appear.
+這五條,CrossMosa 各有一個具體的修法,而且都在真機上驗證過:內建 7,413 個漢字(方塊)、
+排版與記憶體護欄(打不開/突然重開)、連線前自動騰出記憶體(Wi-Fi 當機)、
+背景預先排版(後段卡頓)、繁中介面+三套中文字型(語言與字型)。
+細節在下面的特色表;每一項的來龍去脈都在 [CHANGELOG](CHANGELOG.md)。
 
-> ### ⚠️ WARNING: READ THIS BEFORE USING THE UNLOCKER ⚠️
-> 
-> **The only officially supported firmwares in the unlock tool are CrossPoint and CrossInk.**
-> 
-> Flashing any other firmware on a USB-locked device may **permanently brick the device** or leave it **permanently
-> stuck on that firmware with no recovery path**. Once USB flashing is re-locked, your only way back is via OTA, and if
-> the firmware you flashed doesn't support OTA, **there is no way out**.
-> 
-> **The Papyrix fork has removed OTA update support from its code.** If you flash Papyrix onto a
-> USB-locked unit, you will have **zero update or recovery path** and will be stuck on it forever. **Do not flash
-> Papyrix (or any other unsupported firmware) on a locked device.**
+另外幾樣,是我們所知目前其他 X3 系統上沒有的:
+**翻頁字型預取**(備妥的頁面快 0.3 秒)、**50 張名畫待機策展**、**逐位元組可重現的建置**
+(任何人都能驗證發佈的韌體真的出自這份源碼),以及一個**連官方框架都還沒修的
+Wi-Fi 連線當機**,這裡先修掉了(細節見 CHANGELOG 的 1.0.0 節)。
 
-## Install firmware
+---
 
-### Web installer (recommended)
+## 這是什麼
 
-1. Connect your device to your computer via USB-C and wake/unlock the device
-2. Go to https://crosspointreader.com/#flash-tools, select device (X3 or X4), and choose an official CrossPoint release.
+版本:`1.0.0 (cp1.4.1 build 113)`
 
-### Web installer (specific version)
+CrossMosa 是原版 [CrossPoint](https://github.com/crosspoint-reader/crosspoint-reader)(本分支的來源專案,開發圈慣稱 upstream)的繁體中文分支。
+原版是通用的開源電子書系統,支援兩種機型、二十幾種介面語言、多種檔案格式。
+CrossMosa 把範圍收窄,專心做三件事:
 
-1. Connect your device to your computer via USB-C and wake/unlock the device
-2. Download a `firmware.bin` from [Releases](https://github.com/crosspoint-reader/crosspoint-reader/releases), local build, or continuous integration artifact.
-3. Go to https://crosspointreader.com/#flash-tools, select device (X3 or X4), click "Custom .bin" and upload a `firmware.bin`.
+1. **介面與內文都是繁體中文**——選單、檔名、書名、OPDS 書庫、書的內文。
+2. **閱讀優先**。這台機器只有 320 KB RAM,任何功能都在跟閱讀搶記憶體。
+   凡是會讓翻頁掉字、讓長章節排不出來的東西,一律讓路(見「與原版的差異」)。
+3. **只針對 X3 調校**。原版同時支援 X3 與 X4;本分支的顯示波形時間、記憶體預算、
+   字型尺寸全部照 X3 的 792×528 面板與這顆 ESP32-C3 實測而定。
 
-### Revert to Official Firmware
+這是個人專案,不是產品。**沒有任何隸屬於 Xteink 或原版 CrossPoint 專案的關係。**
 
-To revert to the official firmware, you can also flash the latest official firmware using https://crosspointreader.com/#flash-tools.
+---
 
-### Command line
+## 主要特色(相對原版)
 
-1. Install [`esptool`](https://github.com/espressif/esptool):
+| | 內容 |
+|---|---|
+| **全繁中介面** | 446 個 UI 字串完整翻譯,台灣用語;經過一輪逐字串對照實際畫面的情境複查 |
+| **內建 UI 字型含漢字** | BIG5 一級全部 + BIG5 二級常用 2,000 字 = **7,413 個漢字**,檔名 / 書名 / 選單不再是方塊 |
+| **SD 卡中文內文字型** | 黑體 (Noto Sans TC) / 明體 (Noto Serif TC) / 硬筆楷書 (芫荽 Iansui),各四個字級 16/18/20/22 |
+| **字型預取** | 下一頁要用的字趁你還在讀這一頁的空檔先從 SD 讀好,翻頁中位數 1,278 ms → 952 ms(省約 330 ms) |
+| **CJK 排版** | 逐字斷行、中文行距校正、重組文字時不插多餘空格 |
+| **記憶體護欄群** | 章節排版、斷字、圖片解碼、字型快取、TLS 握手全部有記憶體不足時的降級路徑,不再直接重開機 |
+| **OPDS 中文書庫** | 已造訪頁存 SD 的上/下一頁堆疊、返回保留游標位置、長按翻頁一次一動作、下載完成直接開書 |
+| **圖片與灰階加速** | 有圖的書頁整頁 5,849 ms → 2,422 ms;抗鋸齒的兩個灰階平面合併成單趟走訪 |
+| **網頁傳檔** | 瀏覽器上傳書 / 字型 / 管理 SD 卡,不必拔卡(`http://crossmosa.local`) |
+| **介面重整** | 自訂的 Formosa 主題:圓角外框 + 左側豎條的統一選取語言、真頁籤形分頁列、e-ink 上不塗滿背景 |
+
+![OPDS 中文書庫](docs/promo/photo-opds.jpg)
+
+其他:QR 書摘(修正過容量計算,掃得出來)、書籤與註腳、每頁停留時間量測、
+可用哨兵檔開關的裝置端診斷紀錄(這台機器沒有序列埠)。
+
+---
+
+## ☕ 覺得好用的話
+
+CrossMosa 是下班後的個人專案。如果它讓你的 X3 變好用了,幾種讓我開心的方式:
+
+- 到 [Discussions](../../discussions) 留句話,說說你拿它讀了什麼書——**這是我最想看的**。
+- 推薦給也有 X3 的朋友。
+- 請我喝杯咖啡(連結籌備中)——不影響任何功能,純粹讓下一個版本寫得更有勁。
+
+回報缺字或問題,一樣歡迎開 Issue。
+
+---
+
+## 安裝
+
+以下把這套系統(技術上叫「韌體」)刷進機器。
+
+### ⚠️ 一定要做兩件事,少做一件,中文書就是滿頁方塊
+
+刷韌體**只解決介面**。**書的內文字型不在韌體裡**,它在 SD 卡上。
+
+韌體內建的閱讀備援字型**只有拉丁文**——沒有複製 SD 字型的話,
+選單是正常中文,但**打開任何中文書,內文會整頁都是方塊(□□□□)**。這不是壞掉,是缺字型。
+
+| 步驟 | 檔案 | 去哪 |
+|---|---|---|
+| **1. 刷韌體** | `crossmosa-1.0.0-firmware.zip` | 裝置的 flash |
+| **2. 複製字型** | `crossmosa-1.0.0-sd-fonts.zip` | SD 卡的 `/.fonts/` |
+
+兩個檔案都在同一個 [Release](../../releases) 頁面。
+
+### 步驟 1:刷韌體(首次安裝)
+
+**方法 A — SD 卡首刷(推薦:機器不用接電腦)**
+
+原廠韌體自帶 SD 更新模式。你只需要有辦法把一個檔案放進 SD 卡
+(電腦+讀卡機、或手機+轉接頭都行),機器本身從頭到尾不用接任何東西:
+
+1. 把 zip 裡的 `update.bin` 複製到 SD 卡**根目錄**(檔名已預先改好——
+   這顆就是其他教學裡說要改名的 firmware.bin;注意瀏覽器重複下載會變
+   `update (1).bin`,那樣不行)。
+2. 關機 → **按住左側「上一頁」鍵 + 電源鍵**,看到載入畫面就放手。
+3. 等它刷完自己開機,約五分鐘。失敗的話長按電源 5–10 秒強制重開,
+   重新下載檔案再試(多半是檔案沒抓完整)。
+
+這條路是 **X3 限定**(X4 原廠韌體沒有這個組合鍵),而且**不需要電腦偵測得到機器**——
+線材、Hub、驅動有問題、甚至 USB 被鎖,都不影響。社群文件記載它**連 USB-locked
+的機器也適用**。維護者自己的第一次就是這樣刷的(Mac 的 Hub 一直偵測不到機器)。
+
+**方法 B — 網頁 flasher(USB 偵測得到的話)**
+
+1. USB-C 接電腦,喚醒裝置。
+2. 開 https://crosspointreader.com/#flash-tools,選 **X3**,點 **Custom .bin**,
+   上傳 zip 裡的 `update.bin`。
+3. 瀏覽器的序列裝置選單看不到機器?換一個 USB 埠、不要經過 Hub、換一個支援
+   WebSerial 的瀏覽器(Chrome/Edge)。還是不行就回方法 A,不用糾結。
+
+**方法 C — 命令列**(進階)
 
 ```bash
 pip install esptool
+esptool.py --chip esp32c3 --port /dev/ttyACM0 --baud 921600 \
+           write_flash 0x10000 update.bin
 ```
 
-2. Download `firmware.bin` from the [releases page](https://github.com/crosspoint-reader/crosspoint-reader/releases).
-3. Connect your device via USB-C.
-4. Find the device port. On Linux, run `dmesg` after connecting. On macOS:
+> zip 裡另附 `bootloader.bin` 與 `partitions.bin`,只有在做完整重刷(0x0 起)時才需要;
+> 一般更新只要 `update.bin`。
+
+> **關於 USB-locked 機器**:部分第三方通路(例如 AliExpress)的機器出廠鎖住 USB 燒錄,
+> 直接向 xteink.com 買的沒有鎖。**方法 A 不受鎖定影響**。上游的警告仍然算數:
+> **不要用 Xteink Unlocker 來刷 CrossMosa**(該工具官方只支援 CrossPoint 與 CrossInk,
+> 刷其他韌體有變磚風險)。退路:CrossMosa 保留完整的 SD 救援模式(見「日後更新」),
+> 任何時候都能經它刷回官方 CrossPoint release——這條退路是架構上的保證,也是社群的
+> 常規做法,但本專案尚未在「確認被鎖」的機器上親自驗證過,誠實記錄於此。
+> 上游完整原文:[`docs/UPSTREAM-README.md`](docs/UPSTREAM-README.md) "USB-locked devices"。
+
+### 步驟 2:複製 SD 卡字型
+
+解開 `crossmosa-1.0.0-sd-fonts.zip`,把**整個字型資料夾**複製到 SD 卡的 `/.fonts/` 底下:
+
+```
+SD 卡根目錄
+└── .fonts/
+    ├── NotoSerifTC/          ← 明體(建議先裝這套)
+    │   ├── NotoSerifTC_16.cpfont
+    │   ├── NotoSerifTC_18.cpfont
+    │   ├── NotoSerifTC_20.cpfont
+    │   └── NotoSerifTC_22.cpfont
+    ├── NotoSansTC/           ← 黑體
+    └── Iansui/               ← 硬筆楷書
+```
+
+| 字型 | 風格 | 漢字涵蓋 | 大小 | 說明 |
+|---|---|---|---|---|
+| **NotoSerifTC** | 明體 | **22,219(全部)** | 66 MB | 涵蓋最完整,罕用字最不會方塊 |
+| **NotoSansTC** | 黑體 | 16,317 | 47 MB | 有粗體,1-bit 下筆畫最穩 |
+| **Iansui** 芫荽 | 硬筆楷書 | 5,366(常用字) | 7.8 MB | 只有 Regular;罕用字會方塊 |
+| IBMPlexSansTC | 黑體 | 約 16,000 | 37 MB | 保留的舊選項,字級是 14/16/18/20 |
+
+**只裝一套也可以**——空間有限就先裝 `NotoSerifTC`。
+四套全裝約 157 MB,不影響 RAM(字型是按需從 SD 讀的,不是全部載進記憶體)。
+
+> **芫荽為什麼只有 5,366 字**:裝置對單一 SD 字型有 4,096 個 interval 的硬上限,
+> 超過就整份拒載變全方塊。芫荽的字碼分佈很散,全字集會到 4,762 個 interval,
+> 所以先裁到常用字。Noto 兩套的漢字碼位幾乎連續,不受這個限制。
+
+**SD 卡要求**:FAT32 或 exFAT。**字型資料夾名稱不可以有空格**(原版已知會 crash,用底線)。
+
+**順手做的步驟 2.5**:firmware zip 裡有一本《歡迎使用 CrossMosa》,把它一起複製進 SD 卡。
+十三章、約十分鐘,每一章結尾都叫你按一顆鍵,讀完這台機器就會用了(含電源鍵的五種本事與救援刷機)——刷完之後第一本就讀它。
+
+![X3 正在讀《歡迎使用 CrossMosa》](docs/promo/photo-guide.jpg)
+
+### 日後更新(已刷過 CrossMosa 之後)
+
+從第二次起連讀卡機都可以免了:手機或電腦開瀏覽器連上機器的網頁傳輸,
+把新版 `update.bin` 上傳進 SD 卡(或照舊用讀卡機)→
+**設定 → 系統 → SD 卡韌體更新** → 選檔案。韌體會先完整驗證映像檔才寫入,
+比 USB 直刷更保險,USB 被鎖的機器也能用。
+萬一哪天機器開不了機:關機 → 按住左側「上一頁」鍵 → 按電源,直接進同一個
+SD 韌體選擇畫面(救援模式)——這條路只要機器上還是 CrossMosa 就永遠在。
+
+### 步驟 3:第一次開機
+
+1. **開機就是繁體中文**(要英文介面:**設定 → 系統 → 語言 → English**;從原版升級、之前選過英文的,設定會保留,同一路徑可切)。
+2. **選內文字型**:**設定 → 閱讀器 → 閱讀字型**,選剛剛複製的那套。
+   （沒看到就代表 SD 卡路徑不對,檢查是 `/.fonts/字型名/` 而不是 `/.fonts/`。）
+3. 選字級:**設定 → 閱讀器 → 閱讀字級**(對應 SD 字型的 16/18/20/22)。
+4. 裝置會在 SD 卡建 `/.crossmosa/` 放進度、書籤、Wi-Fi 憑證與快取。**不要刪它。**
+5. 版號顯示在**開機畫面**與**設定頁**,確認是 `1.0.0 (cp1.4.1 build 113)`。
+
+### 傳書進去
+
+- **拔 SD 卡**直接複製(最穩,大檔尤其)。
+- **網頁上傳**:主畫面 → 檔案傳輸 → 加入網路或開熱點 → 電腦瀏覽器開 `http://crossmosa.local`。
+- **OPDS**:設定好書庫伺服器後從裝置上瀏覽下載。
+- **Calibre 無線連線**:原版的流程原封保留。
+
+> 書的來源:請使用正版取得的 EPUB。本專案不提供、也不代找書籍內容。
+
+### 待機壁紙(選配)
+
+[Release](../../releases) 另附 `crossmosa-1.0.0-wallpapers.zip`:**50 張世界名畫**,
+全部取自 Wikimedia Commons 的公共領域作品,每一張都為 X3 這塊 4 階灰階面板挑過、裁過、調過。
+
+把 `.bmp` 複製到 SD 卡的 `/.sleep/`(**放兩張以上才會輪播**),
+然後 **設定 → 顯示 → 待機畫面 → 自訂**。
+
+> ⚠️ SD 根目錄不要放單獨一個 `/sleep.bmp` —— 它會優先、固定顯示、不輪播。
+
+轉檔工具、策展清單與「為什麼是這 50 張」都在 [`wallpapers/`](wallpapers/),
+可以自己換成任何圖片。
+
+---
+
+## UI 字型的字集限制(請先讀這段)
+
+這是本分支最需要事先講清楚的取捨。
+
+**內建 UI 字型涵蓋 7,413 個漢字**:BIG5 一級全部,加上 BIG5 二級裡最常用的 2,000 字。
+**不是全部的中文字。** 完整的 BIG5 有 13,060 字,Unicode 的中日韓統一表意文字更多。
+
+沒被涵蓋到的字,會在**選單、檔名、書名、OPDS 書目、章節目錄**顯示成方塊 □。
+
+### 兩種會踩到的情況
+
+1. **BIG5 二級的罕用字**——落在 2,000 名額之外的部分。
+2. **BIG5 範圍外的字**。這是**已知的缺口**:很多台灣人名用字根本不在 BIG5 裡。
+   最常見的三個(**喆、堃、彣**)已在 build 115 補上;其餘 BIG5 外的字仍缺——
+   系統性補齊需要換一套候選字源(現在的候選池與字頻表都以 BIG5 為界),1.0 沒做。
+
+### 書的內文不受影響(有條件)
+
+UI 字型與內文字型是**完全獨立的兩套**。書的內文走 SD 卡字型:
+
+- 用 **NotoSerifTC**(明體,22,219 字全涵蓋)→ 內文基本上不會缺字,含上面那些人名用字。
+- 用 **NotoSansTC**(16,317 字)→ 極罕用字仍可能方塊。
+- 用 **Iansui**(5,366 字)→ 罕用字會方塊,這是為了 4,096 interval 上限付的代價。
+
+也就是說:**書名在檔案清單上是方塊、打開之後內文正常**,是預期中的行為,不是 bug。
+
+### 遇到方塊怎麼辦
+
+**回報**:開一個 [Issue](../../issues),標題寫「缺字」,內容貼上**那個字本身**
+(直接打在 issue 裡就好)以及它出現的地方(選單 / 檔名 / 書名 / 內文)。
+字集是可重現的資料檔,補字是例行維護。
+
+**自己重產**:UI 字型的字集與選字工具都在這個 repo 裡,可完整重現。
+
+| 東西 | 路徑 |
+|---|---|
+| 目前的 UI 字集(含完整出處與選字規則,寫在檔頭) | `fonts/charsets/charset-ui-v5.txt` |
+| UI 字型重產腳本 | `fonts/regen-ui-fonts.sh` |
+| 二級字選字程式(候選池 + 字頻排序) | `fonts/pick-big5-l2-chars.py` |
+| SD 卡字型產生器(原版的,未修改) | `lib/EpdFont/scripts/fontconvert_sdcard.py` |
+
+流程是:把字加進字集檔 → 跑重產腳本 → 重新編譯韌體 → 重刷。
+**UI 字型無法用 SD 卡替換,只能重編韌體。**
+
+> 字集檔的檔頭**必須全部是 ASCII**——整個檔案會餵給 `pyftsubset --text-file`,
+> 檔頭裡的任何一個中文字都會悄悄進到字型裡。重產腳本有 cmap 斷言擋這件事。
+
+### 為什麼不乾脆全部收進去
+
+全 BIG5 加進 UI 字型大約要多 2 MB,而 app 分割區只有 6.5 MB,目前已經用掉 90.9%
+(5,955,789 bytes,剩約 584 KB)。要放得下就得先重新分割 flash——有變磚風險。
+現在這 7,413 字,就是塞得進去的最大值。
+
+---
+
+## 自行建置
 
 ```bash
-log stream --predicate 'subsystem == "com.apple.iokit"' --info
+git submodule update --init --recursive --depth 1   # freeink-sdk 是 submodule,缺了會 link 失敗
+pip install platformio
+export SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)  # 見下方「可重現建置」
+pio run -e gh_release                                # 產物在 .pio/build/gh_release/firmware.bin
 ```
 
-5. Flash:
+### 可重現建置
+
+**發佈的映像檔(`update.bin`,即建置產物 `firmware.bin` 改名)是逐位元組可重現的**——同一個 commit、同一組釘住版本的相依套件,
+任何人都能建出 sha256 完全相同的檔案。條件只有一個:**必須設 `SOURCE_DATE_EPOCH`**。
+
+不設的話,`__DATE__` / `__TIME__` 會把建置當下的時刻編進 binary(其中一處還在 Arduino
+core 裡,不是本專案能改的),兩次建置就會差幾十個位元組。設了之後 GCC 會用這個值取代那兩個
+巨集,同時本專案的網頁資產壓縮也會用它當 gzip 的 mtime。
+
+**每個 Release 都會公佈當次使用的 `SOURCE_DATE_EPOCH` 與 firmware 的 sha256。**
+打包腳本 [`scripts/mk-release.sh`](scripts/mk-release.sh) 預設直接取 release commit 自己的
+時間戳(`git log -1 --format=%ct`),所以只要 checkout 同一個 tag 就會自動得到同一個值。
+機制與判讀方式寫在 [`docs/reproducible-builds.md`](docs/reproducible-builds.md)。
+
+---
+
+## 與原版 CrossPoint 的關係
+
+**CrossMosa 的一切都建立在 [CrossPoint](https://github.com/crosspoint-reader/crosspoint-reader) 上面。**
+閱讀引擎、EPUB 解析、排版、活動框架、網頁介面、OPDS、Calibre 流程——這些都是原版寫的,
+本分支只是在上面做中文化與 X3 特化。
+
+- 原版作者:**Dave Allie** 與 CrossPoint 貢獻者們。授權 MIT,`LICENSE` 原封保留。
+- 原版的錯誤回報請發到[原版 repo](https://github.com/crosspoint-reader/crosspoint-reader/issues),
+  不要發到這裡;本 repo 只處理本分支自己改壞的東西。
+- **想要完整功能的人應該用原版**,不是用這個分支。
+
+### 與原版的差異
+
+**已移除**(不是關閉,是程式碼層面拔掉入口讓連結器回收,換 flash 空間給中文字型):
+
+| 移除 | 原因 |
+|---|---|
+| English / 繁體中文以外的 **29 種 UI 語言** | 約 258 KB,換中文字型 |
+| **XTC 格式**支援(`.xtc` / `.xtch`) | X4 的原生預渲染格式,與 X3 的 EPUB 流程無關 |
+| **KOReader 進度同步** | 沒有伺服器可同步 |
+| **字典查詢**(StarDict) | 未使用 |
+| **OTA 線上更新** | 會指向原版的 release 把本分支蓋掉;**SD 卡韌體更新保留** |
+| **Classic / RoundedRaff 主題** | 字級與語系支援跟不上中文;留 Formosa 與 Formosa Extended |
+| **非英文的斷字表**(9 種語言) | 中文不斷字,約 323 KB |
+| **內建斜體字面** | 自動退回正體,約 544 KB |
+| 內建閱讀字型縮成**單一 14px 備援** | 只在沒有 SD 字型時用得到,約 373 KB |
+
+**保留原始碼但預設不編進去**:
+
+| 功能 | 狀態 |
+|---|---|
+| **SMB2 伺服器**(iOS「檔案」App 直接管理 SD 卡) | 預設關閉。功能可用且經實機驗證過完整的建立/寫入/改名/刪除,但體驗不夠好而下架。`platformio.ini` 把 `smb2` 那行取消註解即可編回來 |
+| **BLE 翻頁遙控器** | 預設關閉。NimBLE 連結進來就是約 27 KB 的固定成本,加上執行期需求會把閱讀用的記憶體吃掉、長章節開始掉字。要用得加 `-DCROSSMOSA_BLE` 編第二份韌體,細節寫在 `src/ble/BleRemoteManager.h` 的註解裡 |
+
+**保留**:Calibre 無線推書(相容原版外掛生態)、網頁設定與傳檔、WebDAV、OPDS、
+傾斜翻頁、螢幕截圖、按鍵重配、待機畫面。
+
+---
+
+## 免責聲明
+
+- **本專案不提供任何書籍內容,也不內建任何書源。** 韌體與 Release 裡沒有書。
+  請從正版管道取得電子書(無 DRM 的正版 EPUB:出版社或獨立書店直售、公共領域書庫、
+  你自己的文件),放進 SD 卡或自架書庫使用。請支持正版,尊重創作者。
+- **刷機有風險,自負。** 刷第三方韌體可能讓裝置無法開機。務必留意安裝章的 USB-locked 注意事項、
+  也就是說你有一條刷回官方韌體的路。
+- **與 Xteink 無關,與原版 CrossPoint 專案也無隸屬關係。** 兩者都不為這個分支負責。
+- **只在一台 X3 上測試過。** 沒有 X4,沒有第二台機器,沒有自動化的硬體測試。
+  很多改動的驗證方式就是「用了幾天沒出事」。
+- **沒有遙測。** 本韌體不會回報使用狀況給任何人。Wi-Fi 憑證、閱讀進度、書籤只存在你自己的
+  SD 卡上(`/.crossmosa/`)。裝置只有在你主動要求時才連外:連 Wi-Fi 後對時(NTP)、
+  你設定的 OPDS 伺服器、Calibre 無線連線。原版的 OTA 更新檢查已經移除,
+  所以本韌體不會主動連任何本專案或原版的伺服器。
+- 「AS IS」,無任何擔保,見 `LICENSE`。
+
+---
+
+## 授權
+
+- 原版 CrossPoint:MIT,Copyright (c) 2025 Dave Allie(`LICENSE`,原封保留)。
+- CrossMosa 的修改:MIT,Copyright (c) 2026 CrossMosa contributors。
+- 內含的第三方程式庫與字型各有授權,**完整清單見 [`NOTICE.md`](NOTICE.md)**。
+  ⚠️ 其中有 GPLv2 與 LGPL-2.1 的元件會連結進發佈的韌體 binary,
+  請先讀 NOTICE 的「發佈義務」一節。
+
+維護:**CrossMosa contributors**。
+
+---
+---
+
+![CrossMosa — a Formosan black bear and a crescent moon](docs/promo/logo.png)
+
+# CrossMosa (English)
+
+**Finally, your X3 can read Traditional Chinese properly.**
+
+**Traditional-Chinese-focused firmware for the Xteink X3 e-reader**, based on
+[CrossPoint](https://github.com/crosspoint-reader/crosspoint-reader) 1.4.1.
+
+![CrossMosa on real hardware: Traditional Chinese home menu, serif body text, masterpiece sleep screen](docs/promo/hero-photo.jpg)
+
+Version: `1.0.0 (cp1.4.1 build 113)`
+
+## What it is
+
+A narrow fork of CrossPoint with one goal: read Traditional Chinese books well on the X3.
+It trades away breadth (other languages, other formats, the X4) for Chinese typography,
+a reading-first memory policy, and X3-specific display tuning. Personal project, not a product.
+Not affiliated with Xteink or with the upstream CrossPoint project.
+
+## Sound familiar?
+
+- Book titles are a row of boxes in the file list, so you open them one by one to guess.
+- Some books simply won't open — or the device reboots mid-chapter.
+- Joining Wi-Fi to fetch a book hangs the device.
+- Page turns get slower the deeper you are into a long novel.
+
+CrossMosa has a specific, device-verified fix for each: 7,413 built-in Han characters,
+out-of-memory guards through layout and rendering, freeing memory before the radio comes up,
+and background pre-pagination. Four things here are, as far as we know, not in any other X3
+system: **glyph prefetch** (~0.3 s off prefetched page turns, never slower), the **curated 50-masterpiece sleep
+wallpapers**, **byte-for-byte reproducible builds**, and a fix for a **Wi-Fi connection crash
+that upstream arduino-esp32 still carries**. See the [CHANGELOG](CHANGELOG.md) for each.
+
+## Highlights vs upstream
+
+- Fully translated Traditional Chinese UI (446 strings, Taiwan usage).
+- Built-in UI font carries **7,413 Han characters** (all of BIG5 Level 1 + the 2,000 most
+  common Level 2 characters), so filenames, book titles and menus render.
+- Chinese reading fonts for the SD card: Serif / Sans / handwriting-style, four sizes each.
+- **Glyph prefetch**: the next page's SD reads happen while you are still reading the current page —
+  median page turn 1,278 ms → 952 ms.
+- CJK line breaking, corrected CJK line spacing, no spurious spaces when re-joining text.
+- Out-of-memory guards throughout layout, hyphenation, image decoding, font cache and TLS —
+  low memory degrades instead of rebooting.
+- OPDS improvements for large Chinese libraries; image/greyscale rendering roughly 2.4× faster;
+  browser-based file transfer; a reworked UI theme (Formosa).
+
+## Install — you must do BOTH steps
+
+Flashing the firmware only fixes the **menus**. **Book text needs fonts on the SD card.**
+The built-in fallback reader font is Latin-only, so **without the SD fonts every Chinese book
+renders as boxes (□□□□)**.
+
+> ### If the web flasher can't see your device — you don't need it
+>
+> The stock firmware has its own SD update mode. **Method A below never connects the device
+> to a computer** (you only need to copy one file onto the SD card),
+> and community documentation confirms it works even on USB-locked units. Do not use the
+> Xteink Unlocker to flash this firmware (that tool officially supports only CrossPoint and
+> CrossInk). Escape hatch on locked units: CrossMosa keeps the full SD rescue mode, so you can
+> always flash back to an official CrossPoint release from the SD card — an architectural
+> guarantee and common community practice, though this project has not personally verified it
+> on a confirmed-locked unit. Full upstream text:
+> [`docs/UPSTREAM-README.md`](docs/UPSTREAM-README.md), "USB-locked devices".
+
+1. **Flash** (first install) — **Method A, recommended — the device never touches a computer**:
+   copy the zip's **`update.bin`** to the **root** of the SD
+   card (any card reader or phone adapter works), power off, then
+   hold the **left side button + power** until the loader screen appears; it flashes and
+   reboots in ~5 minutes (X3 only — the X4 stock firmware lacks this combo). Or use the web
+   flasher at https://crosspointreader.com/#flash-tools (X3 → Custom .bin), or
+   `esptool.py --chip esp32c3 write_flash 0x10000 update.bin`.
+   Later updates never need a computer: **Settings → System → SD Card Firmware Update**, or
+   the rescue combo (power off, hold the left side button, press power) straight into the
+   SD firmware picker.
+2. **Copy the fonts** from `crossmosa-1.0.0-sd-fonts.zip` into `/.fonts/` on the SD card,
+   keeping one folder per family (`/.fonts/NotoSerifTC/…`). One family is enough;
+   **NotoSerifTC** is the recommended first choice (22,219 Han, widest coverage).
+   Folder names must not contain spaces.
+
+While you have the card out, also copy 《歡迎使用CrossMosa.epub》 from the firmware zip onto
+it — a thirteen-chapter guided tour (in Traditional Chinese) that teaches the device by making
+you press its keys. Read it first.
+
+First boot: the UI defaults to **Traditional Chinese** (this fork's whole point). To switch to English: **設定 → 系統 → 語言 → English** (= Settings → System → Language). Then
+**Settings → Reader → Reader Font Family** to pick the SD font. The device creates
+`/.crossmosa/` on the card for progress, bookmarks and Wi-Fi credentials — don't delete it.
+
+**Optional — sleep wallpapers.** `crossmosa-1.0.0-wallpapers.zip` holds **50 public-domain
+masterpieces** from Wikimedia Commons, each individually checked and tuned for this panel's
+4 grey levels. Copy the `.bmp` files to `/.sleep/` on the SD card (two or more to rotate),
+then **Settings → Display → Sleep Screen → Custom**. The converter, the curation manifest and
+the reasoning behind the selection are in [`wallpapers/`](wallpapers/).
+
+## UI character-set limits (please read)
+
+The built-in UI font covers **7,413 Han characters**, not all of Chinese. Characters outside
+that set render as boxes **in menus, filenames and titles only** — book *text* uses the SD
+font and is unaffected (fully so with NotoSerifTC; NotoSansTC and Iansui have smaller sets).
+
+Two known gaps: rare BIG5 Level 2 characters outside the 2,000 chosen, and characters
+**outside BIG5 entirely**. The three most common Taiwanese given-name characters
+(喆, 堃, 彣) were added in build 115; the rest still need a different character source
+and are not in 1.0.
+
+Report missing characters as a GitHub issue (paste the character itself and say where it
+appeared). To regenerate the UI fonts yourself: edit `fonts/charsets/charset-ui-v5.txt`
+(its ASCII header documents the exact sources and selection rule), run
+`fonts/regen-ui-fonts.sh`, rebuild and reflash. UI fonts cannot be replaced from the SD card.
+
+Why not include everything: full BIG5 would add ~2 MB to a 6.5 MB app partition that is
+already 90.9% full.
+
+## Building
 
 ```bash
-esptool.py --chip esp32c3 --port /dev/ttyACM0 --baud 921600 write_flash 0x10000 /path/to/firmware.bin
+git submodule update --init --recursive --depth 1
+export SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)
+pio run -e gh_release
 ```
 
-Adjust `/dev/ttyACM0` to match your system.
+**Builds are byte-for-byte reproducible** — but only if `SOURCE_DATE_EPOCH` is set, because
+`__DATE__`/`__TIME__` otherwise bake the wall clock into the image (one of the two sites is in
+the Arduino core, not ours to patch). Every release publishes the epoch it used together with
+the firmware sha256; [`scripts/mk-release.sh`](scripts/mk-release.sh) defaults to the release
+commit's own timestamp, so checking out the tag reproduces the value automatically. See
+[`docs/reproducible-builds.md`](docs/reproducible-builds.md).
 
-### Manual
+## Relationship to upstream
 
-See [Development quick start](#development-quick-start) below.
+Everything here stands on **CrossPoint** by **Dave Allie** and its contributors (MIT;
+`LICENSE` kept as-is). Report upstream bugs upstream. If you want the full feature set,
+use upstream rather than this fork.
 
----
+**Removed** (to reclaim flash for Chinese fonts): 29 UI languages beyond English and
+Traditional Chinese, XTC format support, KOReader progress sync, StarDict dictionary,
+the OTA updater (SD-card firmware update is kept), the Classic and RoundedRaff themes,
+non-English hyphenation tables, built-in italic faces, and all but one built-in reader font size.
 
-## Custom SD-card fonts
+**Present but disabled by default** (code still in the tree): the **SMB2 server** for the iOS
+Files app, and the **BLE page-turner remote** — the latter costs enough RAM that long chapters
+start dropping glyphs, and on this device reading wins.
 
-Convert your own TTF/OTF files into `.cpfont` files that load from the SD card. No firmware reflash is needed.
+## ☕ If it made your X3 better
 
-1. Go to https://crosspointreader.com/fonts and open the "SD-card font builder" form.
-2. Upload up to four styles (regular, bold, italic, bold-italic), set the family name, point sizes, and Unicode range.
-3. Download the generated `.cpfont` files.
-4. Copy them to your SD card under `/fonts/YourFont/` (or `/.fonts/YourFont/` to hide the folder).
-5. Select the font on the device from the font settings.
+Say hi in [Discussions](../../discussions) and tell me what you've been reading with it, tell a
+friend with an X3, or buy me a coffee (link coming — it changes nothing about the firmware).
+Issues for missing characters or bugs are welcome too.
 
-Conversion runs the firmware repo's `lib/EpdFont/scripts/fontconvert_sdcard.py` script unmodified, so output matches a local host build.
+## Disclaimer
 
----
+This project ships **no book content and no book sources** — bring your own legally obtained, DRM-free EPUBs (publisher or indie-store direct sales, public-domain libraries, your own documents). Support the authors. Flash at your own risk; third-party firmware can leave a device unbootable. Not affiliated
+with Xteink or upstream. Tested on exactly one X3 — much of the verification is "used it for
+a few days and nothing broke". **No telemetry**: credentials, progress and bookmarks stay on
+your SD card, and the device only reaches the network when you ask it to (NTP after joining
+Wi-Fi, your own OPDS server, Calibre). The upstream OTA update check is removed, so this
+firmware never contacts a project server on its own. Provided AS IS, see `LICENSE`.
 
-## Documentation
+## Licensing
 
-- [User Guide](./USER_GUIDE.md)
-- [Web server usage](./docs/webserver.md)
-- [Web server endpoints](./docs/webserver-endpoints.md)
-- [Project scope](./SCOPE.md)
-- [Contributing docs](./docs/contributing/README.md)
+Upstream CrossPoint: MIT © 2025 Dave Allie. CrossMosa modifications: MIT © 2026 CrossMosa
+contributors. Bundled third-party code and fonts carry their own licences — see
+[`NOTICE.md`](NOTICE.md). ⚠️ Some components linked into the released firmware binary are
+GPLv2 and LGPL-2.1; read the "Distribution obligations" section of NOTICE first.
 
----
-
-## Development quick start
-
-### Prerequisites
-
-- [pioarduino](https://github.com/pioarduino/pioarduino) or VS Code + pioarduino plugin
-- Python 3.8+
-- `clang-format` 21
-- USB-C cable supporting data transfer
-
-### Setup
-
-```bash
-git clone --recursive https://github.com/crosspoint-reader/crosspoint-reader
-cd crosspoint-reader
-
-# if cloned without --recursive:
-git submodule update --init --recursive
-```
-
-### Build / flash / monitor
-
-```bash
-pio run --target upload
-```
-
-### Contributor pre-PR checks
-
-```bash
-./bin/clang-format-fix
-pio check -e default
-pio run -e default
-```
-
-### Debugging
-
-After flashing the new features, it’s recommended to capture detailed logs from the serial port.
-
-First, make sure all required Python packages are installed:
-
-```python
-python3 -m pip install pyserial colorama matplotlib
-```
-
-After that run the script:
-
-```sh
-# For Linux
-# This was tested on Debian and should work on most Linux systems.
-python3 scripts/debugging_monitor.py
-
-# For macOS
-python3 scripts/debugging_monitor.py /dev/cu.usbmodem2101
-```
-
-Minor adjustments may be required for Windows.
-
----
-
-## Internals
-
-CrossPoint Reader is pretty aggressive about caching data down to the SD card to minimise RAM usage. The ESP32-C3 only has ~380KB of usable RAM, so we have to be careful. A lot of the decisions made in the design of the firmware were based on this constraint.
-
-### Data caching
-
-The first time chapters of a book are loaded, they are cached to the SD card. Subsequent loads are served from the
-cache. This cache directory exists at `.crosspoint` on the SD card. The structure is as follows:
-
-```text
-.crosspoint/
-├── epub_<hash>/         # one directory per book, named by content hash
-│   ├── progress.bin     # reading position (chapter, page, etc.)
-│   ├── cover.bmp        # generated cover image
-│   ├── book.bin         # metadata: title, author, spine, TOC
-│   ├── css_rules.cache  # parsed CSS rule cache
-│   ├── img_*            # rendered image cache files
-│   └── sections/        # per-chapter layout cache
-│       ├── 0.bin
-│       ├── 1.bin
-│       └── ...
-├── settings.json        # device settings
-├── state.json           # resume/runtime state
-└── recent.json          # recent books list
-```
-
-Removing `/.crosspoint` clears all cached metadata and forces a full regeneration on next open. Book deletes, overwrites, and moves done through the firmware or web UI clear or re-key matching caches; manual SD-card edits may leave stale cache directories behind.
-
-For more details on the internal file structures, see the [file formats document](./docs/file-formats.md).
-
----
-
-## Contributing
-
-Contributions are welcome. If you're new to the codebase, start with the [contributing docs](./docs/contributing/README.md). For things to work on, check the [ideas discussion board](https://github.com/crosspoint-reader/crosspoint-reader/discussions/categories/ideas) — leave a comment before starting so we don't duplicate effort.
-
-Everyone here is a volunteer, so please be respectful and patient. For governance and community expectations, see [GOVERNANCE.md](./GOVERNANCE.md).
-
----
-
-## Community forks
-
-One of the best things about open source is that anyone can take the code in a different direction. If you need something outside CrossPoint's [scope](./SCOPE.md), check out the community forks:
-
-- [CrossInk](https://github.com/uxjulia/CrossInk) — Typography and reading tracking: Bionic Reading (bolds word stems to create fixation points), guide dots between words, improved paragraph indents, and replaces the default fonts with ChareInk/Lexend/Bitter.
-
-- [papyrix-reader](https://github.com/bigbag/papyrix-reader) — Adds FB2 and MD format support. Actively maintained with Arabic script support. Custom themes via SD card.
-
-- [crosspet](https://github.com/trilwu/crosspet) — A Vietnamese fork that adds a Tamagotchi-style virtual chicken that grows based on your reading milestones (pages read, streaks, care). Also: Flashcards, Weather, Pomodoro timer, and mini-games.
-
-- [crosspoint-reader-cjk](https://github.com/aBER0724/crosspoint-reader-cjk) — Purpose-built for Chinese, Japanese, and Korean reading.
-
-- [inx](https://github.com/obijuankenobiii/inx) — Completely reimagines the user interface with tabbed navigation.
-
-- ~~[PlusPoint](https://github.com/ngxson/pluspoint-reader) — custom JS apps support.~~ (Unmaintained)
-
-- [crosspoint-reader-papers3](https://github.com/juicecultus/crosspoint-reader-papers3) — Crosspoint port for M5Stack Paper S3. 
-
-- [t5s3-reader](https://github.com/ShallowGreen123/t5s3-reader) — Crosspoint port for LilyGo T5 ePaper S3 / T5S3 4.7-inch e-paper device.
-
-**Note:** Many of these features will make their way into CrossPoint over time. We maintain a slower pace to ensure rock-solid stability and squash bugs before they reach your device.
-
-Want to build your own device? Be sure to check out the [de-link](https://github.com/iandchasse/de-link) project.
-
----
-
-CrossPoint Reader is **not affiliated with Xteink or any device manufacturer**.
-
-Huge shoutout to [diy-esp32-epub-reader](https://github.com/atomic14/diy-esp32-epub-reader), which inspired this project.
+Maintained by **CrossMosa contributors**.

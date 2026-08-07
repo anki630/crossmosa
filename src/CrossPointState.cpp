@@ -1,17 +1,33 @@
 #include "CrossPointState.h"
 
 #include <HalStorage.h>
+#include <DataDir.h>
 #include <JsonSettingsIO.h>
 #include <Logging.h>
 #include <Serialization.h>
 
 #include <algorithm>
+#include <mutex>
 
 namespace {
 constexpr uint8_t STATE_FILE_VERSION = 4;
-constexpr char STATE_FILE_BIN[] = "/.crosspoint/state.bin";
-constexpr char STATE_FILE_JSON[] = "/.crosspoint/state.json";
-constexpr char STATE_FILE_BAK[] = "/.crosspoint/state.bin.bak";
+// v36: paths hang off the boot-resolved data dir; built on first use —
+// DataDir::resolve() has run by then (boot order).
+const char* stateFileBin() {
+  static char p[36] = "";
+  if (!p[0]) snprintf(p, sizeof(p), "%s/state.bin", DataDir::path());
+  return p;
+}
+const char* stateFileJson() {
+  static char p[36] = "";
+  if (!p[0]) snprintf(p, sizeof(p), "%s/state.json", DataDir::path());
+  return p;
+}
+const char* stateFileBak() {
+  static char p[36] = "";
+  if (!p[0]) snprintf(p, sizeof(p), "%s/state.bin.bak", DataDir::path());
+  return p;
+}
 }  // namespace
 
 CrossPointState CrossPointState::instance;
@@ -32,24 +48,26 @@ void CrossPointState::pushRecentSleep(uint16_t idx) {
 }
 
 bool CrossPointState::saveToFile() const {
-  Storage.mkdir("/.crosspoint");
-  return JsonSettingsIO::saveState(*this, STATE_FILE_JSON);
+  std::lock_guard<std::mutex> lock(_mutex);
+  Storage.mkdir(DataDir::path());
+  return JsonSettingsIO::saveState(*this, stateFileJson());
 }
 
 bool CrossPointState::loadFromFile() {
   // Try JSON first
-  if (Storage.exists(STATE_FILE_JSON)) {
-    String json = Storage.readFile(STATE_FILE_JSON);
+  if (Storage.exists(stateFileJson())) {
+    String json = Storage.readFile(stateFileJson());
     if (!json.isEmpty()) {
+      std::lock_guard<std::mutex> lock(_mutex);
       return JsonSettingsIO::loadState(*this, json.c_str());
     }
   }
 
   // Fall back to binary migration
-  if (Storage.exists(STATE_FILE_BIN)) {
+  if (Storage.exists(stateFileBin())) {
     if (loadFromBinaryFile()) {
       if (saveToFile()) {
-        Storage.rename(STATE_FILE_BIN, STATE_FILE_BAK);
+        Storage.rename(stateFileBin(), stateFileBak());
         LOG_DBG("CPS", "Migrated state.bin to state.json");
         return true;
       } else {
@@ -64,9 +82,10 @@ bool CrossPointState::loadFromFile() {
 
 bool CrossPointState::loadFromBinaryFile() {
   HalFile inputFile;
-  if (!Storage.openFileForRead("CPS", STATE_FILE_BIN, inputFile)) {
+  if (!Storage.openFileForRead("CPS", stateFileBin(), inputFile)) {
     return false;
   }
+  std::lock_guard<std::mutex> lock(_mutex);
 
   uint8_t version;
   serialization::readPod(inputFile, version);

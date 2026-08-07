@@ -36,6 +36,9 @@ class SdCardFontManager {
   // 0 if nothing loaded.
   uint8_t currentPointSize() const { return loadedPointSize_; };
 
+  // v53 量測:目前載入的字型物件(供讀取 prewarm 統計;無載入時 nullptr)。
+  SdCardFont* currentFont() const { return loaded_.empty() ? nullptr : loaded_.front().font; }
+
  private:
   struct LoadedFont {
     SdCardFont* font;  // heap-allocated, owned

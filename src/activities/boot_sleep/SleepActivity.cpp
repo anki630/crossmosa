@@ -1,4 +1,5 @@
 #include "SleepActivity.h"
+#include <DataDir.h>
 
 #include <Epub.h>
 #include <FsHelpers.h>
@@ -6,14 +7,13 @@
 #include <HalStorage.h>
 #include <I18n.h>
 #include <Txt.h>
-#include <Xtc.h>
 
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
 #include "activities/reader/ReaderUtils.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
-#include "images/Logo120.h"
+#include "images/LogoBear240.h"
 #include "images/MoonIcon.h"
 
 void SleepActivity::onEnter() {
@@ -149,16 +149,26 @@ void SleepActivity::renderCustomSleepScreen() const {
   renderDefaultSleepScreen();
 }
 
+// Sleep screens paint with a single HALF refresh (stock parity): the OEM X4
+// firmware's only clean refresh in normal operation is the single-pass 0xD7
+// sequence, used once for the sleep image. It never runs the multi-flash GC
+// waveform (0xF7) that FULL_REFRESH selects (#2471's blinking complaint).
 void SleepActivity::renderDefaultSleepScreen() const {
   const auto pageWidth = renderer.getScreenWidth();
   const auto pageHeight = renderer.getScreenHeight();
 
-  renderer.clearScreen();
-  renderer.drawImage(Logo120, (pageWidth - 120) / 2, (pageHeight - 120) / 2, 120, 120);
-  renderer.drawCenteredText(UI_10_FONT_ID, pageHeight / 2 + 70, tr(STR_CROSSPOINT), true, EpdFontFamily::BOLD);
-  renderer.drawCenteredText(SMALL_FONT_ID, pageHeight / 2 + 95, tr(STR_SLEEPING));
+  const int logoX = (pageWidth - LOGO_BEAR_240_SIZE) / 2;
+  const int logoY = (pageHeight - LOGO_BEAR_240_SIZE) / 2;
+  const int textY = logoY + LOGO_BEAR_240_SIZE + 10;
 
-  // Make sleep screen dark unless light is selected in settings
+  renderer.clearScreen();
+  renderer.drawImageGray(LogoBearGray240, logoX, logoY, LOGO_BEAR_240_SIZE, LOGO_BEAR_240_SIZE);
+  renderer.drawCenteredText(UI_10_FONT_ID, textY, tr(STR_CROSSPOINT), true, EpdFontFamily::BOLD);
+  renderer.drawCenteredText(UI_10_FONT_ID, textY + 25, tr(STR_SLEEPING));
+
+  // v36: back to the single-pass 1-bit render (grayscale added visible boot
+  // flashes; drawImageGray in BW mode renders the grey design elements as
+  // solid black). Make sleep screen dark unless light is selected.
   if (SETTINGS.sleepScreen != CrossPointSettings::SLEEP_SCREEN_MODE::LIGHT) {
     renderer.invertScreen();
   }
@@ -219,10 +229,10 @@ void SleepActivity::renderBitmapSleepScreen(const Bitmap& bitmap) const {
   }
 
   if (hasGreyscale) {
-    // OEM grayscale pipeline base: on X3 this displays the frame with the
-    // dedicated "AA-pre-BW(mid)" differential waveform, leaving every pixel
-    // in the calibrated state the gray nudge refresh expects; on X4 it is a
-    // plain HALF refresh (previous behavior).
+    // OEM grayscale pipeline base. Must stay HALF: the gray nudge LUT is
+    // calibrated against the pixel state the single-pass HALF waveform leaves
+    // behind. A FULL (GC) base parks pixels in a different charge state and
+    // the differential nudge then lands unevenly (blotchy noise in gray areas).
     renderer.displayGrayscaleBase(HalDisplay::HALF_REFRESH);
   } else {
     renderer.displayBuffer(HalDisplay::HALF_REFRESH);
@@ -264,30 +274,24 @@ void SleepActivity::renderCoverSleepScreen() const {
   std::string coverBmpPath;
   bool cropped = SETTINGS.sleepScreenCoverMode == CrossPointSettings::SLEEP_SCREEN_COVER_MODE::CROP;
 
-  // Check if the current book is XTC, TXT, or EPUB
-  if (FsHelpers::hasXtcExtension(APP_STATE.openEpubPath)) {
-    // Handle XTC file
-    Xtc lastXtc(APP_STATE.openEpubPath, "/.crosspoint");
-    if (!lastXtc.load()) {
-      LOG_ERR("SLP", "Failed to load last XTC");
-      return (this->*renderNoCoverSleepScreen)();
-    }
-
-    if (!lastXtc.generateCoverBmp()) {
-      LOG_ERR("SLP", "Failed to generate XTC cover bmp");
-      return (this->*renderNoCoverSleepScreen)();
-    }
-
-    coverBmpPath = lastXtc.getCoverBmpPath();
-  } else if (FsHelpers::hasTxtExtension(APP_STATE.openEpubPath)) {
+  // Check if the current book is TXT or EPUB
+  if (FsHelpers::hasTxtExtension(APP_STATE.openEpubPath)) {
     // Handle TXT file - looks for cover image in the same folder
-    Txt lastTxt(APP_STATE.openEpubPath, "/.crosspoint");
+    Txt lastTxt(APP_STATE.openEpubPath, DataDir::path());
     if (!lastTxt.load()) {
       LOG_ERR("SLP", "Failed to load last TXT");
       return (this->*renderNoCoverSleepScreen)();
     }
 
-    if (!lastTxt.generateCoverBmp()) {
+    bool coverOk;
+    {
+      // Lend the framebuffer as decode scratch so the cover JPEG/PNG inflate
+      // (~40 KB) reuses it instead of the heap. generateCoverBmp only writes to
+      // SD; nothing draws until the loan is restored at this scope's end.
+      GfxRenderer::FrameBufferLoan loan(renderer);
+      coverOk = lastTxt.generateCoverBmp();
+    }
+    if (!coverOk) {
       LOG_ERR("SLP", "No cover image found for TXT file");
       return (this->*renderNoCoverSleepScreen)();
     }
@@ -295,14 +299,20 @@ void SleepActivity::renderCoverSleepScreen() const {
     coverBmpPath = lastTxt.getCoverBmpPath();
   } else if (FsHelpers::hasEpubExtension(APP_STATE.openEpubPath)) {
     // Handle EPUB file
-    Epub lastEpub(APP_STATE.openEpubPath, "/.crosspoint");
+    Epub lastEpub(APP_STATE.openEpubPath, DataDir::path());
     // Skip loading css since we only need metadata here
     if (!lastEpub.load(true, true)) {
       LOG_ERR("SLP", "Failed to load last epub");
       return (this->*renderNoCoverSleepScreen)();
     }
 
-    if (!lastEpub.generateCoverBmp(cropped)) {
+    bool coverOk;
+    {
+      // Lend the framebuffer as decode scratch (see TXT branch above).
+      GfxRenderer::FrameBufferLoan loan(renderer);
+      coverOk = lastEpub.generateCoverBmp(cropped);
+    }
+    if (!coverOk) {
       LOG_ERR("SLP", "Failed to generate cover bmp");
       return (this->*renderNoCoverSleepScreen)();
     }

@@ -10,6 +10,13 @@ HalDisplay::HalDisplay() : einkDisplay(EPD_SCLK, EPD_MOSI, EPD_CS, EPD_DC, EPD_R
 
 HalDisplay::~HalDisplay() {}
 
+bool HalDisplay::reserveFrameBufferEarly() {
+  // reallocBuffers() is alloc-guarded in the SDK (`if (!frameBuffer0)`) and
+  // allocates the compile-time MAX_BUFFER_SIZE, so calling it before the
+  // device profile is applied is safe — the size does not depend on it.
+  return einkDisplay.reallocBuffers();
+}
+
 void HalDisplay::begin(bool seamless) {
   // Set X3-specific panel mode before initializing.
   if (gpio.deviceIsX3()) {
@@ -51,13 +58,29 @@ EInkDisplay::RefreshMode convertRefreshMode(HalDisplay::RefreshMode mode) {
       return EInkDisplay::FULL_REFRESH;
     case HalDisplay::HALF_REFRESH:
       return EInkDisplay::HALF_REFRESH;
+    // v55:送給驅動的仍是 Half,差別在呼叫端不 requestResync ——沒有那個旗標,驅動才會真的
+    // 走 _half bank(全像素驅動)而不是被升級成全同步鏈。詳見 HalDisplay.h 的說明。
+    case HalDisplay::HALF_REFRESH_SCRUB:
+      return EInkDisplay::HALF_REFRESH;
     case HalDisplay::FAST_REFRESH:
     default:
       return EInkDisplay::FAST_REFRESH;
   }
 }
 
+void HalDisplay::skipInitialResyncAndScrubNext() {
+  if (!gpio.deviceIsX3()) return;  // X4 沒有這條全同步階梯,也沒有 scrub 的必要
+  einkDisplay.skipInitialResync();
+  scrubNextFastPaint_ = true;
+}
+
 void HalDisplay::displayBuffer(HalDisplay::RefreshMode mode, bool turnOffScreen) {
+  // v56:開機動畫之後的第一屏——把 FAST 升級成 scrub(全像素驅動,不留 logo 殘影),
+  // 取代原本那次約 3 秒的強制全同步。旗標無論如何都要消耗掉,避免它飄到後面某一頁。
+  if (scrubNextFastPaint_) {
+    scrubNextFastPaint_ = false;
+    if (mode == RefreshMode::FAST_REFRESH) mode = RefreshMode::HALF_REFRESH_SCRUB;
+  }
   if (gpio.deviceIsX3() && mode == RefreshMode::HALF_REFRESH) {
     einkDisplay.requestResync(1);
   }
@@ -76,6 +99,10 @@ void HalDisplay::refreshDisplay(HalDisplay::RefreshMode mode, bool turnOffScreen
 void HalDisplay::deepSleep() { einkDisplay.deepSleep(); }
 
 uint8_t* HalDisplay::getFrameBuffer() const { return einkDisplay.getFrameBuffer(); }
+
+uint8_t* HalDisplay::lendFrameBufferStorage(uint32_t* sizeOut) { return einkDisplay.lendBuildStorage(sizeOut); }
+
+void HalDisplay::returnFrameBufferStorage() { einkDisplay.returnBuildStorage(); }
 
 void HalDisplay::copyGrayscaleBuffers(const uint8_t* lsbBuffer, const uint8_t* msbBuffer) {
   einkDisplay.copyGrayscaleBuffers(lsbBuffer, msbBuffer);

@@ -16,6 +16,9 @@
 // and the JPEG/PNG callbacks pre-clamp destination ranges to screen bounds.
 struct DirectPixelWriter {
   uint8_t* fb;
+  // MSB plane for GRAYSCALE_BOTH (one traversal feeding both planes); nullptr
+  // in every other mode, where `fb` alone is the target.
+  uint8_t* fbMsb;
   GfxRenderer::RenderMode mode;
   uint16_t displayWidthBytes;  // Runtime framebuffer stride (X4: 100, X3: 99)
   // Active write target: for tiled grayscale, fb is the band scratch, originY is
@@ -37,6 +40,7 @@ struct DirectPixelWriter {
 
   void init(GfxRenderer& renderer) {
     fb = renderer.getWriteTarget();
+    fbMsb = renderer.getWriteTargetMsb();
     originY = renderer.getWriteOriginY();
     clipRows = renderer.getWriteRows();
     mode = renderer.getRenderMode();
@@ -148,6 +152,8 @@ struct DirectPixelWriter {
     // Determine whether to draw based on render mode
     bool draw;
     bool state;
+    bool setLsb = false;
+    bool setMsb = false;
     switch (mode) {
       case GfxRenderer::BW:
         draw = (pixelValue < 3);
@@ -159,6 +165,15 @@ struct DirectPixelWriter {
         break;
       case GfxRenderer::GRAYSCALE_LSB:
         draw = (pixelValue == 1);
+        state = false;
+        break;
+      case GfxRenderer::GRAYSCALE_BOTH:
+        // Same predicates as the two single-plane cases above, evaluated once.
+        // Without fbMsb there is nowhere to put the MSB half, so fall back to
+        // LSB-only rather than silently dropping the pixel.
+        setLsb = (pixelValue == 1);
+        setMsb = (fbMsb != nullptr) && (pixelValue == 1 || pixelValue == 2);
+        draw = setLsb || setMsb;
         state = false;
         break;
       default:
@@ -177,6 +192,12 @@ struct DirectPixelWriter {
 
     const uint16_t byteIndex = static_cast<uint16_t>(sy * displayWidthBytes + (phyX >> 3));
     const uint8_t bitMask = 1 << (7 - (phyX & 7));
+
+    if (mode == GfxRenderer::GRAYSCALE_BOTH) {
+      if (setLsb) fb[byteIndex] |= bitMask;
+      if (setMsb) fbMsb[byteIndex] |= bitMask;
+      return;
+    }
 
     if (state) {
       fb[byteIndex] &= ~bitMask;  // Clear bit (draw black)

@@ -10,7 +10,7 @@
 #include "fontIds.h"
 
 int XtcReaderChapterSelectionActivity::getPageItems() const {
-  constexpr int lineHeight = 30;
+  constexpr int lineHeight = 38;  // 14px 章節名放大:列距 30→38(與下方渲染一致)
 
   const int screenHeight = renderer.getScreenHeight();
   const auto orientation = renderer.getOrientation();
@@ -80,12 +80,12 @@ void XtcReaderChapterSelectionActivity::loop() {
   });
 
   buttonNavigator.onNextContinuous([this, totalItems, pageItems] {
-    selectorIndex = ButtonNavigator::nextPageIndex(selectorIndex, totalItems, pageItems);
+    selectorIndex = ButtonNavigator::nextPageIndexClamped(selectorIndex, totalItems, pageItems);
     requestUpdate();
   });
 
   buttonNavigator.onPreviousContinuous([this, totalItems, pageItems] {
-    selectorIndex = ButtonNavigator::previousPageIndex(selectorIndex, totalItems, pageItems);
+    selectorIndex = ButtonNavigator::previousPageIndexClamped(selectorIndex, totalItems, pageItems);
     requestUpdate();
   });
 }
@@ -123,11 +123,12 @@ void XtcReaderChapterSelectionActivity::render(RenderLock&&) {
 
   const auto pageStartIndex = selectorIndex / pageItems * pageItems;
   // Highlight only the content area, not the hint gutters.
-  renderer.fillRect(contentX, 60 + contentY + (selectorIndex % pageItems) * 30 - 2, contentWidth - 1, 30);
+  renderer.fillRect(contentX, 60 + contentY + (selectorIndex % pageItems) * 38 - 2, contentWidth - 1, 38);
   for (int i = pageStartIndex; i < static_cast<int>(chapters.size()) && i < pageStartIndex + pageItems; i++) {
     const auto& chapter = chapters[i];
     const char* title = chapter.name.empty() ? tr(STR_UNNAMED) : chapter.name.c_str();
-    renderer.drawText(UI_10_FONT_ID, contentX + 20, 60 + contentY + (i % pageItems) * 30, title, i != selectorIndex);
+    // 章節名主文字放大到 14px（UI_12 現承載 14px）
+    renderer.drawText(UI_12_FONT_ID, contentX + 20, 60 + contentY + (i % pageItems) * 38, title, i != selectorIndex);
   }
 
   // Skip button hints in landscape CW mode (they overlap content)

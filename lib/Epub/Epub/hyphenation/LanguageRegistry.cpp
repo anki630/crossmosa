@@ -1,57 +1,15 @@
 #include "LanguageRegistry.h"
 
-#include <algorithm>
-#include <array>
-
 #include "HyphenationCommon.h"
-#include "generated/hyph-de.trie.h"
-#include "generated/hyph-en.trie.h"
-#include "generated/hyph-es.trie.h"
-#include "generated/hyph-fr.trie.h"
-#include "generated/hyph-it.trie.h"
-#include "generated/hyph-pl.trie.h"
-#include "generated/hyph-ru.trie.h"
-#include "generated/hyph-sv.trie.h"
-#include "generated/hyph-uk.trie.h"
 
-namespace {
-
-// English hyphenation patterns (3/3 minimum prefix/suffix length)
-LanguageHyphenator englishHyphenator(en_patterns, isLatinLetter, toLowerLatin, 3, 3);
-LanguageHyphenator frenchHyphenator(fr_patterns, isLatinLetter, toLowerLatin);
-LanguageHyphenator germanHyphenator(de_patterns, isLatinLetter, toLowerLatin);
-LanguageHyphenator russianHyphenator(ru_patterns, isCyrillicLetter, toLowerCyrillic);
-LanguageHyphenator spanishHyphenator(es_patterns, isLatinLetter, toLowerLatin);
-LanguageHyphenator italianHyphenator(it_patterns, isLatinLetter, toLowerLatin);
-LanguageHyphenator swedishHyphenator(sv_patterns, isLatinLetter, toLowerLatin);
-LanguageHyphenator ukrainianHyphenator(uk_patterns, isCyrillicLetter, toLowerCyrillic);
-LanguageHyphenator polishHyphenator(pl_patterns, isLatinLetter, toLowerLatin);
-
-using EntryArray = std::array<LanguageEntry, 9>;
-
-const EntryArray& entries() {
-  static const EntryArray kEntries = {{{"english", "en", &englishHyphenator},
-                                       {"french", "fr", &frenchHyphenator},
-                                       {"german", "de", &germanHyphenator},
-                                       {"russian", "ru", &russianHyphenator},
-                                       {"spanish", "es", &spanishHyphenator},
-                                       {"italian", "it", &italianHyphenator},
-                                       {"polish", "pl", &polishHyphenator},
-                                       {"swedish", "sv", &swedishHyphenator},
-                                       {"ukrainian", "uk", &ukrainianHyphenator}}};
-  return kEntries;
-}
-
-}  // namespace
+// 繁中自訂版：斷字表已全部移除。v11 先砍 9 種非英文語言（~323KB），v27 連英文 trie（~27KB）
+// 也移除——使用者只讀中文（不斷字），英文內文退回不斷字，斷字設定項已一併自 SettingsList 拿掉。
+// 要還原：加回 generated/hyph-en.trie.h 的 include、englishHyphenator 物件與 entries 表，
+// 並把 SettingsList.h 的 STR_HYPHENATION Toggle 加回。
 
 const LanguageHyphenator* getLanguageHyphenatorForPrimaryTag(const std::string& primaryTag) {
-  const auto& allEntries = entries();
-  const auto it = std::find_if(allEntries.begin(), allEntries.end(),
-                               [&primaryTag](const LanguageEntry& entry) { return primaryTag == entry.primaryTag; });
-  return (it != allEntries.end()) ? it->hyphenator : nullptr;
+  (void)primaryTag;
+  return nullptr;
 }
 
-LanguageEntryView getLanguageEntries() {
-  const auto& allEntries = entries();
-  return LanguageEntryView{allEntries.data(), allEntries.size()};
-}
+LanguageEntryView getLanguageEntries() { return LanguageEntryView{nullptr, 0}; }

@@ -26,6 +26,8 @@ class UITheme {
   void setTheme(CrossPointSettings::UI_THEME type);
   static int getNumberOfItemsPerPage(const GfxRenderer& renderer, bool hasHeader, bool hasTabBar, bool hasButtonHints,
                                      bool hasSubtitle, int extraReservedHeight = 0);
+  // 多頁清單的頁碼指示「3/12」;單頁回空字串(呼叫端傳 nullptr 副標 = 畫面零變化)
+  static std::string pageIndicatorText(int selectedIndex, int itemCount, int pageItems);
   static std::string getCoverThumbPath(std::string coverBmpPath, int coverHeight);
   static UIIcon getFileIcon(const std::string& filename);
   static int getStatusBarHeight();

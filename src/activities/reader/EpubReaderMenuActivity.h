@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "activities/Activity.h"
+#include "components/OptionPopup.h"
 #include "util/ButtonNavigator.h"
 
 class EpubReaderMenuActivity final : public Activity {
@@ -19,10 +20,12 @@ class EpubReaderMenuActivity final : public Activity {
     ROTATE_SCREEN,
     BOOKMARKS,
     TOGGLE_BOOKMARK,
+    FONT_SIZE,
+    LINE_SPACING,
+    BOLD_TEXT,
     SCREENSHOT,
     DISPLAY_QR,
     GO_HOME,
-    SYNC,
     DELETE_CACHE
   };
 
@@ -49,11 +52,19 @@ class EpubReaderMenuActivity final : public Activity {
   int selectedIndex = 0;
 
   ButtonNavigator buttonNavigator;
+  OptionPopup optionPopup;
   std::string title = "Reader Menu";
   uint8_t pendingOrientation = 0;
   uint8_t selectedPageTurnOption = 0;
-  const std::vector<StrId> orientationLabels = {StrId::STR_PORTRAIT, StrId::STR_LANDSCAPE_CW, StrId::STR_INVERTED,
-                                                StrId::STR_LANDSCAPE_CCW};
+  uint8_t pendingFontSize = 0;
+  uint8_t pendingLineSpacing = 0;
+  uint8_t pendingBoldBody = 0;
+  const std::vector<StrId> orientationLabels = {StrId::STR_PORTRAIT, StrId::STR_LANDSCAPE_CW,
+                                                StrId::STR_ORIENTATION_INVERTED, StrId::STR_LANDSCAPE_CCW};
+  const std::vector<StrId> fontSizeLabels = {StrId::STR_SMALL, StrId::STR_MEDIUM, StrId::STR_LARGE,
+                                             StrId::STR_X_LARGE};
+  const std::vector<StrId> lineSpacingLabels = {StrId::STR_TIGHT, StrId::STR_NORMAL, StrId::STR_WIDE};
+  const std::vector<StrId> boldTextLabels = {StrId::STR_STATE_OFF, StrId::STR_STATE_ON};
   const std::vector<const char*> pageTurnLabels = {I18N.get(StrId::STR_STATE_OFF), "1", "3", "6", "12"};
   int currentPage = 0;
   int totalPages = 0;

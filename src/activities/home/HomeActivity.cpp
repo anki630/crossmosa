@@ -1,4 +1,5 @@
 #include "HomeActivity.h"
+#include <DataDir.h>
 
 #include <Bitmap.h>
 #include <Epub.h>
@@ -7,7 +8,6 @@
 #include <HalStorage.h>
 #include <I18n.h>
 #include <Utf8.h>
-#include <Xtc.h>
 
 #include <cstring>
 #include <vector>
@@ -54,7 +54,6 @@ void HomeActivity::loadRecentBooks(int maxBooks) {
 void HomeActivity::loadRecentCovers(int coverHeight) {
   recentsLoading = true;
   bool showingLoading = false;
-  Rect popupRect;
 
   int progress = 0;
   for (RecentBook& book : recentBooks) {
@@ -63,41 +62,32 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
       if (!Storage.exists(coverPath.c_str())) {
         // If epub, try to load the metadata for title/author and cover
         if (FsHelpers::hasEpubExtension(book.path)) {
-          Epub epub(book.path, "/.crosspoint");
+          Epub epub(book.path, DataDir::path());
           // Skip loading css since we only need metadata here
           epub.load(false, true);
 
           // Try to generate thumbnail image for Continue Reading card
           if (!showingLoading) {
             showingLoading = true;
-            popupRect = GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
+            // Text-only popup: the per-book bar only ticked between books (the single-core
+            // thumbnail generation blocks in between) and each tick cost an e-ink partial
+            // refresh flash; the text alone is calmer and just as informative.
+            GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
           }
-          GUI.fillPopupProgress(renderer, popupRect, 10 + progress * (90 / recentBooks.size()));
           bool success = epub.generateThumbBmp(coverHeight);
           if (!success) {
             RECENT_BOOKS.updateBook(book.path, book.title, book.author, "");
             book.coverBmpPath = "";
           }
+          // v57:連【快照】一起丟,不能只清 coverRendered。
+          // 否則下一次 render 會先 restoreCoverBuffer() 把舊快照寫回封面帶,再把新封面疊上去
+          // ——而 1-bit 縮圖只畫黑像素、白像素留原背景,舊快照的黑像素於是全數存活:
+          // 舊 coverWidth 的圓角框邊線會殘留在新封面上,並在 storeCoverBuffer() 被重新快照,
+          // 停留主畫面期間每次重繪都在。coverWidth 一開始是 homeCoverHeight*0.6 的估計值
+          // (226*0.6=135),而實際縮圖常是 150 → 第一本書產縮圖時就已經錯位。
+          freeCoverBuffer();
           coverRendered = false;
           requestUpdate();
-        } else if (FsHelpers::hasXtcExtension(book.path)) {
-          // Handle XTC file
-          Xtc xtc(book.path, "/.crosspoint");
-          if (xtc.load()) {
-            // Try to generate thumbnail image for Continue Reading card
-            if (!showingLoading) {
-              showingLoading = true;
-              popupRect = GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
-            }
-            GUI.fillPopupProgress(renderer, popupRect, 10 + progress * (90 / recentBooks.size()));
-            bool success = xtc.generateThumbBmp(coverHeight);
-            if (!success) {
-              RECENT_BOOKS.updateBook(book.path, book.title, book.author, "");
-              book.coverBmpPath = "";
-            }
-            coverRendered = false;
-            requestUpdate();
-          }
         }
       }
     }
@@ -179,6 +169,17 @@ void HomeActivity::loop() {
     requestUpdate();
   });
 
+  if (mappedInput.wasPressed(MappedInputManager::Button::Back)) backPressSeen = true;
+
+  // Back is otherwise unused on the home menu: open the most recently read
+  // book directly (recentBooks is most-recent-first and already pruned of
+  // files missing from the SD card). backPressSeen guards against the stale
+  // release of the Back press that closed the previous activity.
+  if (mappedInput.wasReleased(MappedInputManager::Button::Back) && backPressSeen && !recentBooks.empty()) {
+    onSelectBook(recentBooks[0].path);
+    return;
+  }
+
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
     if (selectorIndex < recentBooks.size()) {
       onSelectBook(recentBooks[selectorIndex].path);
@@ -230,10 +231,11 @@ void HomeActivity::render(RenderLock&&) {
                           recentBooks, selectorIndex, coverRendered, coverBufferStored, bufferRestored,
                           std::bind(&HomeActivity::storeCoverBuffer, this));
 
-  // Build menu items dynamically
-  std::vector<const char*> menuItems = {tr(STR_BROWSE_FILES), tr(STR_MENU_RECENT_BOOKS), tr(STR_FILE_TRANSFER),
+  // Build menu items dynamically(v43:最近閱讀提到瀏覽檔案前,符合使用習慣;
+  // 順序改動必須與 HomeActivity.h 的 menuItemToIndex/indexToMenuItem 三處同步)
+  std::vector<const char*> menuItems = {tr(STR_MENU_RECENT_BOOKS), tr(STR_BROWSE_FILES), tr(STR_FILE_TRANSFER),
                                         tr(STR_SETTINGS_TITLE)};
-  std::vector<UIIcon> menuIcons = {Folder, Recent, Transfer, Settings};
+  std::vector<UIIcon> menuIcons = {Recent, Folder, Transfer, Settings};
 
   if (hasOpdsServers) {
     menuItems.insert(menuItems.begin() + 2, tr(STR_OPDS_BROWSER));
@@ -256,15 +258,20 @@ void HomeActivity::render(RenderLock&&) {
       [&menuItems](int index) { return std::string(menuItems[index]); },
       [&menuIcons](int index) { return menuIcons[index]; });
 
-  const auto labels = mappedInput.mapLabels("", tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
+  const auto labels = mappedInput.mapLabels(recentBooks.empty() ? "" : tr(STR_RESUME), tr(STR_SELECT), tr(STR_DIR_UP),
+                                            tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
   renderer.displayBuffer();
 
-  if (!firstRenderDone) {
-    firstRenderDone = true;
-    requestUpdate();
-  } else if (!recentsLoaded && !recentsLoading) {
+  // v57:原本第一次繪製只是設 firstRenderDone 然後 requestUpdate(),把封面載入延到【第二次
+  // 完整繪製】才做——但上面 displayBuffer() 已經同步把畫面推上面板了,所以那第二次是
+  // 一整次白刷(實測面板 441ms + 軟體重繪 40-80ms),而且穩態下兩次的畫面內容完全相同
+  // (縮圖早就產好時,loadRecentCovers 只做幾次 Storage.exists 就結束)。
+  // goHome() 一律 replaceActivity 建新的 HomeActivity,所以這個雙刷是每次回主畫面都觸發。
+  // 直接在第一次繪製後就載入封面:使用者看到的順序不變(先看到選單,再跳「載入中」),
+  // 但少掉一次全屏刷新。真的需要重繪時 loadRecentCovers 自己會 requestUpdate()(見 :83)。
+  if (!recentsLoaded && !recentsLoading) {
     recentsLoading = true;
     loadRecentCovers(metrics.homeCoverHeight);
   }

@@ -2,6 +2,7 @@
 
 #include <BidiUtils.h>
 #include <GfxRenderer.h>
+#include <Logging.h>
 #include <Utf8.h>
 
 #include <algorithm>
@@ -250,9 +251,26 @@ bool isWordCharacter(uint32_t cp) {
 
 }  // namespace
 
-void ParsedText::addWord(std::string word, const EpdFontFamily::Style fontStyle, const bool underline,
+// Small safety margin above the ACTUAL allocation size at each guarded grow/layout, so we refuse
+// only when the real contiguous allocation genuinely would not fit (plus slack for the sibling
+// vectors / per-word string buffers). Kept small so a merely fragmented-but-healthy heap during
+// reading is not needlessly failed to an index-failed popup (the first v6 cut was too aggressive).
+static constexpr size_t LOW_HEAP_HEADROOM = 2 * 1024;
+
+namespace {
+bool g_boldBodyText = false;
+}  // namespace
+
+void ParsedText::setBoldBodyText(const bool enabled) { g_boldBodyText = enabled; }
+
+void ParsedText::addWord(std::string word, const EpdFontFamily::Style fontStyle_, const bool underline,
                          const bool attachToPrevious) {
   if (word.empty()) return;
+  // Bold reading mode: promote every body word to the bold face (REGULAR->BOLD,
+  // ITALIC->BOLD_ITALIC). Already-bold headings are unchanged; fonts without a bold
+  // face fall back via SdCardFont::resolveStyle / EpdFontFamily::getFont.
+  const EpdFontFamily::Style fontStyle =
+      g_boldBodyText ? static_cast<EpdFontFamily::Style>(fontStyle_ | EpdFontFamily::BOLD) : fontStyle_;
 
   // The device fonts carry no combining-mark positioning, so EPUB text stored in NFD
   // (a base letter followed by separate combining accents -- common for Vietnamese,
@@ -269,8 +287,52 @@ void ParsedText::addWord(std::string word, const EpdFontFamily::Style fontStyle,
   const bool wordStartsRtl = !hasRtlWord && mayContainRtlBytes(word.c_str()) &&
                              BidiUtils::startsWithRtl(word.c_str(), RTL_PER_WORD_PROBE_DEPTH);
 
+  const auto ensureTokenCapacity = [&](const size_t additionalTokens) {
+    if (oom_) return;
+    if (additionalTokens == 0) return;
+    const size_t requiredSize = words.size() + additionalTokens;
+    if (words.capacity() >= requiredSize) return;
+
+    size_t newCapacity = words.capacity();
+    if (newCapacity < 16) {
+      newCapacity = 16;
+    }
+    while (newCapacity < requiredSize) {
+      newCapacity *= 2;
+    }
+
+    // std::vector<std::string> growth uses throwing operator new; under -fno-exceptions an OOM
+    // aborts the whole device. Guard the reserve (mirrors Dictionary.cpp / KOReaderSyncClient).
+    // Try the amortized doubled capacity first; if the largest free block can't hold it, fall back
+    // to the minimal exact size before degrading, so a merely-fragmented-but-healthy heap still
+    // renders. words[] dominates; the parallel style/bool vectors fit within the headroom.
+    if (ESP.getMaxAllocHeap() < newCapacity * sizeof(std::string) + LOW_HEAP_HEADROOM) {
+      newCapacity = requiredSize;
+      if (ESP.getMaxAllocHeap() < newCapacity * sizeof(std::string) + LOW_HEAP_HEADROOM) {
+        LOG_ERR("PTX", "token reserve refused: %u words need %u bytes, maxAlloc=%u",
+                static_cast<unsigned>(requiredSize), static_cast<unsigned>(newCapacity * sizeof(std::string)),
+                static_cast<unsigned>(ESP.getMaxAllocHeap()));
+        oom_ = true;
+        return;
+      }
+    }
+
+    words.reserve(newCapacity);
+    wordStyles.reserve(newCapacity);
+    wordContinues.reserve(newCapacity);
+    wordNoSpaceBefore.reserve(newCapacity);
+    wordIsFocusSuffix.reserve(newCapacity);
+  };
+
+  // Every append funnels through here so one heap guard covers all paths (CJK
+  // per-char split, single token, focus split). On refusal the token is dropped
+  // and oom_ latches; the parser sees hasOom() and abandons the build. Because
+  // ensureTokenCapacity reserves all five vectors together, a token that passes
+  // the guard cannot reallocate mid-push and desync them.
   const auto pushToken = [&](std::string token, const bool continues, const bool noSpaceBefore,
                              const bool isFocusSuffix) {
+    ensureTokenCapacity(1);
+    if (oom_) return;
     words.push_back(std::move(token));
     wordStyles.push_back(baseStyle);
     wordContinues.push_back(continues);
@@ -287,6 +349,9 @@ void ParsedText::addWord(std::string word, const EpdFontFamily::Style fontStyle,
   }
 
   if (auto breakOffsets = cjkCharacterBreakByteOffsets(word); !breakOffsets.empty()) {
+    // CJK-heavy paragraphs can push hundreds of tiny tokens quickly when CSS toggles
+    // inline styles. Reserve once up front to avoid repeated vector growth reallocations.
+    ensureTokenCapacity(breakOffsets.size() + 1);
     bool firstToken = true;
     size_t tokenStart = 0;
     for (const size_t breakOffset : breakOffsets) {
@@ -325,29 +390,11 @@ void ParsedText::addWord(std::string word, const EpdFontFamily::Style fontStyle,
 
   // --- FOCUS READING LOGIC BELOW ---
 
-  // Pre-reserve capacity to prevent mid-word heap reallocations.
-  size_t maxPossibleNewTokens = word.length();
-  size_t requiredSize = words.size() + maxPossibleNewTokens;
-
-  if (words.capacity() < requiredSize) {
-    // Emulate standard geometric growth (doubling) to ensure we don't reallocate on every word.
-    size_t newCapacity = words.capacity() * 2;
-
-    // Ensure the doubled capacity is actually enough for this specific word
-    if (newCapacity < requiredSize) {
-      newCapacity = requiredSize;
-    }
-    // Set a sensible minimum starting size so the first few words don't trigger tiny reallocations
-    if (newCapacity < 16) {
-      newCapacity = 16;
-    }
-
-    words.reserve(newCapacity);
-    wordStyles.reserve(newCapacity);
-    wordContinues.reserve(newCapacity);
-    wordNoSpaceBefore.reserve(newCapacity);
-    wordIsFocusSuffix.reserve(newCapacity);
-  }
+  // Worst case: a segment boundary on each byte (highly punctuated UTF-8 text). Reserving up front
+  // (token count <= word.length()) means the direct emplace_backs below never reallocate. If the
+  // reserve was refused under low heap, oom_ is set: drop the word instead of aborting on a throw.
+  ensureTokenCapacity(word.length());
+  if (oom_) return;
 
   // Lambda helper to process and push individual sub-segments of the string
   // Use std::string_view to avoid heap allocations when slicing
@@ -504,6 +551,21 @@ void ParsedText::layoutAndExtractLines(const GfxRenderer& renderer, const int fo
     renderer.ensureSdCardFontReady(fontId, words, hyphenationEnabled, styleMask);
   }
 
+  // Layout allocates O(N) DP + width tables (computeLineBreaks/calculateWordWidths);
+  // those throwing allocations abort under -fno-exceptions. Refuse and degrade if the
+  // largest free block can't hold them, latching oom_ for the parser to abandon on.
+  // The layout DP/width tables (dp + ans + wordWidths + lineBreakIndices) total ~14 bytes/word,
+  // allocated while the words vectors stay resident. Guard against that real need (not the rare
+  // hyphenation words-realloc worst case, which is bounded by the small soft-flush block size) so
+  // a normal paragraph is not refused on a modestly-fragmented but adequate heap.
+  if (oom_) return;
+  if (!words.empty() && ESP.getMaxAllocHeap() < words.size() * 14 + LOW_HEAP_HEADROOM) {
+    LOG_ERR("PTX", "layout refused: %u words, maxAlloc=%u bytes", static_cast<unsigned>(words.size()),
+            static_cast<unsigned>(ESP.getMaxAllocHeap()));
+    oom_ = true;
+    return;
+  }
+
   const int pageWidth = viewportWidth;
   auto wordWidths = calculateWordWidths(renderer, fontId);
 
@@ -515,6 +577,9 @@ void ParsedText::layoutAndExtractLines(const GfxRenderer& renderer, const int fo
   } else {
     lineBreakIndices = computeLineBreaks(renderer, fontId, pageWidth, wordWidths, wordContinues, wordNoSpaceBefore);
   }
+  // Either branch above may have refused (set oom_) partway through, returning {} or a partial
+  // result; bail out before the size()-1 below underflows on an empty vector.
+  if (oom_) return;
   const size_t lineCount = includeLastLine ? lineBreakIndices.size() : lineBreakIndices.size() - 1;
 
   for (size_t i = 0; i < lineCount; ++i) {
@@ -565,6 +630,21 @@ std::vector<size_t> ParsedText::computeLineBreaks(const GfxRenderer& renderer, c
   }
 
   const size_t totalWordCount = words.size();
+
+  // The fallback-hyphenation loop above can grow `words` past what layoutAndExtractLines's
+  // upfront guard checked (that check runs before this loop, against the pre-split word
+  // count -- see the comment there). Each individual split is itself guarded inside
+  // hyphenateWordAtIndex, but nothing re-validates the *cumulative* result before the O(N)
+  // tables below are sized to the post-split totalWordCount: dp (int) + ans (size_t) +
+  // lineBreakIndices, reserved below to its worst case (one entry per word, size_t) so its
+  // later push_back loop never has to grow on its own. Re-check here before any of the three
+  // bare (throwing) vector allocations run.
+  if (ESP.getMaxAllocHeap() < totalWordCount * (sizeof(int) + 2 * sizeof(size_t)) + LOW_HEAP_HEADROOM) {
+    LOG_ERR("PTX", "computeLineBreaks refused: %u words post-hyphenation, maxAlloc=%u bytes",
+            static_cast<unsigned>(totalWordCount), static_cast<unsigned>(ESP.getMaxAllocHeap()));
+    oom_ = true;
+    return {};
+  }
 
   // DP table to store the minimum badness (cost) of lines starting at index i
   std::vector<int> dp(totalWordCount);
@@ -639,8 +719,11 @@ std::vector<size_t> ParsedText::computeLineBreaks(const GfxRenderer& renderer, c
     }
   }
 
-  // Stores the index of the word that starts the next line (last_word_index + 1)
+  // Stores the index of the word that starts the next line (last_word_index + 1). Reserved to
+  // the worst case (one line per word) up front -- guaranteed to fit by the check above -- so
+  // this loop's push_back can never itself trigger an unguarded reallocation.
   std::vector<size_t> lineBreakIndices;
+  lineBreakIndices.reserve(totalWordCount);
   size_t currentWordIndex = 0;
 
   while (currentWordIndex < totalWordCount) {
@@ -669,6 +752,27 @@ std::vector<size_t> ParsedText::computeHyphenatedLineBreaks(const GfxRenderer& r
   std::vector<size_t> lineBreakIndices;
   size_t currentIndex = 0;
   bool isFirstLine = true;
+
+  // lineBreakIndices grows once per output line. Unlike computeLineBreaks, hyphenation here is
+  // interleaved with line-building rather than a single upfront pass, so the final word/line
+  // count isn't known until this loop finishes and a single upfront reserve can't be sized
+  // correctly. Guard each grow individually instead, mirroring hyphenateWordAtIndex's own
+  // doubled-then-minimal reserve pattern, so this vector's push_back below can never itself
+  // hit an unguarded (throwing) reallocation.
+  const auto growLineBreakIndicesIfNeeded = [&]() {
+    if (lineBreakIndices.size() < lineBreakIndices.capacity()) return true;
+    const size_t doubled = lineBreakIndices.capacity() < 16 ? 16 : lineBreakIndices.capacity() * 2;
+    if (ESP.getMaxAllocHeap() >= doubled * sizeof(size_t) + LOW_HEAP_HEADROOM) {
+      lineBreakIndices.reserve(doubled);
+      return true;
+    }
+    const size_t minimal = lineBreakIndices.size() + 1;
+    if (ESP.getMaxAllocHeap() >= minimal * sizeof(size_t) + LOW_HEAP_HEADROOM) {
+      lineBreakIndices.reserve(minimal);
+      return true;
+    }
+    return false;
+  };
 
   while (currentIndex < wordWidths.size()) {
     const size_t lineStart = currentIndex;
@@ -726,6 +830,12 @@ std::vector<size_t> ParsedText::computeHyphenatedLineBreaks(const GfxRenderer& r
       --currentIndex;
     }
 
+    if (!growLineBreakIndicesIfNeeded()) {
+      LOG_ERR("PTX", "computeHyphenatedLineBreaks refused: %u lines so far, maxAlloc=%u bytes",
+              static_cast<unsigned>(lineBreakIndices.size()), static_cast<unsigned>(ESP.getMaxAllocHeap()));
+      oom_ = true;
+      break;
+    }
     lineBreakIndices.push_back(currentIndex);
     isFirstLine = false;
   }
@@ -752,6 +862,14 @@ bool ParsedText::hyphenateWordAtIndex(const size_t wordIndex, const int availabl
     return false;
   }
 
+  // libstdc++ basic_string's small-string-optimization buffer (_S_local_capacity).
+  // word.substr(0, offset) below allocates a temporary string once offset exceeds this;
+  // under -fno-exceptions a failed (throwing) allocation aborts the device. Guard it the
+  // same way the actual split further down guards its own remainder buffer: skip the
+  // candidate rather than risk an abort — the loop already treats "this candidate isn't
+  // usable" (too wide, no improvement) as a reason to try the next one.
+  constexpr size_t kStringSsoBytes = 15;
+
   size_t chosenOffset = 0;
   int chosenWidth = -1;
   bool chosenNeedsHyphen = true;
@@ -761,6 +879,9 @@ bool ParsedText::hyphenateWordAtIndex(const size_t wordIndex, const int availabl
     const size_t offset = info.byteOffset;
     if (offset == 0 || offset >= word.size()) {
       continue;
+    }
+    if (offset > kStringSsoBytes && ESP.getMaxAllocHeap() < offset + LOW_HEAP_HEADROOM) {
+      continue;  // Not enough heap to safely measure this candidate; try another.
     }
 
     const bool needsHyphen = info.requiresInsertedHyphen;
@@ -779,8 +900,83 @@ bool ParsedText::hyphenateWordAtIndex(const size_t wordIndex, const int availabl
     return false;
   }
 
+  // Splitting mutates eight things, every one of which can call the default (throwing)
+  // operator new: the remainder's own string content buffer, a second copy of that same
+  // buffer (words.insert() below copies rather than moves, since the local `remainder`
+  // is reused for measureWordWidth further down), and one grow-by-one on each of six
+  // parallel vectors (words, wordStyles, wordIsFocusSuffix, wordContinues,
+  // wordNoSpaceBefore, wordWidths). Under -fno-exceptions a failure in any of these
+  // aborts the whole device instead of returning null — exactly the "rare hyphenation
+  // words-realloc worst case" that layoutAndExtractLines's own guard (above) explicitly
+  // excludes from its estimate. Estimate the worst-case total up front and refuse the
+  // whole split atomically before any allocation happens: checking (and reserving) one
+  // vector at a time would let an earlier reserve() consume real heap before a later
+  // check refuses, stranding that capacity bump on a split that never happened.
+  const size_t remainderLen = word.size() - chosenOffset;
+  // Two content buffers of remainderLen: the substr() further down and the insert() copy
+  // after it. kStringSsoBytes is declared above, by the candidate-measurement loop.
+  const size_t stringContentBytes = remainderLen > kStringSsoBytes ? remainderLen * 2 : 0;
+
+  const auto doubledCap = [](const size_t capacity) { return capacity < 16 ? 16 : capacity * 2; };
+  // {doubled, minimal} byte cost to grow a vector of `size`/`capacity` by one element,
+  // or {0, 0} if its current capacity already covers it.
+  const auto cost = [&](const size_t size, const size_t capacity, const size_t elemBytes) {
+    struct Cost {
+      size_t doubled, minimal;
+    } c{0, 0};
+    if (size >= capacity) {
+      c.doubled = doubledCap(capacity) * elemBytes;
+      c.minimal = (size + 1) * elemBytes;
+    }
+    return c;
+  };
+  // vector<bool> is bit-packed (~1 bit/element), not 1 byte/element.
+  const auto boolCost = [&](const std::vector<bool>& vec) {
+    auto c = cost(vec.size(), vec.capacity(), 1);
+    c.doubled = (c.doubled + 7) / 8;
+    c.minimal = (c.minimal + 7) / 8;
+    return c;
+  };
+
+  const auto wordsC = cost(words.size(), words.capacity(), sizeof(std::string));
+  const auto stylesC = cost(wordStyles.size(), wordStyles.capacity(), sizeof(EpdFontFamily::Style));
+  const auto widthsC = cost(wordWidths.size(), wordWidths.capacity(), sizeof(uint16_t));
+  const auto focusC = boolCost(wordIsFocusSuffix);
+  const auto continuesC = boolCost(wordContinues);
+  const auto noSpaceC = boolCost(wordNoSpaceBefore);
+
+  const size_t doubledTotal = stringContentBytes + wordsC.doubled + stylesC.doubled + widthsC.doubled +
+                              focusC.doubled + continuesC.doubled + noSpaceC.doubled;
+  const size_t maxAlloc = ESP.getMaxAllocHeap();
+  bool useMinimal = false;
+  if (doubledTotal > 0 && maxAlloc < doubledTotal + LOW_HEAP_HEADROOM) {
+    // Try the amortized doubled capacity first; if the largest free block can't hold it,
+    // fall back to the minimal exact size before refusing (mirrors ensureTokenCapacity's
+    // two-tier attempt).
+    const size_t minimalTotal = stringContentBytes + wordsC.minimal + stylesC.minimal + widthsC.minimal +
+                                focusC.minimal + continuesC.minimal + noSpaceC.minimal;
+    if (maxAlloc < minimalTotal + LOW_HEAP_HEADROOM) {
+      LOG_ERR("PTX", "hyphenateWordAtIndex: split refused (%u bytes), maxAlloc=%u",
+              static_cast<unsigned>(minimalTotal), static_cast<unsigned>(maxAlloc));
+      return false;
+    }
+    useMinimal = true;
+  }
+
+  const auto reserveIfNeeded = [&](auto& vec) {
+    if (vec.size() < vec.capacity()) return;
+    vec.reserve(useMinimal ? vec.size() + 1 : doubledCap(vec.capacity()));
+  };
+  reserveIfNeeded(words);
+  reserveIfNeeded(wordStyles);
+  reserveIfNeeded(wordIsFocusSuffix);
+  reserveIfNeeded(wordContinues);
+  reserveIfNeeded(wordNoSpaceBefore);
+  reserveIfNeeded(wordWidths);
+
   // Split the word at the selected breakpoint and append a hyphen if required.
-  std::string remainder = word.substr(chosenOffset);
+  // Re-index rather than reuse `word`: the reservations above may have reallocated it.
+  std::string remainder = words[wordIndex].substr(chosenOffset);
   words[wordIndex].resize(chosenOffset);
   if (chosenNeedsHyphen) {
     words[wordIndex].push_back('-');
@@ -1133,8 +1329,14 @@ void ParsedText::extractLine(const size_t breakIndex, const int pageWidth, const
   }
 
   if (!lineHasFocusSplit) {
-    processLine(std::make_shared<TextBlock>(std::move(lineWords), std::move(lineXPos), std::move(lineWordStyles),
-                                            std::vector<uint8_t>{}, std::vector<uint16_t>{}, blockStyle));
+    // TextBlock flattens the vectors into its arena; they stay owned here and die at return.
+    auto block = std::make_shared<TextBlock>(lineWords, lineXPos, lineWordStyles, std::vector<uint8_t>{},
+                                             std::vector<uint16_t>{}, blockStyle);
+    if (!block->valid()) {
+      LOG_ERR("PTX", "Dropping line: TextBlock arena allocation failed");
+      return;
+    }
+    processLine(std::move(block));
     return;
   }
 
@@ -1179,6 +1381,10 @@ void ParsedText::extractLine(const size_t breakIndex, const int pageWidth, const
     }
   }
 
-  processLine(std::make_shared<TextBlock>(std::move(outWords), std::move(outXPos), std::move(outStyles),
-                                          std::move(outBoundaries), std::move(outSuffixX), blockStyle));
+  auto block = std::make_shared<TextBlock>(outWords, outXPos, outStyles, outBoundaries, outSuffixX, blockStyle);
+  if (!block->valid()) {
+    LOG_ERR("PTX", "Dropping line: TextBlock arena allocation failed");
+    return;
+  }
+  processLine(std::move(block));
 }

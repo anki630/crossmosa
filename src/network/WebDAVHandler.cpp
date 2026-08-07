@@ -6,9 +6,9 @@
 #include <esp_task_wdt.h>
 
 #include "util/BookCacheUtils.h"
+#include "util/ProtectedPath.h"
 
 namespace {
-constexpr const char* HIDDEN_ITEMS[] = {"System Volume Information", "XTCache"};
 
 // RFC 1123 date format helper: "Sun, 06 Nov 1994 08:49:37 GMT"
 // ESP32 doesn't have real-time clock set by default, so we use a fixed epoch date
@@ -228,15 +228,7 @@ void WebDAVHandler::handlePropfind(WebServer& s) {
       String fileName(name);
 
       // Skip hidden/protected items
-      bool shouldHide = fileName.startsWith(".");
-      if (!shouldHide) {
-        for (const auto* item : HIDDEN_ITEMS) {
-          if (fileName.equals(item)) {
-            shouldHide = true;
-            break;
-          }
-        }
-      }
+      bool shouldHide = ProtectedPath::isProtectedName(fileName.c_str());
 
       if (!shouldHide) {
         String childPath = path;
@@ -663,7 +655,7 @@ void WebDAVHandler::handleLock(WebServer& s) {
       "<D:locktype><D:write/></D:locktype>\n"
       "<D:lockscope><D:exclusive/></D:lockscope>\n"
       "<D:depth>infinity</D:depth>\n"
-      "<D:owner><D:href>crosspoint</D:href></D:owner>\n"
+      "<D:owner><D:href>crossmosa</D:href></D:owner>\n"
       "<D:timeout>Second-3600</D:timeout>\n"
       "<D:locktoken><D:href>urn:uuid:dummy-lock-token</D:href></D:locktoken>\n"
       "<D:lockroot><D:href>/</D:href></D:lockroot>\n"
@@ -759,29 +751,11 @@ void WebDAVHandler::urlEncodePath(const String& path, String& out) const {
 }
 
 bool WebDAVHandler::isProtectedPath(const String& path) const {
-  // Check every segment of the path, not just the last one.
-  // This prevents access to e.g. /.hidden/somefile or /System Volume Information/foo
-  int start = 0;
-  while (start < (int)path.length()) {
-    if (path.charAt(start) == '/') {
-      start++;
-      continue;
-    }
-    int end = path.indexOf('/', start);
-    if (end == -1) end = path.length();
-
-    String segment = path.substring(start, end);
-
-    if (segment.startsWith(".")) return true;
-
-    for (const auto* item : HIDDEN_ITEMS) {
-      if (segment.equals(item)) return true;
-    }
-
-    start = end + 1;
-  }
-
-  return false;
+  // Shared with the SMB2 server's create_cmd (see ProtectedPath.h) so both
+  // protocols enforce identical rules -- checks every segment of the path,
+  // not just the last one, so e.g. /.hidden/somefile and
+  // /System Volume Information/foo are both caught.
+  return ProtectedPath::isProtected(path.c_str());
 }
 
 int WebDAVHandler::getDepth(WebServer& s) const {

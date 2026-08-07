@@ -1,4 +1,8 @@
-# CrossPoint Reader: Claude Code skills
+# CrossMosa: Claude Code skills
+
+> Inherited from upstream CrossPoint (commit `d83605e`). Numbers that were
+> X4-specific upstream (48KB/800×480 framebuffer) have been corrected to this
+> project's X3 target (~52KB/792×528).
 
 Project skills for Claude Code. Claude auto-discovers them and loads one when the
 task matches its `description`; you do not invoke them by hand. They encode how

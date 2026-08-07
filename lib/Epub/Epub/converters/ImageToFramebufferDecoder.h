@@ -31,6 +31,11 @@ class ImageToFramebufferDecoder {
 
   virtual const char* getFormatName() const = 0;
 
+  // v54:此解碼器單次需要的【最大連續】記憶體(含餘裕)。ImageBlock 用它決定要不要先卸載
+  // SD 字型騰空間——卸載會連帶丟掉本頁已預載的 glyph 快取(ensureLoaded 不會重做 prewarm),
+  // 代價高,所以門檻必須貼合各解碼器的實際需求,不能共用一個保守值。
+  virtual size_t minContiguousHeapForDecode() const = 0;
+
  protected:
   // Size validation helpers
   static constexpr int MAX_SOURCE_PIXELS = 3145728;  // 2048 * 1536

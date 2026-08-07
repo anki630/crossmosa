@@ -44,6 +44,12 @@ class ButtonNavigator final {
   [[nodiscard]] static int nextPageIndex(int currentIndex, int totalItems, int itemsPerPage);
   [[nodiscard]] static int previousPageIndex(int currentIndex, int totalItems, int itemsPerPage);
 
+  // PageDown/PageUp variants that CLAMP to the last/first item instead of wrapping: paging past
+  // the last page stops at the bottom, paging before the first stays at the top. Use these where
+  // a long list should page to its end (e.g. an OPDS feed) rather than loop around.
+  [[nodiscard]] static int nextPageIndexClamped(int currentIndex, int totalItems, int itemsPerPage);
+  [[nodiscard]] static int previousPageIndexClamped(int currentIndex, int totalItems, int itemsPerPage);
+
   // Navigation uses the logical NavNext / NavPrevious buttons; MappedInputManager::mapButton resolves
   // them to physical buttons and applies any orientation-based direction swap, so this stays settings-free.
   [[nodiscard]] static Buttons getNextButtons() { return {MappedInputManager::Button::NavNext}; }

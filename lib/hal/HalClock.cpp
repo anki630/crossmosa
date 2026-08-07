@@ -149,6 +149,27 @@ bool HalClock::writeTimeToRTC(uint8_t hour, uint8_t minute, uint8_t second) {
   return true;
 }
 
+// v77: split out of syncFromNTP(), and deliberately NOT gated on _available.
+//
+// Setting the SYSTEM clock needs no DS3231 at all -- configTzTime() starts the
+// SNTP client and the epoch arrives asynchronously on the tcpip task. The old
+// code reached this only inside a function that early-returns when the RTC chip
+// is missing, and only behind `!clockHasBeenSynced`, i.e. ONCE IN A DEVICE'S
+// LIFE. That is why five measured sessions all had time() returning uptime:
+// the date is not persisted anywhere (writeTimeToRTC stores hours/minutes/
+// seconds only), so it dies at every reboot and was never fetched again.
+//
+// Non-blocking: this returns as soon as the client is started. Callers that
+// need the value wait separately -- see finishNtpToRtc().
+void HalClock::startNtp() {
+  if (WiFi.status() != WL_CONNECTED) {
+    LOG_ERR("CLK", "WiFi not connected, cannot start NTP");
+    return;
+  }
+  LOG_INF("CLK", "Starting NTP...");
+  configTzTime("UTC0", "pool.ntp.org", "time.nist.gov");
+}
+
 bool HalClock::syncFromNTP() {
   if (!_available) return false;
 
@@ -157,8 +178,7 @@ bool HalClock::syncFromNTP() {
     return false;
   }
 
-  LOG_INF("CLK", "Starting NTP sync...");
-  configTzTime("UTC0", "pool.ntp.org", "time.nist.gov");
+  startNtp();
 
   // Wait for SNTP sync to complete (up to 5 seconds)
   constexpr int maxAttempts = 50;

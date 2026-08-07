@@ -1,11 +1,13 @@
 #include "CrossPointSettings.h"
 
 #include <HalStorage.h>
+#include <DataDir.h>
 #include <JsonSettingsIO.h>
 #include <Logging.h>
 #include <Serialization.h>
 
 #include <cstring>
+#include <mutex>
 #include <string>
 
 #include "I18nKeys.h"
@@ -23,12 +25,34 @@ void readAndValidate(HalFile& file, uint8_t& member, const uint8_t maxValue) {
 }
 
 namespace {
-constexpr uint8_t SETTINGS_FILE_VERSION = 1;
-constexpr char SETTINGS_FILE_BIN[] = "/.crosspoint/settings.bin";
-constexpr char SETTINGS_FILE_JSON[] = "/.crosspoint/settings.json";
-constexpr char SETTINGS_FILE_BAK[] = "/.crosspoint/settings.bin.bak";
-constexpr char LANG_FILE_BIN[] = "/.crosspoint/language.bin";
-constexpr char LANG_FILE_BAK[] = "/.crosspoint/language.bin.bak";
+constexpr uint8_t SETTINGS_FILE_VERSION = 2;
+// v36: paths hang off the boot-resolved data dir; built on first use —
+// DataDir::resolve() has run by then (boot order).
+const char* settingsFileBin() {
+  static char p[40] = "";
+  if (!p[0]) snprintf(p, sizeof(p), "%s/settings.bin", DataDir::path());
+  return p;
+}
+const char* settingsFileJson() {
+  static char p[40] = "";
+  if (!p[0]) snprintf(p, sizeof(p), "%s/settings.json", DataDir::path());
+  return p;
+}
+const char* settingsFileBak() {
+  static char p[40] = "";
+  if (!p[0]) snprintf(p, sizeof(p), "%s/settings.bin.bak", DataDir::path());
+  return p;
+}
+const char* langFileBin() {
+  static char p[40] = "";
+  if (!p[0]) snprintf(p, sizeof(p), "%s/language.bin", DataDir::path());
+  return p;
+}
+const char* langFileBak() {
+  static char p[40] = "";
+  if (!p[0]) snprintf(p, sizeof(p), "%s/language.bin.bak", DataDir::path());
+  return p;
+}
 
 // Convert legacy front button layout into explicit logical->hardware mapping.
 void applyLegacyFrontButtonLayout(CrossPointSettings& settings) {
@@ -96,17 +120,22 @@ uint8_t CrossPointSettings::sleepTimeoutEnumToMinutes(const uint8_t legacyValue)
 }
 
 bool CrossPointSettings::saveToFile() const {
-  Storage.mkdir("/.crosspoint");
-  return JsonSettingsIO::saveSettings(*this, SETTINGS_FILE_JSON);
+  std::lock_guard<std::mutex> lock(_mutex);
+  Storage.mkdir(DataDir::path());
+  return JsonSettingsIO::saveSettings(*this, settingsFileJson());
 }
 
 bool CrossPointSettings::loadFromFile() {
   // Try JSON first
-  if (Storage.exists(SETTINGS_FILE_JSON)) {
-    String json = Storage.readFile(SETTINGS_FILE_JSON);
+  if (Storage.exists(settingsFileJson())) {
+    String json = Storage.readFile(settingsFileJson());
     if (!json.isEmpty()) {
       bool resave = false;
-      bool result = JsonSettingsIO::loadSettings(*this, json.c_str(), &resave);
+      bool result;
+      {
+        std::lock_guard<std::mutex> lock(_mutex);
+        result = JsonSettingsIO::loadSettings(*this, json.c_str(), &resave);
+      }
       if (result && resave) {
         if (saveToFile()) {
           LOG_DBG("CPS", "Resaved settings to update format");
@@ -120,11 +149,11 @@ bool CrossPointSettings::loadFromFile() {
   }
 
   // Fall back to binary migration
-  if (Storage.exists(SETTINGS_FILE_BIN)) {
+  if (Storage.exists(settingsFileBin())) {
     if (loadFromBinaryFile()) {
       migrateLanguageBinaryFile();
       if (saveToFile()) {
-        Storage.rename(SETTINGS_FILE_BIN, SETTINGS_FILE_BAK);
+        Storage.rename(settingsFileBin(), settingsFileBak());
         LOG_DBG("CPS", "Migrated settings.bin to settings.json");
         return true;
       } else {
@@ -141,10 +170,10 @@ bool CrossPointSettings::loadFromFile() {
 bool CrossPointSettings::migrateLanguageBinaryFile() {
   // V1_LANGUAGES / V1_LANGUAGE_COUNT are emitted by gen_i18n.py with the
   // frozen enum order from 2f969a9.
-  if (!Storage.exists(LANG_FILE_BIN)) return false;
+  if (!Storage.exists(langFileBin())) return false;
 
   HalFile f;
-  if (Storage.openFileForRead("CPS", LANG_FILE_BIN, f)) {
+  if (Storage.openFileForRead("CPS", langFileBin(), f)) {
     uint8_t version;
     serialization::readPod(f, version);
     if (version == 1) {
@@ -155,7 +184,7 @@ bool CrossPointSettings::migrateLanguageBinaryFile() {
       }
     }
   }
-  Storage.rename(LANG_FILE_BIN, LANG_FILE_BAK);
+  Storage.rename(langFileBin(), langFileBak());
   saveToFile();
   LOG_DBG("CPS", "Migrated language.bin into settings.json");
   return true;
@@ -163,9 +192,10 @@ bool CrossPointSettings::migrateLanguageBinaryFile() {
 
 bool CrossPointSettings::loadFromBinaryFile() {
   HalFile inputFile;
-  if (!Storage.openFileForRead("CPS", SETTINGS_FILE_BIN, inputFile)) {
+  if (!Storage.openFileForRead("CPS", settingsFileBin(), inputFile)) {
     return false;
   }
+  std::lock_guard<std::mutex> lock(_mutex);
 
   uint8_t version;
   serialization::readPod(inputFile, version);
@@ -222,13 +252,6 @@ bool CrossPointSettings::loadFromBinaryFile() {
     if (++settingsRead >= fileSettingsCount) break;
     readAndValidate(inputFile, sleepScreenCoverMode, SLEEP_SCREEN_COVER_MODE_COUNT);
     if (++settingsRead >= fileSettingsCount) break;
-    {
-      std::string urlStr;
-      serialization::readString(inputFile, urlStr);
-      strncpy(opdsServerUrl, urlStr.c_str(), sizeof(opdsServerUrl) - 1);
-      opdsServerUrl[sizeof(opdsServerUrl) - 1] = '\0';
-    }
-    if (++settingsRead >= fileSettingsCount) break;
     serialization::readPod(inputFile, textAntiAliasing);
     if (++settingsRead >= fileSettingsCount) break;
     readAndValidate(inputFile, hideBatteryPercentage, HIDE_BATTERY_PERCENTAGE_COUNT);
@@ -237,23 +260,11 @@ bool CrossPointSettings::loadFromBinaryFile() {
     if (++settingsRead >= fileSettingsCount) break;
     serialization::readPod(inputFile, hyphenationEnabled);
     if (++settingsRead >= fileSettingsCount) break;
-    {
-      std::string usernameStr;
-      serialization::readString(inputFile, usernameStr);
-      strncpy(opdsUsername, usernameStr.c_str(), sizeof(opdsUsername) - 1);
-      opdsUsername[sizeof(opdsUsername) - 1] = '\0';
-    }
-    if (++settingsRead >= fileSettingsCount) break;
-    {
-      std::string passwordStr;
-      serialization::readString(inputFile, passwordStr);
-      strncpy(opdsPassword, passwordStr.c_str(), sizeof(opdsPassword) - 1);
-      opdsPassword[sizeof(opdsPassword) - 1] = '\0';
-    }
-    if (++settingsRead >= fileSettingsCount) break;
     readAndValidate(inputFile, sleepScreenCoverFilter, SLEEP_SCREEN_COVER_FILTER_COUNT);
     if (++settingsRead >= fileSettingsCount) break;
     serialization::readPod(inputFile, uiTheme);
+    // v52:Classic(0)/RoundedRaff(3) 退役,殘值正規化為 Formosa(=LYRA;儲存空間沿用不遷移)
+    if (uiTheme != UI_THEME::LYRA && uiTheme != UI_THEME::LYRA_3_COVERS) uiTheme = UI_THEME::LYRA;
     if (++settingsRead >= fileSettingsCount) break;
     readAndValidate(inputFile, frontButtonBack, FRONT_BUTTON_HARDWARE_COUNT);
     if (++settingsRead >= fileSettingsCount) break;
@@ -292,7 +303,9 @@ float CrossPointSettings::getReaderLineCompression() const {
       default:
         return 1.0f;
       case WIDE:
-        return 1.1f;
+        // 1.1 -> 1.2 (v31): full-width CJK glyphs pack visually denser than Latin, and the
+        // user's whole library is Chinese; 1.2 is the low end of traditional CJK book leading.
+        return 1.2f;
     }
   }
 
@@ -352,6 +365,12 @@ int CrossPointSettings::getReaderFontId() const {
     // Fall through to built-in if SD font not found
   }
 
+#ifdef OMIT_FONTS
+  // Only notoserif14 (aliased to notosans_14 data) is compiled in. Every builtin
+  // family/size combination maps to it; the un-inserted font ids would otherwise
+  // miss in the fontMap and render nothing (GfxRenderer logs and draws blank).
+  return NOTOSERIF_14_FONT_ID;
+#else
   switch (fontFamily) {
     case NOTOSERIF:
     default:
@@ -379,4 +398,5 @@ int CrossPointSettings::getReaderFontId() const {
           return NOTOSANS_18_FONT_ID;
       }
   }
+#endif  // OMIT_FONTS
 }

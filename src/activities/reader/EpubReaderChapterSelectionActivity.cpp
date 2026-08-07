@@ -60,12 +60,12 @@ void EpubReaderChapterSelectionActivity::loop() {
   });
 
   buttonNavigator.onNextContinuous([this, totalItems, pageItems] {
-    selectorIndex = ButtonNavigator::nextPageIndex(selectorIndex, totalItems, pageItems);
+    selectorIndex = ButtonNavigator::nextPageIndexClamped(selectorIndex, totalItems, pageItems);
     requestUpdate();
   });
 
   buttonNavigator.onPreviousContinuous([this, totalItems, pageItems] {
-    selectorIndex = ButtonNavigator::previousPageIndex(selectorIndex, totalItems, pageItems);
+    selectorIndex = ButtonNavigator::previousPageIndexClamped(selectorIndex, totalItems, pageItems);
     requestUpdate();
   });
 }
@@ -76,11 +76,16 @@ void EpubReaderChapterSelectionActivity::render(RenderLock&&) {
   auto metrics = UITheme::getInstance().getMetrics();
   Rect screen = UITheme::getInstance().getScreenSafeArea(renderer, true, false);
 
+  // 頁碼副標(pageItems 與 loop :31 同式)
+  const std::string pageText = UITheme::pageIndicatorText(
+      selectorIndex, getTotalItems(), UITheme::getInstance().getNumberOfItemsPerPage(renderer, true, false, true, false));
   GUI.drawHeader(renderer, Rect{screen.x, screen.y + metrics.topPadding, screen.width, metrics.headerHeight},
-                 tr(STR_SELECT_CHAPTER));
+                 tr(STR_SELECT_CHAPTER), pageText.empty() ? nullptr : pageText.c_str());
 
   const int contentTop = screen.y + metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
-  const int contentHeight = screen.height - contentTop - metrics.verticalSpacing;
+  // 相對 screen.y 計算,不重複扣除 safeArea 位移(原式在直向 180° 時 40px 被扣兩次 →
+  // 實際列數 12 但翻頁步距/頁碼算 13,頁碼與畫面不一致 + 長按每頁跳過 1 項;v38 複查抓到)
+  const int contentHeight = screen.height - (contentTop - screen.y) - metrics.verticalSpacing;
 
   const int totalItems = getTotalItems();
   GUI.drawList(renderer, Rect{screen.x, contentTop, screen.width, contentHeight}, totalItems, selectorIndex,

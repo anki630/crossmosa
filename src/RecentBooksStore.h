@@ -1,4 +1,10 @@
 #pragma once
+
+#include <DataDir.h>
+#include <cstdio>
+#include <ArduinoJson.h>
+#include <PersistableStore.h>
+
 #include <string>
 #include <vector>
 
@@ -7,28 +13,33 @@ struct RecentBook {
   std::string title;
   std::string author;
   std::string coverBmpPath;
+  // Whole-book progress 0-100, updated when the reader exits; 0 = unknown (pre-v31
+  // entries or never-opened books) and is not displayed.
+  uint8_t progressPercent = 0;
 
   bool operator==(const RecentBook& other) const { return path == other.path; }
 };
 
-class RecentBooksStore;
-namespace JsonSettingsIO {
-bool loadRecentBooks(RecentBooksStore& store, const char* json);
-}  // namespace JsonSettingsIO
-
-class RecentBooksStore {
-  // Static instance
-  static RecentBooksStore instance;
-
+class RecentBooksStore : public PersistableStore<RecentBooksStore> {
+ private:
   std::vector<RecentBook> recentBooks;
 
-  friend bool JsonSettingsIO::loadRecentBooks(RecentBooksStore&, const char*);
+  static constexpr int MAX_RECENT_BOOKS = 10;
 
- public:
+  RecentBooksStore() = default;
   ~RecentBooksStore() = default;
 
-  // Get singleton instance
-  static RecentBooksStore& getInstance() { return instance; }
+  friend class PersistableStore<RecentBooksStore>;
+
+ public:
+  static const char* getFilePath() {
+    // Built on first use — DataDir::resolve() has run by then (boot order).
+    static char p[32] = "";
+    if (!p[0]) snprintf(p, sizeof(p), "%s/recent.json", DataDir::path());
+    return p;
+  }
+  void toJson(JsonDocument& doc) const;
+  bool fromJson(JsonVariantConst doc);
 
   // Add a book to the recent list (moves to front if already exists)
   void addBook(const std::string& path, const std::string& title, const std::string& author,
@@ -36,6 +47,10 @@ class RecentBooksStore {
 
   void updateBook(const std::string& path, const std::string& title, const std::string& author,
                   const std::string& coverBmpPath);
+
+  // Update the stored whole-book progress for the entry matching path (no-op if absent
+  // or unchanged, so a plain reopen-and-close does not rewrite the file).
+  void setProgress(const std::string& path, uint8_t progressPercent);
 
   // Remove the entry whose path matches (used when a book is removed from recents or finished/read).
   // Returns true if an entry was found and removed (no-op + false otherwise).
@@ -61,13 +76,7 @@ class RecentBooksStore {
   // Get the count of recent books
   int getCount() const { return static_cast<int>(recentBooks.size()); }
 
-  bool saveToFile() const;
-
-  bool loadFromFile();
   RecentBook getDataFromBook(std::string path) const;
-
- private:
-  bool loadFromBinaryFile();
 };
 
 // Helper macro to access recent books store

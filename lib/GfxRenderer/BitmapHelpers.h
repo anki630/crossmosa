@@ -1,5 +1,7 @@
 #pragma once
 
+#include <new>  // v57:std::nothrow
+
 #include <cstdint>
 #include <cstring>
 
@@ -24,10 +26,15 @@ void createBmpHeader(BmpHeader* bmpHeader, int width, int height, BmpRowOrder ro
 class Atkinson1BitDitherer {
  public:
   explicit Atkinson1BitDitherer(int width) : width(width) {
-    errorRow0 = new int16_t[width + 4]();  // Current row
-    errorRow1 = new int16_t[width + 4]();  // Next row
-    errorRow2 = new int16_t[width + 4]();  // Row after next
+    errorRow0 = new (std::nothrow) int16_t[width + 4]();  // Current row
+    errorRow1 = new (std::nothrow) int16_t[width + 4]();  // Next row
+    errorRow2 = new (std::nothrow) int16_t[width + 4]();  // Row after next
   }
+
+  // v57:建構子裡的陣列配置改成 nothrow,所以【建構成功不等於可用】。
+  // -fno-exceptions 下裸 new 失敗會直接 abort(),呼叫端對物件本身的 null 檢查
+  // 完全擋不到這裡;必須建構後再問一次 ok()。
+  bool ok() const { return errorRow0 && errorRow1 && errorRow2; }
 
   ~Atkinson1BitDitherer() {
     delete[] errorRow0;
@@ -105,10 +112,15 @@ class Atkinson1BitDitherer {
 class AtkinsonDitherer {
  public:
   explicit AtkinsonDitherer(int width) : width(width) {
-    errorRow0 = new int16_t[width + 4]();  // Current row
-    errorRow1 = new int16_t[width + 4]();  // Next row
-    errorRow2 = new int16_t[width + 4]();  // Row after next
+    errorRow0 = new (std::nothrow) int16_t[width + 4]();  // Current row
+    errorRow1 = new (std::nothrow) int16_t[width + 4]();  // Next row
+    errorRow2 = new (std::nothrow) int16_t[width + 4]();  // Row after next
   }
+
+  // v57:建構子裡的陣列配置改成 nothrow,所以【建構成功不等於可用】。
+  // -fno-exceptions 下裸 new 失敗會直接 abort(),呼叫端對物件本身的 null 檢查
+  // 完全擋不到這裡;必須建構後再問一次 ok()。
+  bool ok() const { return errorRow0 && errorRow1 && errorRow2; }
 
   ~AtkinsonDitherer() {
     delete[] errorRow0;
@@ -206,9 +218,14 @@ class AtkinsonDitherer {
 class FloydSteinbergDitherer {
  public:
   explicit FloydSteinbergDitherer(int width) : width(width), rowCount(0) {
-    errorCurRow = new int16_t[width + 2]();  // +2 for boundary handling
-    errorNextRow = new int16_t[width + 2]();
+    errorCurRow = new (std::nothrow) int16_t[width + 2]();  // +2 for boundary handling
+    errorNextRow = new (std::nothrow) int16_t[width + 2]();
   }
+
+  // v57:建構子裡的陣列配置改成 nothrow,所以【建構成功不等於可用】。
+  // -fno-exceptions 下裸 new 失敗會直接 abort(),呼叫端對物件本身的 null 檢查
+  // 完全擋不到這裡;必須建構後再問一次 ok()。
+  bool ok() const { return errorCurRow && errorNextRow; }
 
   ~FloydSteinbergDitherer() {
     delete[] errorCurRow;

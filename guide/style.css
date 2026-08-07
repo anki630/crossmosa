@@ -1,0 +1,37 @@
+/* Deliberately thin. CrossPoint honours a small subset of CSS, and the reader can
+   turn embedded styles off entirely (設定 → 閱讀器 → 內嵌樣式), so nothing here is
+   allowed to carry meaning — emphasis lives in <strong>, structure in <h1>/<p>/<li>.
+   These rules only nudge spacing. */
+
+h1 {
+  font-size: 1.5em;
+  margin: 0 0 0.8em 0;
+}
+
+p {
+  margin: 0 0 0.7em 0;
+  text-indent: 0;
+}
+
+li {
+  margin: 0 0 0.5em 0;
+}
+
+blockquote {
+  margin: 0.8em 1.2em;
+}
+
+.do {
+  margin-top: 1.2em;
+}
+
+.figure {
+  text-align: center;
+  margin: 1em 0;
+}
+
+.cover {
+  text-align: center;
+  margin: 0;
+  padding: 0;
+}

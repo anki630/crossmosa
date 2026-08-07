@@ -41,6 +41,10 @@ class HalClock {
   //
   // Debouncing (skip if already synced once) is enforced by the caller, not here,
   // so the HAL stays free of any app-layer settings dependency.
+  // v77: start SNTP and return immediately. Static and NOT gated on the DS3231
+  // being present -- the system clock does not need one. See the .cpp.
+  static void startNtp();
+
   bool syncFromNTP();
 
  private:

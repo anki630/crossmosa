@@ -6,6 +6,8 @@ class GfxRenderer;
 
 // Lyra theme metrics (zero runtime cost)
 namespace LyraMetrics {
+// Lyra 唯一的圓角半徑 token(清單選取/tab pill/兩種彈窗/鍵盤鍵/封面框共用)
+constexpr int cornerRadius = 6;
 constexpr ThemeMetrics values = {.batteryWidth = 16,
                                  .batteryHeight = 12,
                                  .topPadding = 5,
@@ -15,8 +17,8 @@ constexpr ThemeMetrics values = {.batteryWidth = 16,
                                  .previewPadding = 12,
                                  .previewHeightPercent = 30,
                                  .contentSidePadding = 20,
-                                 .listRowHeight = 40,
-                                 .listWithSubtitleRowHeight = 60,
+                                 .listRowHeight = 48,
+                                 .listWithSubtitleRowHeight = 72,
                                  .menuRowHeight = 64,
                                  .menuSpacing = 8,
                                  .tabSpacing = 8,
@@ -45,18 +47,21 @@ constexpr ThemeMetrics values = {.batteryWidth = 16,
                                  .keyboardVerticalOffset = -7,
                                  .keyboardTextFieldWidthPercent = 85,
                                  .keyboardWidthPercent = 90,
-                                 .keyboardKeyCornerRadius = 6,
+                                 .keyboardKeyCornerRadius = cornerRadius,
                                  .keyboardFillUnselected = false,
                                  .keyboardOutlineAllUnselected = false,
                                  .keyboardDrawSpecialOutlineWhenUnselected = true,
                                  .keyboardSecondaryLabelRightPadding = 1,
                                  .keyboardSecondaryLabelTopPadding = 0,
                                  .keyboardMinArrowHeadSize = 0,
-                                 .popupTopOffsetRatio = 0.165f,
+                                 // v49:提示彈窗(休眠中/載入中/已加入書籤…)置中——單行彈窗高 58px
+                                 // (UI_12 行框 34 + 上下 margin 24),直向 (792-58)/2 ≈ 792×0.463;
+                                 // 原 0.165 偏上(實機回饋)。橫向時約低於中心 8px,可接受。
+                                 .popupTopOffsetRatio = 0.46f,
                                  .popupMarginX = 16,
                                  .popupMarginY = 12,
                                  .popupFrameThickness = 2,
-                                 .popupCornerRadius = 6,
+                                 .popupCornerRadius = cornerRadius,
                                  .popupTextBold = false,
                                  .popupTextInverted = false,
                                  .popupTextBaselineOffsetY = -2,
@@ -65,10 +70,23 @@ constexpr ThemeMetrics values = {.batteryWidth = 16,
                                  .popupProgressClampPercent = false,
                                  .popupProgressFillInverted = false,
                                  .popupProgressOutlineInverted = false,
+                                 .optionPopupItemSpacing = 8,
+                                 .optionPopupInnerPadding = 20,
+                                 .optionPopupSelectionHPadding = 16,
+                                 .optionPopupSelectionVPadding = 12,
+                                 .optionPopupTitleGap = 16,
+                                 .optionPopupUseSmallFont = false,
+                                 .optionPopupOptionFontBold = false,
+                                 .optionPopupSelectionRadius = cornerRadius,
+                                 .optionPopupSelectionLight = true,
+                                 .optionPopupDrawAllRows = false,
+                                 .optionPopupDialogSideMargin = 20,
+                                 .optionPopupTitleSeparator = true,
                                  .textFieldHorizontalPadding = 6,
                                  .textFieldNormalThickness = 1,
                                  .textFieldCursorThickness = 3,
-                                 .textFieldLineEndOffset = 0};
+                                 .textFieldLineEndOffset = 0,
+                                 .optionPopupSelectionOutline = true};
 }
 
 class LyraTheme : public BaseTheme {

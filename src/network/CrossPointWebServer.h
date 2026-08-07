@@ -90,7 +90,6 @@ class CrossPointWebServer {
 
   // Request handlers
   void handleRoot() const;
-  void handleJszip() const;
   void handleNotFound() const;
   void handleStatus() const;
   void handleFileList() const;
@@ -110,6 +109,7 @@ class CrossPointWebServer {
 
   // Font management handlers
   void handleFontsPage() const;
+  void handleJszip() const;
   void handleFontList() const;
   void handleFontUpload();
   void handleFontUploadData();

@@ -51,12 +51,12 @@ void LanguageSelectActivity::loop() {
   });
 
   buttonNavigator.onNextContinuous([this, pageItems] {
-    selectedIndex = ButtonNavigator::nextPageIndex(static_cast<int>(selectedIndex), totalItems, pageItems);
+    selectedIndex = ButtonNavigator::nextPageIndexClamped(static_cast<int>(selectedIndex), totalItems, pageItems);
     requestUpdate();
   });
 
   buttonNavigator.onPreviousContinuous([this, pageItems] {
-    selectedIndex = ButtonNavigator::previousPageIndex(static_cast<int>(selectedIndex), totalItems, pageItems);
+    selectedIndex = ButtonNavigator::previousPageIndexClamped(static_cast<int>(selectedIndex), totalItems, pageItems);
     requestUpdate();
   });
 }

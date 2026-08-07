@@ -6,9 +6,12 @@
 #include <HalStorage.h>
 #include <Logging.h>
 #include <WiFi.h>
+#include <esp_efuse.h>
+#include <esp_efuse_table.h>
 #include <esp_task_wdt.h>
 
 #include <algorithm>
+#include <cctype>
 
 #include "CrossPointSettings.h"
 #include "FontInstaller.h"
@@ -19,10 +22,14 @@
 #include "WifiCredentialStore.h"
 #include "html/FilesPageHtml.generated.h"
 #include "html/FontsPageHtml.generated.h"
+#include "html/js/jszip_minJs.generated.h"
 #include "html/HomePageHtml.generated.h"
 #include "html/SettingsPageHtml.generated.h"
-#include "html/js/jszip_minJs.generated.h"
 #include "util/BookCacheUtils.h"
+#include <esp_heap_caps.h>
+
+#include "util/DiagLog.h"
+#include "util/ProtectedPath.h"
 
 namespace {
 // Folders/files to hide from the web interface file browser
@@ -66,17 +73,22 @@ String normalizeWebPath(const String& inputPath) {
   return result;
 }
 
-bool isProtectedItemName(const String& name) {
-  if (name.startsWith(".")) {
-    return true;
-  }
-  for (const auto* item : HIDDEN_ITEMS) {
-    if (name.equals(item)) {
-      return true;
-    }
-  }
-  return false;
-}
+// v77: routed through the shared predicate instead of re-implementing it.
+//
+// This file used to carry its OWN copy of the rule -- `name.equals(item)`,
+// case-SENSITIVE, with no knowledge of FAT's generated 8.3 aliases and no
+// trimming of the leading spaces and trailing dots FAT itself ignores. It
+// therefore had neither the v76 case fix nor any of the v77 hardening, while
+// ProtectedPath.h claimed to be the single copy for "every network-facing
+// filesystem surface". It was not. Two implementations of one security rule is
+// one implementation and one hole.
+bool isProtectedItemName(const String& name) { return ProtectedPath::isProtectedName(name.c_str()); }
+
+// v77: and the version that matters for anything taking a PATH. The basename
+// is not enough: /download checked only the last component and then opened the
+// full path, so `?path=/.crossmosa/wifi.json` presented the basename
+// `wifi.json`, passed, and streamed the Wi-Fi credentials over plain HTTP.
+bool isProtectedItemPath(const String& path) { return ProtectedPath::isProtected(path.c_str()); }
 }  // namespace
 
 // File listing page template - now using generated headers:
@@ -129,11 +141,15 @@ void CrossPointWebServer::begin() {
     return;
   }
 
+  // Add Access-Control-Allow-* headers to every response so web-based clients
+  // and PWAs on other origins can use the HTTP API. Preflight OPTIONS requests
+  // are answered in handleNotFound().
+  server->enableCORS(true);
+
   // Setup routes
   LOG_DBG("WEB", "Setting up routes...");
   server->on("/", HTTP_GET, [this] { handleRoot(); });
   server->on("/files", HTTP_GET, [this] { handleFileList(); });
-  server->on("/js/jszip.min.js", HTTP_GET, [this] { handleJszip(); });
 
   server->on("/api/status", HTTP_GET, [this] { handleStatus(); });
   server->on("/api/files", HTTP_GET, [this] { handleFileListData(); });
@@ -161,6 +177,7 @@ void CrossPointWebServer::begin() {
 
   // Font management endpoints
   server->on("/fonts", HTTP_GET, [this] { handleFontsPage(); });
+  server->on("/js/jszip.min.js", HTTP_GET, [this] { handleJszip(); });
   server->on("/api/fonts", HTTP_GET, [this] { handleFontList(); });
   server->on("/api/fonts/upload", HTTP_POST, [this] { handleFontUpload(); }, [this] { handleFontUploadData(); });
   server->on("/api/fonts/delete", HTTP_POST, [this] { handleFontDelete(); });
@@ -309,8 +326,11 @@ void CrossPointWebServer::handleClient() {
         if (strcmp(buffer, "hello") == 0) {
           String hostname = WiFi.getHostname();
           if (hostname.isEmpty()) {
-            hostname = "crosspoint";
+            hostname = "crossmosa";
           }
+          // "crosspoint" is a wire-protocol token: the official Calibre plugin's
+          // discover_device() filters replies with startswith('crosspoint').
+          // Only the parenthesized hostname is display text — keep the token.
           String message = "crosspoint (on " + hostname + ");" + String(wsPort);
           udp.beginPacket(udp.remoteIP(), udp.remotePort());
           udp.write(reinterpret_cast<const uint8_t*>(message.c_str()), message.length());
@@ -350,6 +370,22 @@ void CrossPointWebServer::handleJszip() const {
 }
 
 void CrossPointWebServer::handleNotFound() const {
+  // CORS preflight: routes are registered per-method, so OPTIONS requests land
+  // here. The Access-Control-Allow-* headers are added by enableCORS().
+  if (server->method() == HTTP_OPTIONS) {
+    server->send(204, "text/plain", "");
+    return;
+  }
+
+  // in AP mode, redirect unmatched browser/captive-portal requests to "/" so the OS auto-opens the browser
+  // API requests (/api/*) still return 404 so XHR errors surface correctly
+  // see https://en.wikipedia.org/wiki/Captive_portal#Detection
+  if (apMode && !server->uri().startsWith("/api/")) {
+    server->sendHeader("Location", "/", true);
+    server->send(302, "text/plain", "");
+    return;
+  }
+
   String message = "404 Not Found\n\n";
   message += "URI: " + server->uri() + "\n";
   server->send(404, "text/plain", message);
@@ -368,9 +404,27 @@ void CrossPointWebServer::handleStatus() const {
   doc["uptime"] = millis() / 1000;
   doc["device"] = gpio.deviceIsX3() ? "X3" : "X4";
 
-  String json;
-  serializeJson(doc, json);
-  server->send(200, "application/json", json);
+  char snBuf[33] = {0};
+  bool valid = false;
+  if (esp_efuse_read_field_blob(ESP_EFUSE_USER_DATA, snBuf, 256) == ESP_OK) {
+    valid = snBuf[0] != '\0' && snBuf[0] != (char)0xFF;
+    for (int i = 0; i < 32 && snBuf[i] != '\0'; i++) {
+      if (!std::isprint(static_cast<unsigned char>(snBuf[i]))) {
+        valid = false;
+        break;
+      }
+    }
+  }
+
+  if (valid) {
+    doc["serial"] = snBuf;
+  } else {
+    doc["serial"] = "Not found";
+  }
+
+  String response;
+  serializeJson(doc, response);
+  server->send(200, "application/json", response);
 }
 
 void CrossPointWebServer::scanFiles(const char* path, const std::function<void(FileInfo)>& callback) const {
@@ -394,18 +448,19 @@ void CrossPointWebServer::scanFiles(const char* path, const std::function<void(F
     file.getName(name, sizeof(name));
     auto fileName = String(name);
 
-    // Skip hidden items (starting with ".")
+    // v78 REGRESSION FIX. v77 pointed this at isProtectedItemName(), which
+    // carries ProtectedPath's leading-dot rule -- so EVERY dotfile became
+    // permanently invisible here and Settings > "show hidden files" silently
+    // stopped doing anything. Reported from the device.
+    //
+    // The two questions are genuinely different and now have different
+    // functions. "Hidden" is a user PREFERENCE about dotfiles. "System" is the
+    // device's own reserved names, which the preference has never revealed.
+    // Access control is a third thing again and still goes through
+    // isProtectedItemPath() -- a listing showing an entry has never meant it
+    // may be read, and /.crossmosa was listable-but-unreadable long before v77.
     bool shouldHide = !SETTINGS.showHiddenFiles && fileName.startsWith(".");
-
-    // Check against explicitly hidden items list
-    if (!shouldHide) {
-      for (const auto* item : HIDDEN_ITEMS) {
-        if (fileName.equals(item)) {
-          shouldHide = true;
-          break;
-        }
-      }
-    }
+    if (!shouldHide) shouldHide = ProtectedPath::isSystemName(fileName.c_str());
 
     if (!shouldHide) {
       FileInfo info;
@@ -502,16 +557,23 @@ void CrossPointWebServer::handleDownload() const {
     itemPath = "/" + itemPath;
   }
 
-  const String itemName = itemPath.substring(itemPath.lastIndexOf('/') + 1);
-  if (itemName.startsWith(".")) {
-    server->send(403, "text/plain", "Cannot access system files");
+  // v79: the two diagnostic logs are the one exception, and they are checked
+  // FIRST so the exception can only ever be an exact whole-path match.
+  //
+  // This device has no serial port; diag.log is the only telemetry, and it
+  // lives inside the protected data directory. v77's fix below (correctly)
+  // stopped serving anything under /.crossmosa -- and took the log with it,
+  // which is how every problem in this project's SMB work has been diagnosed.
+  // Neither file contains a credential. See DiagLog::isDiagnosticPath().
+  const bool isDiagnostics = DiagLog::isDiagnosticPath(itemPath.c_str());
+
+  // v77: the WHOLE path. This used to test only the last component and then
+  // open itemPath in full, so `?path=/.crossmosa/wifi.json` passed on the
+  // basename `wifi.json` and streamed the credentials. There is no
+  // authentication on this server.
+  if (!isDiagnostics && isProtectedItemPath(itemPath)) {
+    server->send(403, "text/plain", "Cannot access protected items");
     return;
-  }
-  for (const auto* item : HIDDEN_ITEMS) {
-    if (itemName.equals(item)) {
-      server->send(403, "text/plain", "Cannot access protected items");
-      return;
-    }
   }
 
   if (!Storage.exists(itemPath.c_str())) {
@@ -641,17 +703,24 @@ void CrossPointWebServer::handleUpload(UploadState& state) const {
     LOG_DBG("WEB", "[UPLOAD] START: %s to path: %s", state.fileName.c_str(), state.path.c_str());
     LOG_DBG("WEB", "[UPLOAD] Free heap: %d bytes", ESP.getFreeHeap());
 
-    // Create file path
     String filePath = state.path;
     if (!filePath.endsWith("/")) filePath += "/";
     filePath += state.fileName;
 
-    // Check if file already exists - SD operations can be slow
+    // v77: upload had no protected check either. Writing INTO /.crossmosa --
+    // over settings.json, or over a Wi-Fi credential file -- was a plain POST
+    // away on a server with no authentication.
+    if (isProtectedItemPath(filePath)) {
+      state.error = "Cannot write to a protected location";
+      LOG_DBG("WEB", "[UPLOAD] REFUSED protected path: %s", filePath.c_str());
+      return;
+    }
+
     esp_task_wdt_reset();
     if (Storage.exists(filePath.c_str())) {
-      LOG_DBG("WEB", "[UPLOAD] Overwriting existing file: %s", filePath.c_str());
-      esp_task_wdt_reset();
-      Storage.remove(filePath.c_str());
+      state.error = "File already exists: " + state.fileName;
+      LOG_DBG("WEB", "[UPLOAD] Collision: %s", filePath.c_str());
+      return;
     }
 
     // Open file for writing - this can be slow due to FAT cluster allocation
@@ -719,7 +788,7 @@ void CrossPointWebServer::handleUpload(UploadState& state) const {
         LOG_DBG("WEB", "[UPLOAD] Diagnostics: %d writes, total write time: %lu ms (%.1f%%)", writeCount, totalWriteTime,
                 writePercent);
 
-        // Clear epub cache to prevent stale metadata issues when overwriting files
+        // Clear epub cache after uploading the file
         String filePath = state.path;
         if (!filePath.endsWith("/")) filePath += "/";
         filePath += state.fileName;
@@ -782,6 +851,14 @@ void CrossPointWebServer::handleCreateFolder() const {
   if (!folderPath.endsWith("/")) folderPath += "/";
   folderPath += folderName;
 
+  // v77: this endpoint had no protected check either. Creating INTO a protected
+  // directory, or creating one whose name shadows a protected shape, both go
+  // through the same predicate now.
+  if (isProtectedItemPath(folderPath)) {
+    server->send(403, "text/plain", "Cannot create protected item");
+    return;
+  }
+
   LOG_DBG("WEB", "Creating folder: %s", folderPath.c_str());
 
   // Check if already exists
@@ -827,11 +904,13 @@ void CrossPointWebServer::handleRename() const {
     return;
   }
 
-  const String itemName = itemPath.substring(itemPath.lastIndexOf('/') + 1);
-  if (isProtectedItemName(itemName)) {
+  // v77: whole path, not the basename -- /.crossmosa/settings.json presents an
+  // innocent last component.
+  if (isProtectedItemPath(itemPath)) {
     server->send(403, "text/plain", "Cannot rename protected item");
     return;
   }
+  const String itemName = itemPath.substring(itemPath.lastIndexOf('/') + 1);
   if (newName == itemName) {
     server->send(200, "text/plain", "Name unchanged");
     return;
@@ -900,14 +979,14 @@ void CrossPointWebServer::handleMove() const {
     return;
   }
 
-  const String itemName = itemPath.substring(itemPath.lastIndexOf('/') + 1);
-  if (isProtectedItemName(itemName)) {
+  // v77: whole paths, both ends.
+  if (isProtectedItemPath(itemPath)) {
     server->send(403, "text/plain", "Cannot move protected item");
     return;
   }
+  const String itemName = itemPath.substring(itemPath.lastIndexOf('/') + 1);
   if (destPath != "/") {
-    const String destName = destPath.substring(destPath.lastIndexOf('/') + 1);
-    if (isProtectedItemName(destName)) {
+    if (isProtectedItemPath(destPath)) {
       server->send(403, "text/plain", "Cannot move into protected folder");
       return;
     }
@@ -1031,6 +1110,15 @@ void CrossPointWebServer::handleDelete() const {
       itemPath = "/" + itemPath;
     }
 
+    // v77: this endpoint had NO protected check at all -- a POST could delete
+    // /.crossmosa and take the Wi-Fi credentials, reading progress and settings
+    // with it, on a server with no authentication.
+    if (isProtectedItemPath(itemPath)) {
+      failedItems += itemPath + " (protected); ";
+      allSuccess = false;
+      continue;
+    }
+
     // Security check: prevent deletion of protected items
     const String itemName = itemPath.substring(itemPath.lastIndexOf('/') + 1);
 
@@ -1103,19 +1191,65 @@ void CrossPointWebServer::handleSettingsPage() const {
 }
 
 void CrossPointWebServer::handleGetSettings() const {
-  // Pass the SD font registry so the fontFamily setting's enumStringValues
-  // includes SD-resident families — otherwise the web API only exposes the
-  // three built-in fonts.
+  // v96: the settings page has spun forever since ~v88 with nothing in the log to say why.
+  // This handler streams chunked (CONTENT_LENGTH_UNKNOWN), so any death part-way through
+  // leaves the browser waiting instead of showing an error -- exactly the reported symptom.
+  // These three lines say whether it is even entered, whether the settings vector (a heap
+  // copy, the same allocation that aborted the device in v90) survives, and whether the
+  // stream completes. Instrument, then fix; guessing has cost enough rounds already.
+  DiagLog::line("WEB settings API enter (largest free block %u)",
+                static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)));
   const auto& settings = getSettingsList(&sdFontSystem.registry());
+  DiagLog::line("WEB settings list built: %u entries", static_cast<unsigned>(settings.size()));
 
   server->setContentLength(CONTENT_LENGTH_UNKNOWN);
   server->send(200, "application/json", "");
+  DiagLog::line("WEB settings headers sent");  // v100: does it even get past the header write?
   server->sendContent("[");
+  DiagLog::line("WEB settings first chunk sent");
 
   char output[512];
   constexpr size_t outputSize = sizeof(output);
   bool seenFirst = false;
+  unsigned sentCount = 0;
   JsonDocument doc;
+
+  // v99: batch the chunked writes. This handler used to call sendContent() once per setting
+  // (plus once per comma) -- ~87 tiny HTTP chunks, each its own TCP segment. diag98 caught it
+  // stalling 20,846 ms and 30,049 ms mid-stream, at DIFFERENT settings each time, which rules
+  // out a bad entry and points at the transport: those are TCP timeout durations, and the
+  // browser's spinner is the connection dying, not the device hanging.
+  //
+  // One 1,536-byte staging buffer turns ~87 sends into ~7. Sized well under the ~18-21 KB
+  // largest free block observed at this point, and it is a plain stack... no: 1.5 KB is too
+  // much for this device's 256-byte stack budget, so it lives here as a static -- this handler
+  // is only ever entered from the single web-server task.
+  static char batch[1536];
+  size_t batchLen = 0;
+  // v100: coarse progress probes. v98's per-entry probe located the stall but cost ~30ms of SD
+  // write each; v99 removed it entirely and the resulting log could not distinguish "hung on
+  // entry 1" from "hung on entry 43" -- which is exactly what we needed to know. These are
+  // cheap enough to keep: one line per ~1.5KB flush, not one per setting.
+  unsigned flushCount = 0;
+  const auto flushBatch = [&]() {
+    if (batchLen == 0) return;
+    batch[batchLen] = '\0';
+    const size_t len = batchLen;
+    batchLen = 0;
+    server->sendContent(batch);
+    DiagLog::line("WEB settings flush #%u: %u bytes, %u entries so far", ++flushCount,
+                  static_cast<unsigned>(len), sentCount);
+  };
+  const auto appendBatch = [&](const char* text, size_t len) {
+    if (len >= sizeof(batch) - 1) {  // never fits: send it on its own rather than truncating
+      flushBatch();
+      server->sendContent(text);
+      return;
+    }
+    if (batchLen + len >= sizeof(batch) - 1) flushBatch();
+    memcpy(batch + batchLen, text, len);
+    batchLen += len;
+  };
 
   for (const auto& s : settings) {
     if (!s.key) continue;  // Skip ACTION-only entries
@@ -1182,15 +1316,18 @@ void CrossPointWebServer::handleGetSettings() const {
     }
 
     if (seenFirst) {
-      server->sendContent(",");
+      appendBatch(",", 1);
     } else {
       seenFirst = true;
     }
-    server->sendContent(output);
+    appendBatch(output, written);
+    sentCount++;
   }
 
-  server->sendContent("]");
-  server->sendContent("");
+  appendBatch("]", 1);
+  flushBatch();
+  server->sendContent("");  // terminating zero-length chunk
+  DiagLog::line("WEB settings API done: %u sent", static_cast<unsigned>(sentCount));
   LOG_DBG("WEB", "Served settings API");
 }
 
@@ -1279,7 +1416,9 @@ void CrossPointWebServer::handleGetOpdsServers() const {
   // Stream JSON array incrementally to avoid allocating the full response in memory
   server->setContentLength(CONTENT_LENGTH_UNKNOWN);
   server->send(200, "application/json", "");
+  DiagLog::line("WEB settings headers sent");  // v100: does it even get past the header write?
   server->sendContent("[");
+  DiagLog::line("WEB settings first chunk sent");
 
   char output[512];
   constexpr size_t outputSize = sizeof(output);
@@ -1594,19 +1733,19 @@ void CrossPointWebServer::onWebSocketEvent(uint8_t num, WStype_t type, uint8_t* 
             wsUploadPath = wsUploadPath.substring(0, wsUploadPath.length() - 1);
           }
 
-          // Build file path
           String filePath = wsUploadPath;
           if (!filePath.endsWith("/")) filePath += "/";
           filePath += wsUploadFileName;
 
-          LOG_DBG("WS", "Starting upload: %s (%d bytes) to %s", wsUploadFileName.c_str(), wsUploadSize,
-                  filePath.c_str());
-
-          // Check if file exists and remove it
           esp_task_wdt_reset();
           if (Storage.exists(filePath.c_str())) {
-            Storage.remove(filePath.c_str());
+            LOG_DBG("WS", "Upload collision: %s", filePath.c_str());
+            wsServer->sendTXT(num, "ERROR:File already exists: " + wsUploadFileName);
+            return;
           }
+
+          LOG_DBG("WS", "Starting upload: %s (%d bytes) to %s", wsUploadFileName.c_str(), wsUploadSize,
+                  filePath.c_str());
 
           // Open file for writing
           esp_task_wdt_reset();
@@ -1691,7 +1830,7 @@ void CrossPointWebServer::onWebSocketEvent(uint8_t num, WStype_t type, uint8_t* 
         LOG_DBG("WS", "Upload complete: %s (%d bytes in %lu ms, %.1f KB/s)", wsUploadFileName.c_str(), wsUploadSize,
                 elapsed, kbps);
 
-        // Clear epub cache to prevent stale metadata issues when overwriting files
+        // Clear epub cache after uploading the file
         String filePath = wsUploadPath;
         if (!filePath.endsWith("/")) filePath += "/";
         filePath += wsUploadFileName;
@@ -1780,7 +1919,7 @@ void CrossPointWebServer::handleFontUploadData() {
       filename.replace(' ', '_');
       // Validate filename: rejects path traversal (../, /, \) and enforces
       // a .cpfont basename of alphanumeric + hyphen + underscore. Without
-      // this an attacker could supply "../../.crosspoint/settings.json" as
+      // this an attacker could supply "../../.crossmosa/settings.json" as
       // a "filename" and have it written outside the fonts directory.
       if (!FontInstaller::isValidCpfontFilename(filename.c_str())) {
         LOG_ERR("WEB", "Invalid font filename: %s", filename.c_str());

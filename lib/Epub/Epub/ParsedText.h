@@ -24,6 +24,7 @@ class ParsedText {
   bool focusReadingEnabled;
   bool isNaturalAlign;
   bool hasRtlWord;
+  bool oom_ = false;  // sticky: a token/layout allocation was refused under low heap; block is incomplete
   std::vector<std::string> reorderedWordsScratch;
   std::vector<EpdFontFamily::Style> reorderedStylesScratch;
   std::vector<uint16_t> reorderedWidthsScratch;
@@ -60,10 +61,17 @@ class ParsedText {
   ~ParsedText() = default;
 
   void addWord(std::string word, EpdFontFamily::Style fontStyle, bool underline = false, bool attachToPrevious = false);
+
+  // Bold-body-text reading mode (set from settings by the reader before parsing; static
+  // because ParsedText is constructed deep inside the parser where settings can't reach).
+  static void setBoldBodyText(bool enabled);
   void setBlockStyle(const BlockStyle& blockStyle) { this->blockStyle = blockStyle; }
   BlockStyle& getBlockStyle() { return blockStyle; }
   size_t size() const { return words.size(); }
   bool isEmpty() const { return words.empty(); }
+  // True if a token append or layout allocation was refused under low heap. The
+  // block's content is then incomplete; the caller must abandon the build.
+  bool hasOom() const { return oom_; }
   void layoutAndExtractLines(const GfxRenderer& renderer, int fontId, uint16_t viewportWidth,
                              const std::function<void(std::shared_ptr<TextBlock>)>& processLine,
                              bool includeLastLine = true);

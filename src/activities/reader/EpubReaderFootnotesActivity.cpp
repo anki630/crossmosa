@@ -81,8 +81,7 @@ void EpubReaderFootnotesActivity::render(RenderLock&&) {
   }
 
   constexpr int lineHeight = 36;
-  const int screenWidth = renderer.getScreenWidth();
-  const int marginLeft = contentX + 20;
+  const int marginLeft = contentX + 28;  // 選取框內縮 8(同全機 hPaddingInSelection;v44)
 
   const int visibleCount = std::max(1, (renderer.getScreenHeight() - contentY) / lineHeight);
   if (selectedIndex < scrollOffset) scrollOffset = selectedIndex;
@@ -93,7 +92,10 @@ void EpubReaderFootnotesActivity::render(RenderLock&&) {
     const bool isSelected = (i == selectedIndex);
 
     if (isSelected) {
-      renderer.fillRect(0, y, screenWidth, lineHeight, true);
+      // v47 全機選取語言:全高豎條→圓角外遮罩修角→框(同 LyraTheme drawSelectionMarker 順序)
+      renderer.fillRect(contentX + 20, y, 6, lineHeight, true);
+      renderer.maskRoundedRectOutsideCorners(contentX + 20, y, contentWidth - 40, lineHeight, 6, Color::White);
+      renderer.drawRoundedRect(contentX + 20, y, contentWidth - 40, lineHeight, 2, 6, true);
     }
 
     // Show footnote number and abbreviated href
@@ -101,7 +103,7 @@ void EpubReaderFootnotesActivity::render(RenderLock&&) {
     if (label.empty()) {
       label = tr(STR_LINK);
     }
-    renderer.drawText(UI_10_FONT_ID, marginLeft, y + 4, label.c_str(), !isSelected);
+    renderer.drawText(UI_10_FONT_ID, marginLeft, y + 4, label.c_str(), true);
   }
 
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), "", "");

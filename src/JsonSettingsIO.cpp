@@ -5,8 +5,11 @@
 #include <Logging.h>
 #include <ObfuscationUtils.h>
 
+#include <algorithm>
 #include <cstring>
 #include <string>
+
+#include <PersistableStore.h>
 
 #include "BookmarkEntry.h"
 #include "CrossPointSettings.h"
@@ -15,6 +18,7 @@
 #include "RecentBooksStore.h"
 #include "SettingsList.h"
 #include "WifiCredentialStore.h"
+
 
 // Convert legacy settings.
 void applyLegacyStatusBarSettings(CrossPointSettings& settings) {
@@ -78,9 +82,7 @@ bool JsonSettingsIO::saveState(const CrossPointState& s, const char* path) {
   doc["lastSleepFromReader"] = s.lastSleepFromReader;
   doc["showBootScreen"] = s.showBootScreen;
 
-  String json;
-  serializeJson(doc, json);
-  return Storage.writeFile(path, json);
+  return PersistableStoreBase::writeDocAtomic(path, doc);
 }
 
 bool JsonSettingsIO::loadState(CrossPointState& s, const char* json) {
@@ -137,6 +139,13 @@ bool JsonSettingsIO::saveSettings(const CrossPointSettings& s, const char* path)
     }
   }
 
+  // v57:tiltPageTurn 必須手動存讀。SettingsList 只在 halTiltSensor.isAvailable() 為真時
+  // 才插入這個條目(SettingsList.h:249),而 saveSettings 是拿【全新的 JsonDocument】依清單
+  // 重建整份檔案 —— 所以只要某次開機 I2C 探測失敗、且那次又存了設定,這個 key 就從
+  // settings.json 永久消失。這是 v52 那個 critical 的同一家族(清單驅動的持久化,條目缺席
+  // 等於資料被抹掉),照該版的結論用手動條目處理。
+  doc["tiltPageTurn"] = s.tiltPageTurn;
+
   // Front button remap — managed by RemapFrontButtons sub-activity, not in SettingsList.
   doc["frontButtonBack"] = s.frontButtonBack;
   doc["frontButtonConfirm"] = s.frontButtonConfirm;
@@ -144,22 +153,30 @@ bool JsonSettingsIO::saveSettings(const CrossPointSettings& s, const char* path)
   doc["frontButtonRight"] = s.frontButtonRight;
   // Font family — uses dynamic getter/setter in SettingsList so the generic loop skips it.
   doc["fontFamily"] = s.fontFamily;
+  // UI theme — v52 起用 DynamicEnum(泛用迴圈跳過),手動存原值空間(LYRA=1/LYRA_3_COVERS=2;
+  // 舊值 0/3=已退役主題,載入時正規化)。漏了這條=主題選擇重開機就重置(v52 複查抓到的 critical)。
+  doc["uiTheme"] = s.uiTheme;
   // SD card font family name — not in SettingsList, save manually
   if (s.sdFontFamilyName[0] != '\0') {
     doc["sdFontFamilyName"] = s.sdFontFamilyName;
+  }
+  // Dictionary folder name — uses dynamic getter/setter in SettingsList, save manually
+  if (s.dictionaryName[0] != '\0') {
+    doc["dictionaryName"] = s.dictionaryName;
+  }
+
+  // BLE remote pairing — managed by BleRemotePairingActivity, not in SettingsList.
+  if (s.bleRemotePeerAddr[0] != '\0') {
+    doc["bleRemotePeerAddr"] = s.bleRemotePeerAddr;
+    doc["bleRemotePeerAddrType"] = s.bleRemotePeerAddrType;
+    doc["bleRemotePeerName"] = s.bleRemotePeerName;
   }
 
   // Language -- managed by LanguageSelectActivity, not in SettingsList.
   // Stored as ISO code string ("EN", "DE", ...) for stability across enum reorders.
   doc["language"] = (s.language < getLanguageCount()) ? LANGUAGE_CODES[s.language] : "EN";
 
-  // Language -- managed by LanguageSelectActivity, not in SettingsList.
-  // Stored as ISO code string ("EN", "DE", ...) for stability across enum reorders.
-  doc["language"] = (s.language < getLanguageCount()) ? LANGUAGE_CODES[s.language] : "EN";
-
-  String json;
-  serializeJson(doc, json);
-  return Storage.writeFile(path, json);
+  return PersistableStoreBase::writeDocAtomic(path, doc);
 }
 
 bool JsonSettingsIO::loadSettings(CrossPointSettings& s, const char* json, bool* needsResave) {
@@ -243,6 +260,16 @@ bool JsonSettingsIO::loadSettings(CrossPointSettings& s, const char* json, bool*
       clamp(doc["frontButtonRight"] | (uint8_t)S::FRONT_HW_RIGHT, S::FRONT_BUTTON_HARDWARE_COUNT, S::FRONT_HW_RIGHT);
   CrossPointSettings::validateFrontButtonMapping(s);
 
+  // v57:tiltPageTurn 手動載入(存檔端同理,見上)。清單在 IMU 缺席時不含這個條目,
+  // 泛用迴圈就讀不到它——即使 settings.json 裡有值也會被還原成預設。
+  s.tiltPageTurn = clamp(doc["tiltPageTurn"] | (uint8_t)S::TILT_OFF, S::TILT_PAGE_TURN_COUNT, S::TILT_OFF);
+
+  // UI theme — 手動載入+正規化(非 LYRA/LYRA_3_COVERS 的殘值(含退役的 Classic/RoundedRaff)→ Formosa)
+  const uint8_t storedUiTheme = doc["uiTheme"] | (uint8_t)CrossPointSettings::UI_THEME::LYRA;
+  s.uiTheme = (storedUiTheme == CrossPointSettings::UI_THEME::LYRA_3_COVERS)
+                  ? (uint8_t)CrossPointSettings::UI_THEME::LYRA_3_COVERS
+                  : (uint8_t)CrossPointSettings::UI_THEME::LYRA;
+
   // Font family — uses dynamic getter/setter in SettingsList so the generic loop skips it.
   const uint8_t storedFontFamily = doc["fontFamily"] | (uint8_t)0;
   s.fontFamily = clamp(storedFontFamily, CrossPointSettings::BUILTIN_FONT_COUNT, 0);
@@ -259,6 +286,20 @@ bool JsonSettingsIO::loadSettings(CrossPointSettings& s, const char* json, bool*
     if (needsResave) *needsResave = true;
   }
 
+  // Dictionary folder name — uses dynamic getter/setter in SettingsList, load manually
+  const char* dictName = doc["dictionaryName"] | "";
+  strncpy(s.dictionaryName, dictName, sizeof(s.dictionaryName) - 1);
+  s.dictionaryName[sizeof(s.dictionaryName) - 1] = '\0';
+
+  // BLE remote pairing (absent key -> stays unpaired/defaults).
+  const char* bleAddr = doc["bleRemotePeerAddr"] | "";
+  strncpy(s.bleRemotePeerAddr, bleAddr, sizeof(s.bleRemotePeerAddr) - 1);
+  s.bleRemotePeerAddr[sizeof(s.bleRemotePeerAddr) - 1] = '\0';
+  s.bleRemotePeerAddrType = doc["bleRemotePeerAddrType"] | (uint8_t)0;
+  const char* bleName = doc["bleRemotePeerName"] | "";
+  strncpy(s.bleRemotePeerName, bleName, sizeof(s.bleRemotePeerName) - 1);
+  s.bleRemotePeerName[sizeof(s.bleRemotePeerName) - 1] = '\0';
+
   // Language -- stored as code string for stability across enum reorders.
   if (doc["language"].is<const char*>()) {
     s.language = static_cast<uint8_t>(I18n::languageFromCode(doc["language"].as<const char*>()));
@@ -266,149 +307,6 @@ bool JsonSettingsIO::loadSettings(CrossPointSettings& s, const char* json, bool*
 
   LOG_DBG("CPS", "Settings loaded from file");
 
-  return true;
-}
-
-// ---- WifiCredentialStore ----
-
-bool JsonSettingsIO::saveWifi(const WifiCredentialStore& store, const char* path) {
-  JsonDocument doc;
-  doc["lastConnectedSsid"] = store.getLastConnectedSsid();
-
-  JsonArray arr = doc["credentials"].to<JsonArray>();
-  for (const auto& cred : store.getCredentials()) {
-    JsonObject obj = arr.add<JsonObject>();
-    obj["ssid"] = cred.ssid;
-    obj["password_obf"] = obfuscation::obfuscateToBase64(cred.password);
-  }
-
-  String json;
-  serializeJson(doc, json);
-  return Storage.writeFile(path, json);
-}
-
-bool JsonSettingsIO::loadWifi(WifiCredentialStore& store, const char* json, bool* needsResave) {
-  if (needsResave) *needsResave = false;
-  JsonDocument doc;
-  auto error = deserializeJson(doc, json);
-  if (error) {
-    LOG_ERR("WCS", "JSON parse error: %s", error.c_str());
-    return false;
-  }
-
-  store.lastConnectedSsid = doc["lastConnectedSsid"] | std::string("");
-
-  store.credentials.clear();
-  JsonArray arr = doc["credentials"].as<JsonArray>();
-  for (JsonObject obj : arr) {
-    if (store.credentials.size() >= store.MAX_NETWORKS) break;
-    WifiCredential cred;
-    cred.ssid = obj["ssid"] | std::string("");
-    bool ok = false;
-    cred.password = obfuscation::deobfuscateFromBase64(obj["password_obf"] | "", &ok);
-    if (!ok || cred.password.empty()) {
-      cred.password = obj["password"] | std::string("");
-      if (!cred.password.empty() && needsResave) *needsResave = true;
-    }
-    store.credentials.push_back(cred);
-  }
-
-  LOG_DBG("WCS", "Loaded %zu WiFi credentials from file", store.credentials.size());
-  return true;
-}
-
-// ---- RecentBooksStore ----
-
-bool JsonSettingsIO::saveRecentBooks(const RecentBooksStore& store, const char* path) {
-  JsonDocument doc;
-  JsonArray arr = doc["books"].to<JsonArray>();
-  for (const auto& book : store.getBooks()) {
-    JsonObject obj = arr.add<JsonObject>();
-    obj["path"] = book.path;
-    obj["title"] = book.title;
-    obj["author"] = book.author;
-    obj["coverBmpPath"] = book.coverBmpPath;
-  }
-
-  String json;
-  serializeJson(doc, json);
-  return Storage.writeFile(path, json);
-}
-
-bool JsonSettingsIO::loadRecentBooks(RecentBooksStore& store, const char* json) {
-  JsonDocument doc;
-  auto error = deserializeJson(doc, json);
-  if (error) {
-    LOG_ERR("RBS", "JSON parse error: %s", error.c_str());
-    return false;
-  }
-
-  store.recentBooks.clear();
-  JsonArray arr = doc["books"].as<JsonArray>();
-  for (JsonObject obj : arr) {
-    if (store.getCount() >= 10) break;
-    RecentBook book;
-    book.path = obj["path"] | std::string("");
-    book.title = obj["title"] | std::string("");
-    book.author = obj["author"] | std::string("");
-    book.coverBmpPath = obj["coverBmpPath"] | std::string("");
-    store.recentBooks.push_back(book);
-  }
-
-  LOG_DBG("RBS", "Recent books loaded from file (%d entries)", store.getCount());
-  return true;
-}
-
-// ---- OpdsServerStore ----
-// Follows the same save/load pattern as WifiCredentialStore above.
-// Passwords are XOR-obfuscated with the device MAC and base64-encoded ("password_obf" key).
-
-bool JsonSettingsIO::saveOpds(const OpdsServerStore& store, const char* path) {
-  JsonDocument doc;
-
-  JsonArray arr = doc["servers"].to<JsonArray>();
-  for (const auto& server : store.getServers()) {
-    JsonObject obj = arr.add<JsonObject>();
-    obj["name"] = server.name;
-    obj["url"] = server.url;
-    obj["username"] = server.username;
-    obj["password_obf"] = obfuscation::obfuscateToBase64(server.password);
-  }
-
-  String json;
-  serializeJson(doc, json);
-  return Storage.writeFile(path, json);
-}
-
-bool JsonSettingsIO::loadOpds(OpdsServerStore& store, const char* json, bool* needsResave) {
-  if (needsResave) *needsResave = false;
-  JsonDocument doc;
-  auto error = deserializeJson(doc, json);
-  if (error) {
-    LOG_ERR("OPS", "JSON parse error: %s", error.c_str());
-    return false;
-  }
-
-  store.servers.clear();
-  JsonArray arr = doc["servers"].as<JsonArray>();
-  for (JsonObject obj : arr) {
-    if (store.servers.size() >= OpdsServerStore::MAX_SERVERS) break;
-    OpdsServer server;
-    server.name = obj["name"] | std::string("");
-    server.url = obj["url"] | std::string("");
-    server.username = obj["username"] | std::string("");
-    // Try the obfuscated key first; fall back to plaintext "password" for
-    // files written before obfuscation was added (or hand-edited JSON).
-    bool ok = false;
-    server.password = obfuscation::deobfuscateFromBase64(obj["password_obf"] | "", &ok);
-    if (!ok || server.password.empty()) {
-      server.password = obj["password"] | std::string("");
-      if (!server.password.empty() && needsResave) *needsResave = true;
-    }
-    store.servers.push_back(std::move(server));
-  }
-
-  LOG_DBG("OPS", "Loaded %zu OPDS servers from file", store.servers.size());
   return true;
 }
 
@@ -428,9 +326,7 @@ bool JsonSettingsIO::saveBookmarks(const std::vector<BookmarkEntry>& bookmarks, 
     obj["pp"] = bookmark.computedChapterProgress;
   }
 
-  String json;
-  serializeJson(doc, json);
-  return Storage.writeFile(path, json);
+  return PersistableStoreBase::writeDocAtomic(path, doc);
 }
 
 bool JsonSettingsIO::loadBookmarks(std::vector<BookmarkEntry>& bookmarks, const char* json) {

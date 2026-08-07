@@ -93,6 +93,13 @@ void ClockSyncActivity::loop() {
     return;
   }
 
+  if (state == FAILED && mappedInput.wasPressed(MappedInputManager::Button::Confirm)) {
+    // 失敗態的「下一步」:確認鍵重試(下一輪 loop 走 SYNCING 分支重跑 runSync)
+    state = SYNCING;
+    requestUpdate();
+    return;
+  }
+
   if (mappedInput.wasPressed(MappedInputManager::Button::Back)) {
     finish();
   }
@@ -128,12 +135,12 @@ void ClockSyncActivity::render(RenderLock&&) {
       break;
     case FAILED:
       renderer.drawCenteredText(UI_12_FONT_ID, midY - 20, tr(STR_CLOCK_SYNC_FAIL), true, EpdFontFamily::BOLD);
-      renderer.drawCenteredText(UI_10_FONT_ID, midY + 10, tr(STR_CHECK_SERIAL_OUTPUT));
+      renderer.drawCenteredText(UI_10_FONT_ID, midY + 10, tr(STR_RETRY_OR_BACK_HINT));
       break;
   }
 
   if (state != SYNCING) {
-    const auto labels = mappedInput.mapLabels(tr(STR_BACK), "", "", "");
+    const auto labels = mappedInput.mapLabels(tr(STR_BACK), state == FAILED ? tr(STR_RETRY) : "", "", "");
     GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
   }
 

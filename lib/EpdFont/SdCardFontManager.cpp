@@ -1,6 +1,7 @@
 #include "SdCardFontManager.h"
 
 #include <EpdFontFamily.h>
+#include <FontCacheManager.h>
 #include <GfxRenderer.h>
 #include <Logging.h>
 #include <SdCardFont.h>
@@ -78,6 +79,10 @@ bool SdCardFontManager::loadFamily(const SdCardFontFamilyInfo& family, GfxRender
 }
 
 void SdCardFontManager::unloadAll(GfxRenderer& renderer) {
+  // v110:每一條卸載/換字型路徑都經過這裡(換字型家族/字級重載、以及三個 WiFi
+  // 點+OPDS 進場+讀圖救援的 unloadForLowMemory)——單一收斂點,失效 warm identity
+  // 讓下一次 prewarm 不會誤採用已經被換掉的字型內容。
+  if (auto* fcm = renderer.getFontCacheManager()) fcm->invalidateWarm();
   renderer.clearSdCardFonts();
   for (auto& lf : loaded_) {
     renderer.removeFont(lf.fontId);

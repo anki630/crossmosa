@@ -20,14 +20,18 @@ def load_image(path, width, height):
     if ext == '.svg':
         png_bytes = svg_to_png_bytes(path, width, height)
         img = Image.open(io.BytesIO(png_bytes))
+        img = img.convert('RGBA')
     else:
         img = Image.open(path)
         img = img.convert('RGBA')
         img = img.resize((width, height), Image.LANCZOS)
-        # Flatten alpha: paste on white background
-        background = Image.new('RGBA', img.size, (255, 255, 255, 255))
-        background.paste(img, mask=img.split()[3])
-        img = background
+    # Flatten alpha: paste on white background.
+    # Required for both branches: cairosvg emits transparent (0,0,0,0) for
+    # unpainted area, and RGBA->L drops alpha, which would turn the whole
+    # background into ink (0x00) instead of white (0xFF).
+    background = Image.new('RGBA', img.size, (255, 255, 255, 255))
+    background.paste(img, mask=img.split()[3])
+    img = background
     # Rotate 90 degrees counterclockwise
     img = img.rotate(90, expand=True)
     return img

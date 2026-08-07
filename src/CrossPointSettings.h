@@ -3,9 +3,12 @@
 
 #include <cstdint>
 #include <iosfwd>
+#include <mutex>
 
 class CrossPointSettings {
  private:
+  mutable std::mutex _mutex;
+
   // Private constructor for singleton
   CrossPointSettings() = default;
 
@@ -17,13 +20,17 @@ class CrossPointSettings {
   CrossPointSettings(const CrossPointSettings&) = delete;
   CrossPointSettings& operator=(const CrossPointSettings&) = delete;
 
+  // Access the settings mutex for protecting multi-field reads/writes from other cores.
+  // Callers must not re-enter SETTINGS methods that lock _mutex while holding it.
+  std::mutex& getMutex() const { return _mutex; }
+
   enum SLEEP_SCREEN_MODE {
     DARK = 0,
     LIGHT = 1,
     CUSTOM = 2,
     COVER = 3,
-    BLANK = 4,
-    COVER_CUSTOM = 5,
+    COVER_CUSTOM = 4,
+    BLANK = 5,
     QUICK_RESUME = 6,
     SLEEP_SCREEN_MODE_COUNT
   };
@@ -139,13 +146,14 @@ class CrossPointSettings {
   enum SHORT_PWRBTN { IGNORE = 0, SLEEP = 1, PAGE_TURN = 2, FORCE_REFRESH = 3, FOOTNOTES = 4, SHORT_PWRBTN_COUNT };
 
   // Long-press Confirm action while reading an EPUB. The setting cycles through these values.
-  // Persisted in settings.json by index: any new function (e.g. dictionary, bookmark) MUST use a
-  // value >= 2 and be appended at the END of the enumValues array in SettingsList.h, otherwise the
-  // stored indices shift and existing saves are silently misinterpreted.
+  // Persisted in settings.json by index under "longPressMenuFunction2": v27 removed the KOSync
+  // and Dictionary functions, and re-keying the JSON field sidesteps the index-shift hazard of
+  // the old 4-value "longPressMenuFunction" (which is now simply ignored on load, so every
+  // device falls back to the Disabled default once). Any new function MUST be appended at the
+  // END here and in the enumValues array in SettingsList.h, never inserted.
   enum LONG_PRESS_MENU_FUNCTION {
-    LP_MENU_KOSYNC = 0,
-    LP_MENU_DISABLED = 1,
-    LP_MENU_BOOKMARK = 2,
+    LP_MENU_DISABLED = 0,
+    LP_MENU_BOOKMARK = 1,
     LONG_PRESS_MENU_FUNCTION_COUNT
   };
 
@@ -231,10 +239,14 @@ class CrossPointSettings {
 
   // Reader screen margin settings
   uint8_t screenMargin = 5;
-  // OPDS browser settings
-  char opdsServerUrl[128] = "";
-  char opdsUsername[64] = "";
-  char opdsPassword[64] = "";
+  // OPDS download destination folder ("" = SD root). Global; edited from the
+  // OPDS server list. Persisted via a category-less SettingInfo::String in
+  // SettingsList.h, so it stays out of the on-device Settings screen.
+  char opdsDownloadFolder[64] = "";
+  // On-disk filename format for OPDS downloads (0=Author-Title default, 1=Title-Author,
+  // 2=Title). See OpdsFilenameFormat. Persisted via a category-less SettingInfo::Enum,
+  // edited from the OPDS server list; hidden from the on-device Settings screen.
+  uint8_t opdsFilenameFormat = 0;
   // Hide battery percentage
   uint8_t hideBatteryPercentage = HIDE_NEVER;
   // Long-press page turn button behavior
@@ -252,20 +264,37 @@ class CrossPointSettings {
   uint8_t embeddedStyle = 1;
   // Focus Reading - emphasizes the first part of words with bold
   uint8_t focusReadingEnabled = 0;
+  // Render body text with the bold face (e-ink legibility; SD fonts carry real Bold,
+  // Iansui degrades to regular via SdCardFont::resolveStyle). Baked into layout, so it
+  // participates in the section cache header.
+  uint8_t boldBodyText = 0;
   // SD card font family name (empty = use built-in fontFamily)
   char sdFontFamilyName[32] = "";
+  // Dictionary folder name under /dictionaries (empty = no dictionary)
+  char dictionaryName[32] = "";
   // Show hidden files/directories (starting with '.') in the file browser (0 = hidden, 1 = show)
   uint8_t showHiddenFiles = 0;
   // Remove a book from the Recent Books list when its End-of-Book screen is reached (0 = off, 1 = on)
   uint8_t removeReadBooksFromRecents = 0;
   // Move epub to /Read/ folder on SD card when finished (0 = disabled, 1 = enabled)
   uint8_t moveFinishedToReadFolder = 0;
+  // Short press Back goes to file browser instead of home (0 = disabled, 1 = enabled)
+  uint8_t backShortToFileBrowser = 0;
   // Image rendering mode in EPUB reader
   uint8_t imageRendering = IMAGES_DISPLAY;
   // Tilt-based page turning (X3 only — requires QMI8658 IMU)
   uint8_t tiltPageTurn = TILT_OFF;
-  // Language setting (Language enum index, default 0 = EN)
-  uint8_t language = 0;
+  // BLE page-turner remote pairing. The feature is ON iff bleRemotePeerAddr is
+  // non-empty (no separate enable toggle). Managed by BleRemotePairingActivity;
+  // not in SettingsList, so JsonSettingsIO carries manual save/load entries
+  // (v52/v57 rule: list-driven persistence erases absent entries).
+  char bleRemotePeerAddr[18] = "";  // "aa:bb:cc:dd:ee:ff" (lowercase)
+  uint8_t bleRemotePeerAddrType = 0;
+  char bleRemotePeerName[24] = "";
+  // Language setting (Language enum index). CrossMosa: default 1 = Traditional Chinese --
+  // the whole point of this fork; a saved settings.json still wins, so existing users keep
+  // whatever they chose.
+  uint8_t language = 1;
   // Quick Resume: keep current content visible with moon icon instead of showing a static sleep screen.
   uint8_t quickResumeSleepScreen = QUICK_RESUME_NEVER;
 

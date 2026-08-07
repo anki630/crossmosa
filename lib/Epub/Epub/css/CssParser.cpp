@@ -7,8 +7,10 @@
 #include <array>
 #include <cctype>
 #include <charconv>
+#include <cstdlib>
 #include <cstring>
 #include <string_view>
+#include <type_traits>
 
 namespace {
 
@@ -45,6 +47,17 @@ constexpr size_t MAX_RULES = 1500;
 // If below this threshold, we skip CSS to avoid display artifacts.
 constexpr size_t MIN_FREE_HEAP_FOR_CSS = 48 * 1024;
 
+// Stop growing the rule map once the largest CONTIGUOUS free block falls to this
+// floor. CSS rules stay resident for the entire chapter build; a pathological
+// stylesheet (seen: a 148KB Kobo KePub with a 83KB + 52KB pair) would otherwise
+// grow the map to tens of KB, leaving no contiguous block for ParsedText/layout,
+// which surfaces on-device as a "lowmem" build failure (the book won't open).
+// Capping here keeps the book readable at the cost of some styling. Ordinary
+// books have a few KB of CSS and finish long before the heap drops this far, so
+// they are unaffected. getMaxAllocHeap (not getFreeHeap) because the killer is
+// contiguous-block exhaustion, not total free bytes.
+constexpr size_t MIN_MAXBLOCK_FOR_CSS = 56 * 1024;
+
 // Maximum length for a single selector string
 // Prevents parsing of extremely long or malformed selectors
 constexpr size_t MAX_SELECTOR_LENGTH = 256;
@@ -65,13 +78,6 @@ constexpr char asciiToLower(const char c) { return (c >= 'A' && c <= 'Z') ? stat
 constexpr bool iequalsAscii(std::string_view value, std::string_view lowercaseKeyword) {
   return std::equal(value.begin(), value.end(), lowercaseKeyword.begin(), lowercaseKeyword.end(),
                     [](char a, char b) { return asciiToLower(a) == b; });
-}
-
-// Case-insensitive ASCII substring search. Only needed by text-decoration,
-// which accepts multi-value strings like "underline solid red".
-constexpr bool icontainsAscii(std::string_view value, std::string_view lowercaseKeyword) {
-  return std::search(value.begin(), value.end(), lowercaseKeyword.begin(), lowercaseKeyword.end(),
-                     [](char a, char b) { return asciiToLower(a) == b; }) != value.end();
 }
 
 // Walk s and invoke fn(token) for each non-empty run between delimiters.
@@ -110,14 +116,32 @@ constexpr size_t fnv1aMix(size_t hash, unsigned char byte) { return (hash ^ byte
 // Parse the entirety of s as a number into `out`. Accepts an optional leading
 // '+' (which std::from_chars rejects by spec) so callers can pass CSS-style
 // signed numbers without manual trimming. Returns false on empty input, a
-// non-numeric suffix, or any from_chars error.
+// non-numeric suffix, or any parse error.
+//
+// Floats go through strtof instead of std::from_chars: the float from_chars
+// specialization drags libstdc++'s floating_from_chars.o (~20KB flash) into the
+// image for this single call site. strtof accepts inputs from_chars would not
+// (leading whitespace, "inf"/"nan", hex floats), so the first character is
+// restricted to digit/dot/minus to keep the original strict semantics.
 template <typename T>
 bool tryParseNumber(std::string_view s, T& out) {
   const char* begin = s.data();
   const char* end = s.data() + s.size();
   if (begin < end && *begin == '+') ++begin;
-  const auto r = std::from_chars(begin, end, out);
-  return r.ec == std::errc{} && r.ptr == end;
+  if constexpr (std::is_floating_point_v<T>) {
+    char buf[32];
+    const size_t len = static_cast<size_t>(end - begin);
+    if (len == 0 || len >= sizeof(buf)) return false;
+    if (!(begin[0] == '.' || begin[0] == '-' || (begin[0] >= '0' && begin[0] <= '9'))) return false;
+    memcpy(buf, begin, len);
+    buf[len] = '\0';
+    char* parseEnd = nullptr;
+    out = static_cast<T>(strtof(buf, &parseEnd));
+    return parseEnd == buf + len;
+  } else {
+    const auto r = std::from_chars(begin, end, out);
+    return r.ec == std::errc{} && r.ptr == end;
+  }
 }
 
 // Collect up to 4 whitespace-separated tokens for a CSS edge-value shorthand
@@ -252,11 +276,20 @@ CssFontWeight CssParser::interpretFontWeight(std::string_view val) {
 }
 
 CssTextDecoration CssParser::interpretDecoration(std::string_view val) {
-  // text-decoration can have multiple space-separated values
-  if (icontainsAscii(val, "underline")) {
-    return CssTextDecoration::Underline;
-  }
-  return CssTextDecoration::None;
+  // text-decoration can have multiple space-separated values. Compare whole tokens
+  // so malformed values like "notunderline" do not accidentally enable a line.
+  CssTextDecoration result = CssTextDecoration::None;
+  bool explicitNone = false;
+  forEachDelimitedToken(val, isCssWhitespace, [&](const std::string_view token) {
+    if (iequalsAscii(token, "none")) {
+      explicitNone = true;
+    } else if (iequalsAscii(token, "underline")) {
+      result = result | CssTextDecoration::Underline;
+    } else if (iequalsAscii(token, "line-through")) {
+      result = result | CssTextDecoration::LineThrough;
+    }
+  });
+  return explicitNone ? CssTextDecoration::None : result;
 }
 
 CssLength CssParser::interpretLength(std::string_view val) {
@@ -428,10 +461,28 @@ CssStyle CssParser::parseDeclarations(std::string_view declBlock) {
 
 // Rule processing
 
+bool CssParser::cssHeapExhausted() {
+  if (heapFloorHit_) return true;
+  // The map only grows, so once the block is low it stays low: sample every 8th
+  // rule instead of calling the O(free-list) getMaxAllocHeap on every insert.
+  if ((rulesBySelector_.size() & 7) != 0) return false;
+  if (ESP.getMaxAllocHeap() < MIN_MAXBLOCK_FOR_CSS) {
+    heapFloorHit_ = true;
+    LOG_DBG("CSS", "maxblock below %uKB at %zu rules; stopping CSS accumulation to preserve build heap",
+            static_cast<unsigned>(MIN_MAXBLOCK_FOR_CSS / 1024), rulesBySelector_.size());
+    return true;
+  }
+  return false;
+}
+
 void CssParser::processRuleBlockWithStyle(std::string_view selectorGroup, const CssStyle& style) {
-  // Check if we've reached the rule limit before processing
-  if (rulesBySelector_.size() >= MAX_RULES) {
-    LOG_DBG("CSS", "Reached max rules limit (%zu), stopping CSS parsing", MAX_RULES);
+  // Skip rules that don't define any supported properties to save RAM.
+  if (!style.defined.anySet()) {
+    return;
+  }
+
+  // Check if we've reached the rule / heap limit before processing
+  if (rulesBySelector_.size() >= MAX_RULES || heapFloorHit_) {
     return;
   }
 
@@ -465,9 +516,8 @@ void CssParser::processRuleBlockWithStyle(std::string_view selectorGroup, const 
         constexpr std::string_view kUnsupportedSelectorChars = "+>[:#~* ";
         if (sel.find_first_of(kUnsupportedSelectorChars) != std::string_view::npos) return;
 
-        // Skip if this would exceed the rule limit
-        if (rulesBySelector_.size() >= MAX_RULES) {
-          LOG_DBG("CSS", "Reached max rules limit, stopping selector processing");
+        // Skip if this would exceed the rule limit or starve the chapter build
+        if (rulesBySelector_.size() >= MAX_RULES || cssHeapExhausted()) {
           limitReached = true;
           return;
         }
@@ -801,6 +851,9 @@ bool CssParser::loadFromCache() {
     return false;
   }
 
+  // Size the bucket array up front to avoid incremental rehashes while loading rules.
+  rulesBySelector_.reserve(ruleCount);
+
   auto hasRemainingBytes = [&file](const size_t neededBytes) -> bool {
     return static_cast<size_t>(file.available()) >= neededBytes;
   };
@@ -812,6 +865,15 @@ bool CssParser::loadFromCache() {
 
   // Read each rule
   for (uint16_t i = 0; i < ruleCount; ++i) {
+    // A cache written before the heap-floor cap (or on a device with more RAM)
+    // can hold more rules than fit alongside this build. Stop here and keep the
+    // rules loaded so far — partial styling, but the book opens. Not a failure,
+    // so no clear(): fall through to the success return below.
+    if (cssHeapExhausted()) {
+      LOG_DBG("CSS", "Stopped loading CSS cache at %u/%u rules (heap floor)", i, ruleCount);
+      break;
+    }
+
     // Read selector string
     uint16_t selectorLen = 0;
     if (!hasRemainingBytes(sizeof(selectorLen))) {
@@ -868,7 +930,7 @@ bool CssParser::loadFromCache() {
       rulesBySelector_.clear();
       return false;
     }
-    style.textDecoration = static_cast<CssTextDecoration>(enumVal);
+    style.textDecoration = static_cast<CssTextDecoration>(enumVal & CSS_TEXT_DECORATION_MASK);
 
     if (file.read(&enumVal, 1) != 1) {
       rulesBySelector_.clear();
@@ -941,6 +1003,7 @@ bool CssParser::loadFromCache() {
     rulesBySelector_[selector] = style;
   }
 
-  LOG_DBG("CSS", "Loaded %u rules from cache", ruleCount);
+  // Actual size may be below ruleCount if the heap-floor cap stopped the load early.
+  LOG_DBG("CSS", "Loaded %zu/%u rules from cache", rulesBySelector_.size(), ruleCount);
   return true;
 }

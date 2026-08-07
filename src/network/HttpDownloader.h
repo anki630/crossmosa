@@ -26,6 +26,13 @@ class HttpDownloader {
   /**
    * Fetch text content from a URL with optional credentials.
    */
+  // v101: last failure reason, for callers that must report it somewhere the user can read.
+  // Every failure path in here already calls LOG_ERR -- but LOG_ERR goes to the serial port,
+  // and this device has none, so an OPDS "failed to fetch feed" has always reached the screen
+  // with its reason discarded. Set on failure, read by the caller, never cleared on success
+  // (the caller only looks at it after a false return).
+  static char lastError[80];
+
   static bool fetchUrl(const std::string& url, std::string& outContent, const std::string& username = "",
                        const std::string& password = "");
 

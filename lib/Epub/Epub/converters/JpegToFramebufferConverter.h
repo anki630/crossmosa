@@ -18,4 +18,5 @@ class JpegToFramebufferConverter final : public ImageToFramebufferDecoder {
 
   static bool supportsFormat(const std::string& extension);
   const char* getFormatName() const override { return "JPEG"; }
+  size_t minContiguousHeapForDecode() const override { return 28 * 1024; }  // v54:JPEG 解碼器單塊 ~20KB + 8KB 餘裕
 };

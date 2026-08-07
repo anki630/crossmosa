@@ -1,0 +1,24 @@
+{
+  "name": "smb2",
+  "version": "3.0.1",
+  "build": {
+    "srcDir": "lib",
+    "includeDir": "include",
+    "srcFilter": [
+      "+<*>",
+      "-<ps2/>",
+      "-<dreamcast/>"
+    ],
+    "flags": [
+      "-DHAVE_CONFIG_H",
+      "-D_U_=\"'__attribute__((unused))'\"",
+      "-I$PROJECT_LIBDEPS_DIR/../../lib/smb2/include",
+      "-I$PROJECT_LIBDEPS_DIR/../../lib/smb2/include/smb2",
+      "-I$PROJECT_LIBDEPS_DIR/../../lib/smb2/include/esp",
+      "-I$PROJECT_LIBDEPS_DIR/../../lib/smb2/lib",
+      "-Wno-unused-parameter",
+      "-Wno-sign-compare",
+      "-Wno-discarded-qualifiers"
+    ]
+  }
+}

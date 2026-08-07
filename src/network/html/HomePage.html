@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>CrossPoint Reader</title>
+    <title>CrossMosa Reader</title>
     <style>
       :root {
         --font-color: #333;
@@ -98,7 +98,7 @@
     </style>
   </head>
   <body>
-    <h1>📚 CrossPoint Reader</h1>
+    <h1>📚 CrossMosa Reader</h1>
 
     <div class="nav-links">
       <a href="/" class="active">Home</a>
@@ -109,6 +109,10 @@
 
     <div class="card">
       <h2>Device Status</h2>
+      <div class="info-row">
+        <span class="label">Serial #</span>
+        <span class="value" id="serial"></span>
+      </div>
       <div class="info-row">
         <span class="label">Version</span>
         <span class="value" id="version"></span>
@@ -129,7 +133,7 @@
 
     <div class="card">
       <p style="text-align: center; color: #95a5a6; margin: 0">
-        CrossPoint E-Reader • Open Source
+        CrossMosa E-Reader • Open Source
       </p>
     </div>
   <script>
@@ -141,6 +145,7 @@
         }
         const data = await response.json();
         document.getElementById('version').textContent = data.version || 'N/A';
+        document.getElementById('serial').textContent = data.serial;
         document.getElementById('ip-address').textContent = data.ip || 'N/A';
         document.getElementById('free-heap').textContent = data.freeHeap
           ? data.freeHeap.toLocaleString() + ' bytes'

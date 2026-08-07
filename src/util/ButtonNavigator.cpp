@@ -122,3 +122,21 @@ int ButtonNavigator::previousPageIndex(const int currentIndex, const int totalIt
 
   return lastPageIndex * itemsPerPage;
 }
+
+int ButtonNavigator::nextPageIndexClamped(const int currentIndex, const int totalItems, const int itemsPerPage) {
+  if (totalItems <= 0 || itemsPerPage <= 0) return 0;
+
+  // Advance to the start of the next page; if that overshoots the list, stop at the last item
+  // (the bottom) instead of wrapping to the top -- PageDown semantics.
+  const int nextPageStart = (currentIndex / itemsPerPage + 1) * itemsPerPage;
+  return nextPageStart >= totalItems ? totalItems - 1 : nextPageStart;
+}
+
+int ButtonNavigator::previousPageIndexClamped(const int currentIndex, const int totalItems, const int itemsPerPage) {
+  if (totalItems <= 0 || itemsPerPage <= 0) return 0;
+
+  // Retreat to the start of the previous page; on the first page stay at the top (index 0)
+  // instead of wrapping to the end -- PageUp semantics.
+  const int currentPageIndex = currentIndex / itemsPerPage;
+  return currentPageIndex > 0 ? (currentPageIndex - 1) * itemsPerPage : 0;
+}

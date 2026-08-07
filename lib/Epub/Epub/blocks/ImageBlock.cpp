@@ -1,9 +1,12 @@
 #include "ImageBlock.h"
 
+#include <Arduino.h>  // ESP.getMaxAllocHeap / getFreeHeap
 #include <FontCacheManager.h>
 #include <GfxRenderer.h>
 #include <Logging.h>
 #include <Serialization.h>
+
+#include <cstdlib>
 
 #include "Epub/converters/DirectPixelWriter.h"
 #include "Epub/converters/ImageDecoderFactory.h"
@@ -29,6 +32,67 @@ std::string getCachePath(const std::string& imagePath) {
   return imagePath + ".pxc";
 }
 
+bool readValidCacheHeader(HalFile& cacheFile, const int expectedWidth, const int expectedHeight, uint16_t& cachedWidth,
+                          uint16_t& cachedHeight) {
+  if (cacheFile.read(&cachedWidth, 2) != 2 || cacheFile.read(&cachedHeight, 2) != 2) {
+    return false;
+  }
+
+  const int widthDiff = abs(cachedWidth - expectedWidth);
+  const int heightDiff = abs(cachedHeight - expectedHeight);
+  if (widthDiff > 1 || heightDiff > 1) {
+    return false;
+  }
+
+  const size_t bytesPerRow = (cachedWidth + 3) / 4;
+  const size_t expectedSize = 4 + bytesPerRow * cachedHeight;
+  return cacheFile.size() >= expectedSize;
+}
+
+// Pages are deserialized afresh on each visit. Keep a bounded, allocation-free
+// record so an image that failed renders its placeholder directly for the rest
+// of the reader session instead of paying another placeholder refresh and
+// decode. The reader clears this on entry so transient memory/storage failures
+// are retried.
+constexpr size_t MAX_SESSION_IMAGE_FAILURES = 16;
+uint64_t failedImageHashes[MAX_SESSION_IMAGE_FAILURES];
+size_t failedImageCount = 0;
+
+// Low-memory relief hooks (installed by the reader). When free heap is below this
+// before a first-time decode, reliefFn is invoked to free RAM (e.g. unload the SD
+// reading font) so the decoder can allocate, then restoreFn reloads it.
+//
+// v54:總 free 那一側的額外餘裕。解碼器自身也有一道總量門檻(PNG 60KB / JPEG 36KB),
+// 若只看連續塊,總量落在中間帶時 relief 不觸發、卻被解碼器自己擋下 → 圖片變佔位框且
+// 整個 session 不再重試。用「該解碼器的連續需求 + 此餘裕」把窗口補起來,兩種解碼器
+// 各自得到貼合的值(PNG 64KB / JPEG 40KB),而不是共用一個對 JPEG 過度保守的固定值。
+constexpr size_t IMAGE_DECODE_TOTAL_HEAP_MARGIN = 12 * 1024;
+ImageBlock::MemoryReliefFn g_imageReliefFn = nullptr;
+ImageBlock::MemoryReliefFn g_imageRestoreFn = nullptr;
+void* g_imageReliefCtx = nullptr;
+
+uint64_t imagePathHash(const std::string& path) {
+  uint64_t hash = 14695981039346656037ull;
+  for (const char c : path) {
+    hash ^= static_cast<uint8_t>(c);
+    hash *= 1099511628211ull;
+  }
+  return hash;
+}
+
+bool imageFailedThisSession(const std::string& path) {
+  const uint64_t hash = imagePathHash(path);
+  for (size_t i = 0; i < failedImageCount; i++) {
+    if (failedImageHashes[i] == hash) return true;
+  }
+  return false;
+}
+
+void rememberImageFailure(const std::string& path) {
+  if (failedImageCount == MAX_SESSION_IMAGE_FAILURES || imageFailedThisSession(path)) return;
+  failedImageHashes[failedImageCount++] = imagePathHash(path);
+}
+
 bool renderFromCache(GfxRenderer& renderer, const std::string& cachePath, int x, int y, int expectedWidth,
                      int expectedHeight) {
   HalFile cacheFile;
@@ -37,16 +101,8 @@ bool renderFromCache(GfxRenderer& renderer, const std::string& cachePath, int x,
   }
 
   uint16_t cachedWidth, cachedHeight;
-  if (cacheFile.read(&cachedWidth, 2) != 2 || cacheFile.read(&cachedHeight, 2) != 2) {
-    return false;
-  }
-
-  // Verify dimensions are close (allow 1 pixel tolerance for rounding differences)
-  int widthDiff = abs(cachedWidth - expectedWidth);
-  int heightDiff = abs(cachedHeight - expectedHeight);
-  if (widthDiff > 1 || heightDiff > 1) {
-    LOG_ERR("IMG", "Cache dimension mismatch: %dx%d vs %dx%d", cachedWidth, cachedHeight, expectedWidth,
-            expectedHeight);
+  if (!readValidCacheHeader(cacheFile, expectedWidth, expectedHeight, cachedWidth, cachedHeight)) {
+    LOG_ERR("IMG", "Invalid image cache: %s", cachePath.c_str());
     return false;
   }
 
@@ -119,6 +175,34 @@ bool renderFromCache(GfxRenderer& renderer, const std::string& cachePath, int x,
 
 }  // namespace
 
+bool ImageBlock::hasValidCache() const {
+  const auto cachePath = getCachePath(imagePath);
+  HalFile cacheFile;
+  if (!Storage.openFileForRead("IMG", cachePath, cacheFile)) {
+    return false;
+  }
+
+  uint16_t cachedWidth, cachedHeight;
+  return readValidCacheHeader(cacheFile, width, height, cachedWidth, cachedHeight);
+}
+
+bool ImageBlock::needsDecode() const { return !imageFailedThisSession(imagePath) && !hasValidCache(); }
+
+void ImageBlock::clearSessionRenderFailures() { failedImageCount = 0; }
+
+void ImageBlock::setMemoryReliefHooks(MemoryReliefFn reliefFn, MemoryReliefFn restoreFn, void* ctx) {
+  g_imageReliefFn = reliefFn;
+  g_imageRestoreFn = restoreFn;
+  g_imageReliefCtx = ctx;
+}
+
+void ImageBlock::renderPlaceholder(GfxRenderer& renderer, const int x, const int y) const {
+  renderer.fillRect(x, y, width, height, true);
+  if (width > 2 && height > 2) {
+    renderer.fillRect(x + 1, y + 1, width - 2, height - 2, false);
+  }
+}
+
 void ImageBlock::render(GfxRenderer& renderer, const int x, const int y) {
   // The font-prewarm scan pass only accumulates glyphs; an image contributes
   // none, and its DirectPixelWriter output bypasses the renderer's scan-mode
@@ -150,6 +234,11 @@ void ImageBlock::render(GfxRenderer& renderer, const int x, const int y) {
     return;
   }
 
+  if (imageFailedThisSession(imagePath)) {
+    renderPlaceholder(renderer, x, y);
+    return;
+  }
+
   // Try to render from cache first
   std::string cachePath = getCachePath(imagePath);
   if (renderFromCache(renderer, cachePath, x, y, width, height)) {
@@ -161,6 +250,8 @@ void ImageBlock::render(GfxRenderer& renderer, const int x, const int y) {
   HalFile file;
   if (!Storage.openFileForRead("IMG", imagePath, file)) {
     LOG_ERR("IMG", "Image file not found: %s", imagePath.c_str());
+    rememberImageFailure(imagePath);
+    renderPlaceholder(renderer, x, y);
     return;
   }
   size_t fileSize = file.size();
@@ -168,6 +259,8 @@ void ImageBlock::render(GfxRenderer& renderer, const int x, const int y) {
 
   if (fileSize == 0) {
     LOG_ERR("IMG", "Image file is empty: %s", imagePath.c_str());
+    rememberImageFailure(imagePath);
+    renderPlaceholder(renderer, x, y);
     return;
   }
 
@@ -187,14 +280,37 @@ void ImageBlock::render(GfxRenderer& renderer, const int x, const int y) {
   ImageToFramebufferDecoder* decoder = ImageDecoderFactory::getDecoder(imagePath);
   if (!decoder) {
     LOG_ERR("IMG", "No decoder found for image: %s", imagePath.c_str());
+    rememberImageFailure(imagePath);
+    renderPlaceholder(renderer, x, y);
     return;
   }
 
   LOG_DBG("IMG", "Using %s decoder", decoder->getFormatName());
 
+  // First-time decode allocates the ~44 KB PNG / ~20 KB JPEG decoder. Under heap
+  // pressure that allocation fails and the image would fall back to a placeholder.
+  // Give the reader a chance to free RAM (unload the SD reading font) for just this
+  // decode, then restore it. Scoped tightly around the decode so no text drawing
+  // happens while the font is unloaded; the reader's fontId comes from SETTINGS and
+  // is unchanged by the reload. Once decoded the pixel cache is written, so later
+  // views take the cheap renderFromCache path and never reach here again.
+  // v54:雙判準,兩個都要看——
+  // ①【最大連續塊】:解碼器要的是一整塊連續空間(PNG ~44KB / JPEG ~20KB),總量足夠但沒有
+  //   夠大連續塊時,舊的「總 free」判斷會誤放行(專案鐵律,見 CLAUDE.md「硬限制 2」)。
+  //   門檻由各解碼器自報,共用一個保守值會讓 JPEG 頁白拆字型快取。
+  // ②【總 free】:解碼器自己內部還有一道總量門檻(PNG 60KB / JPEG 36KB),若只看連續塊,
+  //   總量落在中間帶時 relief 不觸發、卻被解碼器自己的門檻擋下 → 圖片變佔位框且整個
+  //   session 不再重試。保留一個總量下限把這個窗口補起來。
+  const size_t needContiguous = decoder->minContiguousHeapForDecode();
+  const bool relieve = g_imageReliefFn && (ESP.getMaxAllocHeap() < needContiguous ||
+                                           ESP.getFreeHeap() < needContiguous + IMAGE_DECODE_TOTAL_HEAP_MARGIN);
+  if (relieve) g_imageReliefFn(g_imageReliefCtx);
   bool success = decoder->decodeToFramebuffer(imagePath, renderer, config);
+  if (relieve && g_imageRestoreFn) g_imageRestoreFn(g_imageReliefCtx);
   if (!success) {
     LOG_ERR("IMG", "Failed to decode image: %s", imagePath.c_str());
+    rememberImageFailure(imagePath);
+    renderPlaceholder(renderer, x, y);
     return;
   }
 

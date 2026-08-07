@@ -21,6 +21,9 @@ struct MenuResult {
   int action = -1;
   uint8_t orientation = 0;
   uint8_t pageTurnOption = 0;
+  uint8_t fontSize = 0;
+  uint8_t lineSpacing = 0;
+  uint8_t boldBody = 0;
 };
 
 struct ChapterResult {
@@ -43,6 +46,10 @@ struct PageResult {
 struct ProgressChangeResult {
   int spineIndex = 0;
   int page = 0;
+  int totalPages = 0;
+  std::string xpath;
+  float percentage = 0.0f;
+  bool hasSavedProgress = false;
 };
 
 enum class NetworkMode;

@@ -1,40 +1,76 @@
 #include "RecentBooksStore.h"
+#include <DataDir.h>
 
 #include <Epub.h>
 #include <FsHelpers.h>
 #include <HalStorage.h>
-#include <JsonSettingsIO.h>
 #include <Logging.h>
-#include <Serialization.h>
-#include <Xtc.h>
 
 #include <algorithm>
 #include <iterator>
 
-namespace {
-constexpr uint8_t RECENT_BOOKS_FILE_VERSION = 3;
-constexpr char RECENT_BOOKS_FILE_BIN[] = "/.crosspoint/recent.bin";
-constexpr char RECENT_BOOKS_FILE_JSON[] = "/.crosspoint/recent.json";
-constexpr char RECENT_BOOKS_FILE_BAK[] = "/.crosspoint/recent.bin.bak";
-constexpr int MAX_RECENT_BOOKS = 10;
-}  // namespace
+void RecentBooksStore::toJson(JsonDocument& doc) const {
+  JsonArray arr = doc["books"].to<JsonArray>();
+  for (const auto& book : recentBooks) {
+    JsonObject obj = arr.add<JsonObject>();
+    obj["path"] = book.path;
+    obj["title"] = book.title;
+    obj["author"] = book.author;
+    obj["coverBmpPath"] = book.coverBmpPath;
+    obj["progress"] = book.progressPercent;
+  }
+}
 
-RecentBooksStore RecentBooksStore::instance;
+bool RecentBooksStore::fromJson(JsonVariantConst doc) {
+  // Tolerate a missing/invalid 'books' key (treat as empty list); only a
+  // JSON parse error is fatal. A null JsonArray iterates zero times.
+  recentBooks.clear();
+  JsonArrayConst arr = doc["books"].as<JsonArrayConst>();
+  recentBooks.reserve(std::min(arr.size(), static_cast<size_t>(MAX_RECENT_BOOKS)));
+  for (JsonObjectConst obj : arr) {
+    if (getCount() >= MAX_RECENT_BOOKS) break;
+    RecentBook book;
+    book.path = obj["path"] | "";
+    // XTC support was removed; drop stale entries so the list heals itself on first load
+    if (FsHelpers::hasXtcExtension(book.path)) continue;
+    book.title = obj["title"] | "";
+    book.author = obj["author"] | "";
+    book.coverBmpPath = obj["coverBmpPath"] | "";
+    // v36: heal cover paths persisted before the /.crosspoint -> /.crossmosa
+    // migration (stored verbatim; the thumb file itself moved with the
+    // rename). Same self-heal-on-load pattern as the .xtc drop above. No-op
+    // when still running on the legacy dir after a failed migration.
+    constexpr const char* LEGACY_PREFIX = "/.crosspoint/";
+    constexpr size_t LEGACY_PREFIX_LEN = 13;
+    if (book.coverBmpPath.rfind(LEGACY_PREFIX, 0) == 0) {
+      book.coverBmpPath = std::string(DataDir::path()) + "/" + book.coverBmpPath.substr(LEGACY_PREFIX_LEN);
+    }
+    book.progressPercent = obj["progress"] | 0;
+    recentBooks.push_back(book);
+  }
+
+  LOG_DBG("RBS", "Recent books loaded from file (%d entries)", getCount());
+  return true;
+}
 
 void RecentBooksStore::addBook(const std::string& path, const std::string& title, const std::string& author,
                                const std::string& coverBmpPath) {
   // Drop stale entries first so a new add can't evict a valid book in their stead.
   pruneMissing();
 
-  // Remove existing entry if present
+  // Remove existing entry if present. Progress belongs to the book, not the entry:
+  // carry it across the move-to-front reinsert, or every reopen would zero the stored
+  // percent (and any exit path that skips setProgress would then lose it for good).
+  uint8_t previousProgress = 0;
   auto it =
       std::find_if(recentBooks.begin(), recentBooks.end(), [&](const RecentBook& book) { return book.path == path; });
   if (it != recentBooks.end()) {
+    previousProgress = it->progressPercent;
     recentBooks.erase(it);
   }
 
   // Add to front
-  recentBooks.insert(recentBooks.begin(), {path, title, author, coverBmpPath});
+  recentBooks.insert(recentBooks.begin(), {path, title, author, coverBmpPath, previousProgress});
 
   // Trim to max size
   if (recentBooks.size() > MAX_RECENT_BOOKS) {
@@ -53,6 +89,15 @@ void RecentBooksStore::updateBook(const std::string& path, const std::string& ti
     book.title = title;
     book.author = author;
     book.coverBmpPath = coverBmpPath;
+    saveToFile();
+  }
+}
+
+void RecentBooksStore::setProgress(const std::string& path, const uint8_t progressPercent) {
+  auto it =
+      std::find_if(recentBooks.begin(), recentBooks.end(), [&](const RecentBook& book) { return book.path == path; });
+  if (it != recentBooks.end() && it->progressPercent != progressPercent) {
+    it->progressPercent = progressPercent;
     saveToFile();
   }
 }
@@ -92,11 +137,6 @@ bool RecentBooksStore::pruneMissing() {
   return recentBooks.size() != before;
 }
 
-bool RecentBooksStore::saveToFile() const {
-  Storage.mkdir("/.crosspoint");
-  return JsonSettingsIO::saveRecentBooks(*this, RECENT_BOOKS_FILE_JSON);
-}
-
 RecentBook RecentBooksStore::getDataFromBook(std::string path) const {
   std::string lastBookFileName = "";
   const size_t lastSlash = path.find_last_of('/');
@@ -110,109 +150,11 @@ RecentBook RecentBooksStore::getDataFromBook(std::string path) const {
   // Use buildIfMissing=false to avoid heavy epub loading on boot; getTitle()/getAuthor() may be
   // blank until the book is opened, and entries with missing title are omitted from recent list.
   if (FsHelpers::hasEpubExtension(lastBookFileName)) {
-    Epub epub(path, "/.crosspoint");
+    Epub epub(path, DataDir::path());
     epub.load(false, true);
     return RecentBook{path, epub.getTitle(), epub.getAuthor(), epub.getThumbBmpPath()};
-  } else if (FsHelpers::hasXtcExtension(lastBookFileName)) {
-    // Handle XTC file
-    Xtc xtc(path, "/.crosspoint");
-    if (xtc.load()) {
-      return RecentBook{path, xtc.getTitle(), xtc.getAuthor(), xtc.getThumbBmpPath()};
-    }
   } else if (FsHelpers::hasTxtExtension(lastBookFileName) || FsHelpers::hasMarkdownExtension(lastBookFileName)) {
     return RecentBook{path, lastBookFileName, "", ""};
   }
   return RecentBook{path, "", "", ""};
-}
-
-bool RecentBooksStore::loadFromFile() {
-  // Try JSON first
-  if (Storage.exists(RECENT_BOOKS_FILE_JSON)) {
-    String json = Storage.readFile(RECENT_BOOKS_FILE_JSON);
-    if (!json.isEmpty()) {
-      return JsonSettingsIO::loadRecentBooks(*this, json.c_str());
-    }
-  }
-
-  // Fall back to binary migration
-  if (Storage.exists(RECENT_BOOKS_FILE_BIN)) {
-    if (loadFromBinaryFile()) {
-      saveToFile();
-      Storage.rename(RECENT_BOOKS_FILE_BIN, RECENT_BOOKS_FILE_BAK);
-      LOG_DBG("RBS", "Migrated recent.bin to recent.json");
-      return true;
-    }
-  }
-
-  return false;
-}
-
-bool RecentBooksStore::loadFromBinaryFile() {
-  HalFile inputFile;
-  if (!Storage.openFileForRead("RBS", RECENT_BOOKS_FILE_BIN, inputFile)) {
-    return false;
-  }
-
-  uint8_t version;
-  serialization::readPod(inputFile, version);
-  if (version == 1 || version == 2) {
-    // Old version, just read paths
-    uint8_t count;
-    serialization::readPod(inputFile, count);
-    recentBooks.clear();
-    recentBooks.reserve(count);
-    for (uint8_t i = 0; i < count; i++) {
-      std::string path;
-      serialization::readString(inputFile, path);
-
-      // load book to get missing data
-      RecentBook book = getDataFromBook(path);
-      if (book.title.empty() && book.author.empty() && version == 2) {
-        // Fall back to loading what we can from the store
-        std::string title, author;
-        serialization::readString(inputFile, title);
-        serialization::readString(inputFile, author);
-        recentBooks.push_back({path, title, author, ""});
-      } else {
-        recentBooks.push_back(book);
-      }
-    }
-  } else if (version == 3) {
-    uint8_t count;
-    serialization::readPod(inputFile, count);
-
-    recentBooks.clear();
-    recentBooks.reserve(count);
-    uint8_t omitted = 0;
-
-    for (uint8_t i = 0; i < count; i++) {
-      std::string path, title, author, coverBmpPath;
-      serialization::readString(inputFile, path);
-      serialization::readString(inputFile, title);
-      serialization::readString(inputFile, author);
-      serialization::readString(inputFile, coverBmpPath);
-
-      // Omit books with missing title (e.g. saved before metadata was available)
-      if (title.empty()) {
-        omitted++;
-        continue;
-      }
-
-      recentBooks.push_back({path, title, author, coverBmpPath});
-    }
-
-    if (omitted > 0) {
-      // Explicitly close() file before saveToFile() rewrites the same file
-      inputFile.close();
-      saveToFile();
-      LOG_DBG("RBS", "Omitted %u recent book(s) with missing title", omitted);
-      return true;
-    }
-  } else {
-    LOG_ERR("RBS", "Deserialization failed: Unknown version %u", version);
-    return false;
-  }
-
-  LOG_DBG("RBS", "Recent books loaded from binary file (%d entries)", static_cast<int>(recentBooks.size()));
-  return true;
 }

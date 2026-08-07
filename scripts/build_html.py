@@ -1,8 +1,29 @@
+import io
 import os
 import re
 import gzip
 
 SRC_DIR = "src"
+
+# Reproducible builds: the gzip container carries an MTIME field, and gzip.compress()
+# fills it with the wall clock. That single field made every build of an unchanged tree
+# produce a different firmware.bin (5 assets x 4 bytes, which then perturbs the ELF hash
+# and the image checksum). Stamp a fixed value instead, honouring SOURCE_DATE_EPOCH so
+# a packager can pin it to their own release timestamp.
+# Reference: https://reproducible-builds.org/docs/source-date-epoch/
+GZIP_MTIME = int(os.environ.get("SOURCE_DATE_EPOCH", "0"))
+
+
+def gzip_compress_deterministic(data: bytes, compresslevel: int = 9) -> bytes:
+    """gzip.compress() with a fixed MTIME and no embedded filename."""
+    buf = io.BytesIO()
+    # filename="" keeps the FNAME field out of the header; without it GzipFile would
+    # derive a name from fileobj and embed it, reintroducing build-path dependence.
+    with gzip.GzipFile(
+        filename="", mode="wb", fileobj=buf, compresslevel=compresslevel, mtime=GZIP_MTIME
+    ) as gz:
+        gz.write(data)
+    return buf.getvalue()
 
 def minify_html(html: str) -> str:
     # Tags where whitespace should be preserved
@@ -61,7 +82,7 @@ for root, _, files in os.walk(SRC_DIR):
 
             # Compress with gzip (compresslevel 9 is maximum compression)
             # IMPORTANT: we don't use brotli because Firefox doesn't support brotli with insecured context (only supported on HTTPS)
-            compressed = gzip.compress(processed.encode('utf-8'), compresslevel=9)
+            compressed = gzip_compress_deterministic(processed.encode('utf-8'), compresslevel=9)
 
             # Create valid C identifier from filename
             # Use appropriate suffix based on file type

@@ -1,4 +1,5 @@
 #include "Bitmap.h"
+#include <new>  // v57:std::nothrow
 
 #include <cstdlib>
 #include <cstring>
@@ -167,10 +168,21 @@ BmpReaderError Bitmap::parseHeaders() {
   //  - High-color + dithering disabled → simple quantization (no error diffusion)
   const bool highColor = !nativePalette;
   if (highColor && dithering) {
+    // v57:建構子內的誤差列陣列已改 nothrow(BitmapHelpers.h),所以「物件建出來」不等於可用;
+    // 沒問 ok() 就會在 packPixel 解參考 null。配不到就把指標留 null——下方 packPixel 的
+    // else 分支本來就是「沒有抖動器時走簡單量化」的優雅退化路徑,正好接住。
     if (USE_ATKINSON) {
-      atkinsonDitherer = new AtkinsonDitherer(width);
+      atkinsonDitherer = new (std::nothrow) AtkinsonDitherer(width);
+      if (atkinsonDitherer && !atkinsonDitherer->ok()) {
+        delete atkinsonDitherer;
+        atkinsonDitherer = nullptr;
+      }
     } else {
-      fsDitherer = new FloydSteinbergDitherer(width);
+      fsDitherer = new (std::nothrow) FloydSteinbergDitherer(width);
+      if (fsDitherer && !fsDitherer->ok()) {
+        delete fsDitherer;
+        fsDitherer = nullptr;
+      }
     }
   }
 
