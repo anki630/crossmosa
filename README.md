@@ -199,6 +199,24 @@ SD 卡根目錄
 
 ![X3 正在讀《歡迎使用 CrossMosa》](docs/promo/photo-guide.jpg)
 
+### 疑難排解:按了組合鍵,出現「更新中」,半分鐘後退回、沒有更新
+
+代表更新器有啟動,是後半段沒過。依序檢查:
+
+1. **檔案大小是否恰為 5,969,824 bytes**(v1.0.0)——九成的問題在這:
+   下載不完整、瀏覽器存成 `update (1).bin`、Windows 隱藏副檔名變成
+   `update.bin.bin`、或誤放了整個 zip 沒解壓。檔案要放在 SD 卡**最外層**。
+2. 檔案正確仍失敗 → 接電腦走**網頁 flasher**(方法 B)。瀏覽器的序列裝置
+   選單看不到機器,先換 USB 埠、不要經 Hub、換 Chrome/Edge。
+3. 怎樣都看不到裝置 → 你的機器可能是**出廠鎖定批次**(部分第三方通路),
+   連 SD 更新器都只收原廠簽章的映像。正規解法:用官方的
+   [Xteink Unlocker](https://crosspointreader.com/unlock) 先裝上**官方 CrossPoint**,
+   再用它的「Settings → SD Card Firmware Update」選本專案的 `update.bin` 換裝——
+   CrossMosa 裝上後自帶 SD 救援模式,隨時能刷回官方 CrossPoint,退路完整。
+
+遇到第 3 種情況,請順手回報你的原廠韌體版本號(開一張 issue 即可)——
+我們在收集「哪些批次會擋 SD 首刷」的對照資料,幫到後面的人。
+
 ### 日後更新(已刷過 CrossMosa 之後)
 
 從第二次起連讀卡機都可以免了。[Release](../../releases) 頁有**單獨一顆
