@@ -200,6 +200,9 @@ GUIDE_EPUB="$ROOT/guide/歡迎使用CrossMosa.epub"
 [ -f "$GUIDE_EPUB" ] || die "missing $GUIDE_EPUB — build it with: python3 guide/build-guide-epub.py"
 cp "$GUIDE_EPUB" "$FW_STAGE/"
 cp "$GUIDE_EPUB" "$OUT_DIR/"
+# Bare update.bin as its own asset too: existing users upgrade phone-only
+# (download -> web upload -> Settings -> SD firmware update) with no unzip step.
+cp "$FW_STAGE/update.bin" "$OUT_DIR/update.bin"
 say "guide: $(basename "$GUIDE_EPUB") ($(stat -c%s "$GUIDE_EPUB") bytes, in the firmware zip and standalone)"
 
 cat > "$FW_STAGE/刷機說明.txt" <<EOF
