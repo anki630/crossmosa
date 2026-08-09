@@ -201,8 +201,9 @@ SD 卡根目錄
 
 ### 日後更新(已刷過 CrossMosa 之後)
 
-從第二次起連讀卡機都可以免了:手機或電腦開瀏覽器連上機器的網頁傳輸,
-把新版 `update.bin` 上傳進 SD 卡(或照舊用讀卡機)→
+從第二次起連讀卡機都可以免了。[Release](../../releases) 頁有**單獨一顆
+`update.bin`**(跟 zip 裡同一顆,免解壓)——手機直接下載,開瀏覽器連上
+機器的網頁傳輸上傳進 SD 卡(或照舊用讀卡機)→
 **設定 → 系統 → SD 卡韌體更新** → 選檔案。韌體會先完整驗證映像檔才寫入,
 比 USB 直刷更保險,USB 被鎖的機器也能用。
 萬一哪天機器開不了機:關機 → 按住左側「上一頁」鍵 → 按電源,直接進同一個
@@ -464,7 +465,9 @@ renders as boxes (□□□□)**.
    reboots in ~5 minutes (X3 only — the X4 stock firmware lacks this combo). Or use the web
    flasher at https://crosspointreader.com/#flash-tools (X3 → Custom .bin), or
    `esptool.py --chip esp32c3 write_flash 0x10000 update.bin`.
-   Later updates never need a computer: **Settings → System → SD Card Firmware Update**, or
+   Later updates never need a computer: grab the standalone `update.bin` from Releases
+   (no unzip), upload it via the device's web transfer page, then
+   **Settings → System → SD Card Firmware Update** — or
    the rescue combo (power off, hold the left side button, press power) straight into the
    SD firmware picker.
 2. **Copy the fonts** from `crossmosa-1.0.0-sd-fonts.zip` into `/.fonts/` on the SD card,
