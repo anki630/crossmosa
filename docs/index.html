@@ -30,6 +30,12 @@
   .hero .devices img { aspect-ratio:2400/1038; width:100%; }
   .ba img, .trio img { aspect-ratio:3/4; width:100%; object-fit:contain; }
   .wp-grid img { aspect-ratio:2/3; width:100%; object-fit:cover; }
+  /* 產品照是白底 JPEG(白色機器擺在白背景上,邊緣是連續的 → 去背會咬進機身或留灰邊,
+     所以不能做成透明 PNG)。改用 multiply:純白像素會【剛好】取得頁面底色 var(--paper),
+     其餘像素只暗約 4/255(肉眼無差),陰影與邊緣全部保留。
+     好處是完全不動圖檔——同一批圖也用在 README,GitHub 的白底不受影響。
+     ⚠️ 深色區的名畫牆(.wp-grid img)刻意【不】套,multiply 會把它們壓成近黑。 */
+  .hero .devices img, .ba img, .trio img { mix-blend-mode: multiply; }
   sup.fn { font-size:.62em; color:var(--gray); }
   sup.fn a { text-decoration:none; }
 
