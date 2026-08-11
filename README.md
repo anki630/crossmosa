@@ -6,6 +6,15 @@
 
 給 Xteink X3 的繁體中文系統——免費、開源,刷一次機就有。
 
+**快速前往:**
+[**這一版更新了什麼**](CHANGELOG.md) ·
+[安裝](#安裝) ·
+[主要特色](#主要特色相對原版) ·
+[字集限制](#ui-字型的字集限制請先讀這段) ·
+[與原版的差異](#與原版-crosspoint-的關係) ·
+[下載](https://github.com/anki630/crossmosa/releases/latest) ·
+[English](#crossmosa-english)
+
 ![CrossMosa 實機照:全繁中主畫面、明體內文、名畫待機](docs/promo/hero-photo.jpg)
 
 你的 X3,書名還是一排 □□□ 嗎?
@@ -416,6 +425,14 @@ core 裡,不是本專案能改的),兩次建置就會差幾十個位元組。設
 ![CrossMosa — a Formosan black bear and a crescent moon](docs/promo/logo.png)
 
 # CrossMosa (English)
+
+**Jump to:**
+[**What's new**](CHANGELOG.md) ·
+[Install](#install--you-must-do-both-steps) ·
+[Highlights](#highlights-vs-upstream) ·
+[Character-set limits](#ui-character-set-limits-please-read) ·
+[Vs upstream](#relationship-to-upstream) ·
+[Download](https://github.com/anki630/crossmosa/releases/latest)
 
 **Finally, your X3 can read Traditional Chinese properly.**
 

@@ -50,6 +50,11 @@
   .dark .btn.primary { background:#fff; color:var(--ink); }
   .hero .devices { max-width:1000px; margin:0 auto; }
   .note { font-size:.85rem; color:var(--gray); margin-top:14px; }
+  .quicknav { display:flex; flex-wrap:wrap; justify-content:center; gap:8px 10px; margin:0 0 44px; }
+  .quicknav a { font-size:.9rem; color:var(--gray); text-decoration:none; background:#fff;
+                border:1px solid var(--line); border-radius:999px; padding:7px 15px; transition:.15s; }
+  .quicknav a:hover { color:var(--ink); border-color:var(--gray); }
+  .quicknav a.hi { color:var(--ink); border-color:var(--ink); font-weight:600; }
 
   .ba { display:grid; grid-template-columns:1fr 1fr; gap:44px; max-width:780px; margin:0 auto; }
   .ba figure { text-align:center; }
@@ -131,12 +136,20 @@
     <a class="btn primary" href="https://github.com/anki630/crossmosa/releases/latest">下載 CrossMosa 1.1</a>
     <a class="btn ghost" href="#install">怎麼安裝？三步驟 →</a>
   </div>
-  <p class="note" style="margin:0 0 52px">免費開源・機器免接電腦・隨時刷得回去</p>
+  <p class="note" style="margin:0 0 26px">免費開源・機器免接電腦・隨時刷得回去</p>
+  <nav class="quicknav" aria-label="頁面快速導覽">
+    <a class="hi" href="#whatsnew">這一版更新了什麼</a>
+    <a href="#install">怎麼安裝</a>
+    <a href="#features">功能</a>
+    <a href="#fonts">字型</a>
+    <a href="#faq">常見問題</a>
+    <a href="https://github.com/anki630/crossmosa/blob/main/CHANGELOG.md">完整變更紀錄 ↗</a>
+  </nav>
   <div class="devices"><img src="promo/hero-photo.jpg" alt="CrossMosa 實機：全繁中主畫面、明體內文、名畫待機"></div>
   <p class="note">實際拍攝。</p>
 </header>
 
-<section>
+<section id="before-after">
   <div class="wrap">
     <p class="kicker">BEFORE / AFTER</p>
     <h2>你買它是為了讀中文書，結果打開是這樣</h2>
@@ -154,7 +167,7 @@
   </div>
 </section>
 
-<section>
+<section id="fonts">
   <div class="wrap">
     <p class="kicker">TYPEFACES</p>
     <h2>換一套字，換一種心情</h2>
@@ -176,7 +189,7 @@
   </div>
 </section>
 
-<section class="dark">
+<section id="gallery" class="dark">
   <div class="wrap">
     <p class="kicker">SLEEP GALLERY</p>
     <h2>口袋裡的小美術館</h2>
@@ -202,7 +215,7 @@
   </div>
 </section>
 
-<section>
+<section id="features">
   <div class="wrap">
     <p class="kicker">EXPERIENCE</p>
     <h2>一路順到底</h2>
@@ -218,7 +231,7 @@
   </div>
 </section>
 
-<section>
+<section id="story">
   <div class="wrap">
     <p class="kicker">STORY</p>
     <h2>為什麼會有這個版本</h2>
@@ -233,7 +246,7 @@
   </div>
 </section>
 
-<section>
+<section id="whatsnew">
   <div class="wrap">
     <p class="kicker">WHAT&#39;S NEW</p>
     <h2>這一版更新了什麼</h2>
@@ -305,7 +318,7 @@
   </div>
 </section>
 
-<section>
+<section id="faq">
   <div class="wrap">
     <p class="kicker">FAQ</p>
     <h2>猶豫的話，先看這裡</h2>
@@ -321,7 +334,7 @@
   </div>
 </section>
 
-<section>
+<section id="support">
   <div class="wrap support">
     <p class="kicker">SUPPORT</p>
     <h2>如果它讓你的 X3 變好用了</h2>
