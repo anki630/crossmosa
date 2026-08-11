@@ -736,6 +736,34 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                 // Apply top margin from container block
                 self->currentPageNextY += imageMarginTop;
 
+                // v123:把圖縮到「這一頁真正剩下的高度」。
+                //
+                // 上面的縮放是拿【整頁高度】(viewportHeight)當上限算的,但圖會被放在
+                // currentPageNextY —— 一個已經被上緣邊距推下來的位置。而換頁條件帶著
+                // `!currentPage->elements.empty()` 這道守衛(否則放不下的圖會換到新頁還是
+                // 放不下,無限換頁),所以在【空頁】上放不下時:不換頁、也不縮圖,就這樣
+                // 以溢出的座標排下去。
+                //
+                // 後果不是「圖被切掉」而是「整張圖消失」:ImageBlock::render 開頭的邊界檢查
+                // 會靜默 return(實測 512x712@8,93 對上 528x792,超出 13 px),
+                // 而 renderPlaceholder 沒有那道檢查、照畫不誤 —— 使用者看到的是一個整頁的
+                // 空白框,而 diag.log 在 v122 加上儀器之前一個字都沒有。
+                //
+                // 縮完之後 y+height 必定落在螢幕內:displayHeight ≤ viewportHeight −
+                // currentPageNextY,而畫面座標 y = orientedMarginTop + currentPageNextY,
+                // 故 y + displayHeight ≤ orientedMarginTop + viewportHeight
+                // = screenHeight − orientedMarginBottom ≤ screenHeight。
+                //
+                // 放得下的圖完全不受影響(條件不成立 = no-op),所以這不會動到任何目前
+                // 畫得出來的版面。
+                const int availableHeight = static_cast<int>(self->viewportHeight) - self->currentPageNextY;
+                if (availableHeight > 0 && displayHeight > availableHeight) {
+                  const int shrunkWidth = static_cast<int>(
+                      static_cast<float>(displayWidth) * (static_cast<float>(availableHeight) / displayHeight) + 0.5f);
+                  displayHeight = availableHeight;
+                  displayWidth = std::max(1, shrunkWidth);
+                }
+
                 // Create ImageBlock and add to page
                 std::shared_ptr<ImageBlock> imageBlock(
                     new (std::nothrow) ImageBlock(cachedImagePath, displayWidth, displayHeight));
@@ -770,6 +798,15 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                 return;
               } else {
                 LOG_ERR("EHP", "Failed to get image dimensions");
+                // v126:這條路是在【版面階段】把整張圖從頁面移除(v24 記錄過的失敗形狀:
+                // 「連框都沒有、圖整個從排版消失」),而它此前只有 LOG_ERR —— 在這台沒有
+                // 序列埠的機器上等於丟掉,所以「圖不見了」在 diag.log 上完全查不到。
+                // 只掛路徑、【不覆寫階段碼】:解碼器自己回報的階段更精確(例如尺寸超限是
+                // FAIL_BAD_DIM,並把寬度放進 code)。由閱讀器那一層讀走寫進 diag.log。
+                if (ImageBlock::lastFailPath[0] == '\0') {
+                  snprintf(ImageBlock::lastFailPath, sizeof(ImageBlock::lastFailPath), "layout-drop %s",
+                           cachedImagePath.c_str());
+                }
                 Storage.remove(cachedImagePath.c_str());
               }
             } else {

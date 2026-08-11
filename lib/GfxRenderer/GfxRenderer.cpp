@@ -1929,6 +1929,33 @@ int GfxRenderer::getKerning(const int fontId, const uint32_t leftCp, const uint3
   return fp4::toPixel(kernFP);                                           // snap 4.4 fixed-point to nearest pixel
 }
 
+// v118:見標頭的說明。這段是 getTextAdvanceX 的 SD 快路徑迴圈體逐行搬過來的單碼位版本 ——
+// 兩者的取值順序、fallback、上下標折半必須永遠一致,否則單趟掃描算出來的寬度會與繪製不符。
+int32_t GfxRenderer::getCodepointAdvanceFP(const int fontId, const uint32_t cp, EpdFontFamily::Style style) const {
+  const auto sdIt = sdCardFonts_.find(fontId);
+  if (sdIt == sdCardFonts_.end() || !sdIt->second->hasAdvanceTable()) {
+    return kAdvanceUnavailable;
+  }
+  const auto fontIt = fontMap.find(fontId);
+  if (fontIt == fontMap.end()) {
+    return kAdvanceUnavailable;
+  }
+  // RTL 的母音符號在 drawText 是零寬疊加,不佔寬度(與 getTextAdvanceX 同一條規則)。
+  if (BidiUtils::isTransparentMark(cp)) {
+    return 0;
+  }
+  const uint8_t styleIdx = resolveSdCardStyle(*sdIt->second, style);
+  int32_t advFP = sdIt->second->getAdvance(cp, styleIdx);
+  if (advFP == 0 && !utf8IsCombiningMark(cp)) {
+    // getAdvance 回 0 的語意是「不在那張 768 筆的執行期快取表裡」,不是「字型沒有這個字」。
+    // 這條 fallback 會做一次 SD 往返(約 1.8ms),所以呼叫端應先 ensureSdCardFontReady。
+    const EpdGlyph* glyph = fontIt->second.getGlyph(cp, style);
+    advFP = glyph ? glyph->advanceX : 0;
+  }
+  const bool isSupSub = (style & (EpdFontFamily::SUP | EpdFontFamily::SUB)) != 0;
+  return isSupSub ? (advFP + 1) / 2 : advFP;
+}
+
 int GfxRenderer::getTextAdvanceX(const int fontId, const char* text, EpdFontFamily::Style style) const {
   // Measure the exact codepoint stream drawText renders: bidi-reordered and
   // Arabic-shaped (contextual presentation forms, Lam-Alef collapse).

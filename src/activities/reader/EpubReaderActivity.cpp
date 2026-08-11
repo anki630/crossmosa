@@ -38,6 +38,9 @@
 #include "MappedInputManager.h"
 #include "ProgressMapper.h"
 #include "QrDisplayActivity.h"
+#include <Epub/blocks/ImageBlock.h>
+#include <Epub/converters/ImageToFramebufferDecoder.h>
+
 #include "ReaderUtils.h"
 #include "RecentBooksStore.h"
 #include "SdCardFontSystem.h"
@@ -1460,6 +1463,28 @@ void EpubReaderActivity::render(RenderLock&& lock) {
     // 慢頁(>2 秒)無條件記一筆:4-5 秒那種卡頓通常發生在進書的第 1 次 render,
     // 只靠每 10 次的取樣永遠抓不到它的細節(v53 複查指出)。
     const bool slowPage = renderMs > 2000;
+
+    // v123:這段【不能】待在下面的取樣區塊裡。v122 把它放在每 10 頁才跑一次的分支中,
+    // 而 lastFailPath 只有一格 —— 取樣之間發生的失敗會被後來的失敗覆寫。實測 diag122 兩行
+    // IMGFAIL 內容完全相同(都是整頁大圖),第一章那個小圖的失敗就這樣消失了。
+    // 現在每次 render 都讀走,一次失敗一行,不會互相蓋掉。
+    //
+    // 儀器本身:圖片失敗時把「哪一張、哪一個階段、解碼器自己的錯誤碼」寫出來。這台機器
+    // 沒有序列埠,LOG_ERR 等於丟掉,而失敗出口有十幾個。lib 不能反向依賴 src/util/DiagLog,
+    // 所以由這一層讀走並清空。
+    if (ImageBlock::lastFailPath[0] != '\0') {
+      DiagLog::line("IMGFAIL stage=%d code=%d path=%s", ImageToFramebufferDecoder::lastFailStage,
+                    ImageToFramebufferDecoder::lastFailCode, ImageBlock::lastFailPath);
+      ImageBlock::lastFailPath[0] = '\0';
+      ImageToFramebufferDecoder::noteFailure(ImageToFramebufferDecoder::FAIL_NONE, 0);
+    }
+    // v125:成功畫下去的圖也要留下幾何 —— diag124 零 IMGFAIL 卻回報「圖出不來」,
+    // 而「畫出來了但被縮成一條線」在失敗碼上完全看不見(v123 的縮放修正有這個可能)。
+    if (ImageBlock::lastDrawGeom[0] != '\0') {
+      DiagLog::line("IMGDRAW %s", ImageBlock::lastDrawGeom);
+      ImageBlock::lastDrawGeom[0] = '\0';
+    }
+
     if (++diagPageCounter % 10 == 0 || slowPage) {
       // 情境欄位:讓「4 秒到底是全刷還是圖片還是排版」下次不用靠推導
       DiagLog::line(
@@ -1483,6 +1508,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
       } else {
         DiagLog::line("PAGE n=%u render_ms=%lu peak_render_ms=%u aa=%u (builtin font)", diagPageCounter,
                       static_cast<unsigned long>(renderMs), diagMaxRenderMs, SETTINGS.textAntiAliasing);
+
       }
       DiagLog::mem("page-turn");
       // v55:第一次取樣拍一張「穩態池佈局」當基準,之後只在【新出現降級】時再拍一次。

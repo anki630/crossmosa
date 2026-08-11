@@ -2,6 +2,9 @@
 
 #include <Logging.h>
 
+int ImageToFramebufferDecoder::lastFailStage = 0;
+int ImageToFramebufferDecoder::lastFailCode = 0;
+
 bool ImageToFramebufferDecoder::validateImageDimensions(int width, int height, const std::string& format) {
   if (width * height > MAX_SOURCE_PIXELS) {
     LOG_ERR("IMG", "Image too large (%dx%d = %d pixels %s), max supported: %d pixels", width, height, width * height,

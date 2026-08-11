@@ -450,6 +450,22 @@ void LyraTheme::drawSideButtonHints(const GfxRenderer& renderer, const char* top
   }
 }
 
+void LyraTheme::drawEmptyCoverPlaceholder(GfxRenderer& renderer, const int x, const int y, const int w, const int h) {
+  constexpr int kSpineInset = 12;     // 書脊線距左緣
+  constexpr int kSpineEndInset = 10;  // 上下留白;必須 > cornerRadius(6),否則線頭會被圓角遮罩咬掉
+  constexpr int kIconSize = 32;
+
+  // 太窄或太矮就不畫書脊(三卡版面的封面框比較窄),圖示仍照常置中。
+  if (h > 2 * kSpineEndInset && w > kSpineInset + kIconSize) {
+    renderer.fillRect(x + kSpineInset, y + kSpineEndInset, 1, h - 2 * kSpineEndInset, true);
+    // 置中於書脊【右側】的版面區,而不是整個框 —— 對整個框置中會看起來偏左。
+    renderer.drawIcon(CoverIcon, x + kSpineInset + (w - kSpineInset - kIconSize) / 2, y + (h - kIconSize) / 2,
+                      kIconSize);
+    return;
+  }
+  renderer.drawIcon(CoverIcon, x + (w - kIconSize) / 2, y + (h - kIconSize) / 2, kIconSize);
+}
+
 void LyraTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect, const std::vector<RecentBook>& recentBooks,
                                     const int selectorIndex, bool& coverRendered, bool& coverBufferStored,
                                     bool& bufferRestored, std::function<bool()> storeCoverBuffer) const {
@@ -510,11 +526,8 @@ void LyraTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect, const std:
 
       // Draw either way(先把方角內容 mask 成圓角,再畫圓角外框;仿 RoundedRaffTheme 封面慣例)
       if (!hasCover) {
-        // Render empty cover
-        renderer.fillRect(tileX + hPaddingInSelection,
-                          tileY + hPaddingInSelection + (LyraMetrics::values.homeCoverHeight / 3), coverWidth,
-                          2 * LyraMetrics::values.homeCoverHeight / 3, true);
-        renderer.drawIcon(CoverIcon, tileX + hPaddingInSelection + 24, tileY + hPaddingInSelection + 24, 32);
+        drawEmptyCoverPlaceholder(renderer, tileX + hPaddingInSelection, tileY + hPaddingInSelection, coverWidth,
+                                  LyraMetrics::values.homeCoverHeight);
       }
       renderer.maskRoundedRectOutsideCorners(tileX + hPaddingInSelection, tileY + hPaddingInSelection, coverWidth,
                                              LyraMetrics::values.homeCoverHeight, cornerRadius, Color::White);

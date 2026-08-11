@@ -29,7 +29,12 @@ namespace {
 // v33: built-in italic/bold-italic faces removed (aliased to regular/bold); caches
 //      laid out with italic metrics re-layout once.
 // v34: boldBodyText added to the header (bold-reading mode is baked into layout).
-constexpr uint8_t SECTION_FILE_VERSION = 34;
+// v123:34 → 35。圖片溢出頁面時的縮放修正改變了【排版結果】,而已排好的 section 快取
+// 不會自己重排 —— 不 bump 的話,那種「已經被固化成溢出座標」的章節照樣不顯示圖,
+// 看起來就像沒修好。bump 讓每本書下次開時自動重排一次(進度 progress.bin 不受影響)。
+// v126:35 → 36。放寬 MAX_SOURCE_PIXELS 之後,原本被版面階段丟掉的圖要重新進版面,
+// 而已排好的 section 快取記的是「這一頁沒有圖」—— 不 bump 就等於沒修。
+constexpr uint8_t SECTION_FILE_VERSION = 36;
 // Written into the version field while a build is in progress; patched to
 // SECTION_FILE_VERSION only when the build is finalized. An abandoned /
 // crash-interrupted .bin therefore carries version 0, which loadSectionFile rejects

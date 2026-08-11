@@ -175,15 +175,34 @@ bool Txt::readContent(uint8_t* buffer, size_t offset, size_t length) const {
     return false;
   }
 
-  HalFile file;
-  if (!Storage.openFileForRead("TXT", filepath, file)) {
-    return false;
+  // v120:常駐檔柄(見標頭)。第一次用時開檔,之後只 seek + read。
+  if (!sharedFileOpen_) {
+    if (!Storage.openFileForRead("TXT", filepath, sharedFile_)) {
+      return false;
+    }
+    sharedFileOpen_ = true;
   }
 
-  if (!file.seek(offset)) {
-    return false;
+  if (!sharedFile_.seek(offset)) {
+    // seek 失敗多半代表檔柄壞了(卡被抽換、檔案被改寫)。關掉重開一次再試,
+    // 失敗才真的放棄 —— 不要讓一次暫時性錯誤把整本書變成讀不到。
+    sharedFile_.close();
+    sharedFileOpen_ = false;
+    if (!Storage.openFileForRead("TXT", filepath, sharedFile_)) {
+      return false;
+    }
+    sharedFileOpen_ = true;
+    if (!sharedFile_.seek(offset)) {
+      return false;
+    }
   }
 
-  size_t bytesRead = file.read(buffer, length);
-  return bytesRead > 0;
+  return sharedFile_.read(buffer, length) > 0;
+}
+
+Txt::~Txt() {
+  if (sharedFileOpen_) {
+    sharedFile_.close();
+    sharedFileOpen_ = false;
+  }
 }

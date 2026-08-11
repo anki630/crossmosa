@@ -33,3 +33,6 @@ managed_components/
 dependencies.lock
 sdkconfig.defaults
 sdkconfig.*
+
+# scripts/mk-release.sh 的輸出(韌體與資產,不進版控)
+release-out/

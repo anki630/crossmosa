@@ -91,6 +91,17 @@ constexpr ThemeMetrics values = {.batteryWidth = 16,
 
 class LyraTheme : public BaseTheme {
  public:
+  // v123:無封面書籍的佔位封面,Lyra 與 Lyra3Covers 共用。
+  //
+  // 上游的畫法是「下三分之二整塊 fillRect 塗黑 + 左上角一個 32px 圖示」——那塊實心黑
+  // 是主畫面上唯一的大面積黑,而 v50 立下的原則是「e-ink 的 UI 不塗滿背景」。v113 只換掉了
+  // 圖示的圖案,沒動它。改成書脊語言:靠左一條細豎線 + 置中的品牌圖示。一條線就足以讀成
+  // 「一本書」,墨量幾乎為零,與 v44-v51 建立的安靜選取語言一致。
+  //
+  // 做成共用 helper 而不是各自複製:兩個主題各有一份自繪複本,而「漏網的自繪站點」
+  // 在 v44 已經付過一次代價(註腳清單)。
+  static void drawEmptyCoverPlaceholder(GfxRenderer& renderer, int x, int y, int w, int h);
+
   // Component drawing methods
   void fillBatteryIcon(const GfxRenderer& renderer, Rect rect, uint16_t percentage) const override;
   void drawHeader(const GfxRenderer& renderer, Rect rect, const char* title, const char* subtitle) const override;

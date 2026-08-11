@@ -242,7 +242,16 @@ class BaseTheme {
   void drawStatusBar(GfxRenderer& renderer, const float bookProgress, const int currentPage, const int pageCount,
                      std::string title, const int paddingBottom = 0, const int textYOffset = 0,
                      const bool fillMargin = true, const bool isPageBookmarked = false,
-                     const bool pageCountEstimated = false) const;
+                     const bool pageCountEstimated = false,
+                     // v118:百分比的小數位數。純文字閱讀器改用位元組位移當進度之後,長文的
+                     // 整數百分比幾乎不動(745KB / 2,225 頁的書一頁只佔 0.045%),兩位小數才
+                     // 有回饋。預設 0 讓 EPUB / XTC / 設定頁三個既有呼叫點逐位元組不受影響。
+                     const int progressDecimals = 0,
+                     // v122:只抑制【這一次呼叫】的頁數欄位,不動 SETTINGS.statusBarChapterPageCount。
+                     // 純文字閱讀器用它:txt 的頁碼是外推的估計值,對長文沒有意義,而位元組百分比
+                     // 才是真的。刻意不改設定值 —— 那個旗標同時參與狀態列【高度】的判斷
+                     // (statusBarTextLaneVisible),關掉它會讓 viewport 變高、每頁行數改變。
+                     const bool hidePageCount = false) const;
   void drawHelpText(const GfxRenderer& renderer, Rect rect, const char* label) const;
   virtual void drawTextField(const GfxRenderer& renderer, Rect rect, const int textWidth, bool cursorMode = false,
                              int contentStartX = 0, int contentWidth = 0) const;

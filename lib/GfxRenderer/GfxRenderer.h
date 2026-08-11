@@ -251,6 +251,18 @@ class GfxRenderer {
   /// Returns the kerning adjustment between two adjacent codepoints.
   int getKerning(int fontId, uint32_t leftCp, uint32_t rightCp, EpdFontFamily::Style style) const;
   int getTextAdvanceX(int fontId, const char* text, EpdFontFamily::Style style) const;
+
+  // v118:單一碼位的 advance,12.4 定點(1/16 像素)。
+  //
+  // 存在的理由:純文字閱讀器的斷行原本是「每退一個候選就整條重量一次」,對中文是平方級
+  // (實測每頁 406,342 次字寬查詢)。單趟前向掃描需要「逐字取寬、自己累加」,而累加必須在
+  // 定點域進行、最後才捨入一次 —— 這樣才與 getTextAdvanceX 的結果逐位元組相同。
+  //
+  // ⚠️ 只在「SD 字型且 advance 表已建立」時有效,其餘一律回傳 kAdvanceUnavailable。
+  // 內建字型有字距對與連字,寬度【不是】逐字可加的(相鄰字對會互相影響),所以那條路徑
+  // 沒有正確的逐碼位答案,呼叫端必須退回整條量寬的舊做法。
+  static constexpr int32_t kAdvanceUnavailable = -1;
+  int32_t getCodepointAdvanceFP(int fontId, uint32_t cp, EpdFontFamily::Style style) const;
   int getFontAscenderSize(int fontId) const;
   int getLineHeight(int fontId) const;
   std::string truncatedText(int fontId, const char* text, int maxWidth,

@@ -362,12 +362,14 @@ bool JpegToFramebufferConverter::getDimensionsStatic(const std::string& imagePat
   // rationale). The pixel decode still uses JPEGDEC and its own heap check.
   HalFile file;
   if (!Storage.openFileForRead("JPG", imagePath, file)) {
+    noteFailure(FAIL_OPEN_DIM, 0);
     LOG_ERR("JPG", "Failed to open JPEG for dimensions: %s", imagePath.c_str());
     return false;
   }
 
   uint8_t soi[2];
   if (file.read(soi, 2) != 2 || soi[0] != 0xFF || soi[1] != 0xD8) {  // Start Of Image
+    noteFailure(FAIL_NO_SOI, 0);
     LOG_ERR("JPG", "Not a valid JPEG (no SOI): %s", imagePath.c_str());
     return false;
   }
@@ -404,6 +406,7 @@ bool JpegToFramebufferConverter::getDimensionsStatic(const std::string& imagePat
       const uint32_t width = (static_cast<uint32_t>(sof[3]) << 8) | sof[4];
       if (width == 0 || height == 0 ||
           static_cast<uint64_t>(width) * height > static_cast<uint64_t>(MAX_SOURCE_PIXELS)) {
+        noteFailure(FAIL_BAD_DIM, static_cast<int>(width));
         LOG_ERR("JPG", "Invalid JPEG dimensions %ux%u: %s", width, height, imagePath.c_str());
         return false;
       }
@@ -417,6 +420,7 @@ bool JpegToFramebufferConverter::getDimensionsStatic(const std::string& imagePat
     if (!file.seek(file.position() + static_cast<size_t>(segLen - 2))) break;
   }
 
+  noteFailure(FAIL_NO_SOF, 0);
   LOG_ERR("JPG", "No SOF marker found: %s", imagePath.c_str());
   return false;
 }
@@ -427,12 +431,14 @@ bool JpegToFramebufferConverter::decodeToFramebuffer(const std::string& imagePat
 
   size_t freeHeap = ESP.getFreeHeap();
   if (freeHeap < MIN_FREE_HEAP_FOR_JPEG) {
+    noteFailure(FAIL_LOW_HEAP, static_cast<int>(freeHeap));
     LOG_ERR("JPG", "Not enough heap for JPEG decoder (%u free, need %u)", freeHeap, MIN_FREE_HEAP_FOR_JPEG);
     return false;
   }
 
   std::unique_ptr<JPEGDEC> jpeg(new (std::nothrow) JPEGDEC());
   if (!jpeg) {
+    noteFailure(FAIL_ALLOC_DEC, 0);
     LOG_ERR("JPG", "Failed to allocate JPEG decoder");
     return false;
   }
@@ -446,6 +452,7 @@ bool JpegToFramebufferConverter::decodeToFramebuffer(const std::string& imagePat
   int rc = jpeg->open(imagePath.c_str(), jpegOpen, jpegClose, jpegRead, jpegSeek, jpegDrawCallback);
   const ScopedCleanup cleanup{[&jpeg]() { jpeg->close(); }};
   if (rc != 1) {
+    noteFailure(FAIL_OPEN_DEC, jpeg->getLastError());
     LOG_ERR("JPG", "Failed to open JPEG (err=%d): %s", jpeg->getLastError(), imagePath.c_str());
     return false;
   }

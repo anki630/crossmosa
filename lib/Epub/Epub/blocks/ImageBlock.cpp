@@ -11,6 +11,16 @@
 #include "Epub/converters/DirectPixelWriter.h"
 #include "Epub/converters/ImageDecoderFactory.h"
 
+char ImageBlock::lastFailPath[96] = {0};
+char ImageBlock::lastDrawGeom[64] = {0};
+
+void ImageBlock::noteRenderFailure(const int stage, const std::string& path, const int w, const int h, const int x,
+                                   const int y) {
+  if (ImageBlock::lastFailPath[0] != '\0') return;  // 先到先得,見標頭說明
+  snprintf(ImageBlock::lastFailPath, sizeof(ImageBlock::lastFailPath), "%dx%d@%d,%d %s", w, h, x, y, path.c_str());
+  ImageToFramebufferDecoder::noteFailure(stage, 0);
+}
+
 // Cache file format:
 // - uint16_t width
 // - uint16_t height
@@ -221,8 +231,20 @@ void ImageBlock::render(GfxRenderer& renderer, const int x, const int y) {
   if (x < 0 || y < 0 || x + width > screenWidth || y + height > screenHeight) {
     LOG_ERR("IMG", "Invalid render position: (%d,%d) size (%dx%d) screen (%dx%d)", x, y, width, height, screenWidth,
             screenHeight);
+    // v122:這條路徑【什麼都不畫、也不記失敗】,所以每次進來重演一次而診斷上完全看不見。
+    // diag121 的 SEG 顯示那兩個圖片頁 dec=0(連解碼都沒開始),這裡是頭號嫌疑。
+    // 把座標寫進去讓實機指名 —— 數字排在最前面,路徑被截斷也不影響歸因。
+    if (ImageBlock::lastFailPath[0] == '\0') {
+      snprintf(ImageBlock::lastFailPath, sizeof(ImageBlock::lastFailPath), "%dx%d@%d,%d scr=%dx%d %s", width, height, x,
+               y, screenWidth, screenHeight, imagePath.c_str());
+      ImageToFramebufferDecoder::noteFailure(ImageToFramebufferDecoder::FAIL_BOUNDS, 0);
+    }
     return;
   }
+
+  // v125:通過邊界檢查 = 這張圖【會】被畫下去。把版面實際給的幾何記下來,因為失敗碼答不出
+  // 「畫出來了但小到看不見」。同一次 render 內會被每條灰階帶重寫,值相同,無害。
+  snprintf(ImageBlock::lastDrawGeom, sizeof(ImageBlock::lastDrawGeom), "%dx%d@%d,%d", width, height, x, y);
 
   // Tiled grayscale (#2190): skip the whole image when it doesn't touch the
   // active band. The per-pixel writer already clips off-band pixels, but without
@@ -235,6 +257,11 @@ void ImageBlock::render(GfxRenderer& renderer, const int x, const int y) {
   }
 
   if (imageFailedThisSession(imagePath)) {
+    // v122:本 session 先前失敗過。只在還沒有待回報的紀錄時寫入,免得蓋掉真正的首次失敗原因。
+    if (ImageBlock::lastFailPath[0] == '\0') {
+      snprintf(ImageBlock::lastFailPath, sizeof(ImageBlock::lastFailPath), "%s", imagePath.c_str());
+      ImageToFramebufferDecoder::noteFailure(ImageToFramebufferDecoder::FAIL_REMEMBERED, 0);
+    }
     renderPlaceholder(renderer, x, y);
     return;
   }
@@ -250,6 +277,7 @@ void ImageBlock::render(GfxRenderer& renderer, const int x, const int y) {
   HalFile file;
   if (!Storage.openFileForRead("IMG", imagePath, file)) {
     LOG_ERR("IMG", "Image file not found: %s", imagePath.c_str());
+    noteRenderFailure(ImageToFramebufferDecoder::FAIL_NOT_FOUND, imagePath, width, height, x, y);
     rememberImageFailure(imagePath);
     renderPlaceholder(renderer, x, y);
     return;
@@ -259,6 +287,7 @@ void ImageBlock::render(GfxRenderer& renderer, const int x, const int y) {
 
   if (fileSize == 0) {
     LOG_ERR("IMG", "Image file is empty: %s", imagePath.c_str());
+    noteRenderFailure(ImageToFramebufferDecoder::FAIL_EMPTY, imagePath, width, height, x, y);
     rememberImageFailure(imagePath);
     renderPlaceholder(renderer, x, y);
     return;
@@ -280,6 +309,7 @@ void ImageBlock::render(GfxRenderer& renderer, const int x, const int y) {
   ImageToFramebufferDecoder* decoder = ImageDecoderFactory::getDecoder(imagePath);
   if (!decoder) {
     LOG_ERR("IMG", "No decoder found for image: %s", imagePath.c_str());
+    noteRenderFailure(ImageToFramebufferDecoder::FAIL_NO_DECODER, imagePath, width, height, x, y);
     rememberImageFailure(imagePath);
     renderPlaceholder(renderer, x, y);
     return;
@@ -309,6 +339,15 @@ void ImageBlock::render(GfxRenderer& renderer, const int x, const int y) {
   if (relieve && g_imageRestoreFn) g_imageRestoreFn(g_imageReliefCtx);
   if (!success) {
     LOG_ERR("IMG", "Failed to decode image: %s", imagePath.c_str());
+    // v120:記下是哪一張、哪一個階段;由閱讀器那一層寫進 diag.log(見標頭說明)。
+    // v125:加上幾何並改成先到先得。解碼器自己回報的階段碼優先,不覆寫。
+    if (ImageBlock::lastFailPath[0] == '\0') {
+      if (ImageToFramebufferDecoder::lastFailStage == ImageToFramebufferDecoder::FAIL_NONE) {
+        ImageToFramebufferDecoder::noteFailure(ImageToFramebufferDecoder::FAIL_DECODE, 0);
+      }
+      snprintf(ImageBlock::lastFailPath, sizeof(ImageBlock::lastFailPath), "%dx%d@%d,%d %s", width, height, x, y,
+               imagePath.c_str());
+    }
     rememberImageFailure(imagePath);
     renderPlaceholder(renderer, x, y);
     return;
