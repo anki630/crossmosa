@@ -26,15 +26,15 @@
   h2 { font-size:clamp(1.9rem,4vw,2.8rem); margin-bottom:14px; }
   .sub { color:var(--gray); margin-bottom:48px; max-width:640px; font-size:1.05rem; }
   img { max-width:100%; height:auto; display:block; }
-  /* 預留長寬比:lazy 圖載入不位移,錨點跳轉才會準 */
+  /* 預留長寬比:lazy 圖載入不位移，錨點跳轉才會準 */
   .hero .devices img { aspect-ratio:2400/1038; width:100%; }
   .ba img, .trio img { aspect-ratio:3/4; width:100%; object-fit:contain; }
   .wp-grid img { aspect-ratio:2/3; width:100%; object-fit:cover; }
-  /* 產品照是白底 JPEG(白色機器擺在白背景上,邊緣是連續的 → 去背會咬進機身或留灰邊,
+  /* 產品照是白底 JPEG(白色機器擺在白背景上，邊緣是連續的 → 去背會咬進機身或留灰邊，
      所以不能做成透明 PNG)。改用 multiply:純白像素會【剛好】取得頁面底色 var(--paper),
-     其餘像素只暗約 4/255(肉眼無差),陰影與邊緣全部保留。
+     其餘像素只暗約 4/255（肉眼無差），陰影與邊緣全部保留。
      好處是完全不動圖檔——同一批圖也用在 README,GitHub 的白底不受影響。
-     ⚠️ 深色區的名畫牆(.wp-grid img)刻意【不】套,multiply 會把它們壓成近黑。 */
+     ⚠️ 深色區的名畫牆(.wp-grid img)刻意【不】套，multiply 會把它們壓成近黑。 */
   .hero .devices img, .ba img, .trio img { mix-blend-mode: multiply; }
   sup.fn { font-size:.62em; color:var(--gray); }
   sup.fn a { text-decoration:none; }
@@ -80,7 +80,7 @@
   details.more[open] summary::after { content:" ▴"; }
   details.more .wp-grid { margin-top:12px; }
 
-  /* features:去卡片,Apple 式大字宣言 */
+  /* features:去卡片，Apple 式大字宣言 */
   .feats { max-width:760px; margin:0 auto; }
   .feat { padding:44px 0; border-top:1px solid var(--line); display:grid; grid-template-columns:230px 1fr; gap:28px; align-items:baseline; }
   .feat:first-child { border-top:none; }
@@ -189,7 +189,7 @@
       </figure>
       <figure>
         <img src="promo/compare-iansui.jpg" alt="硬筆楷書 芫荽" loading="lazy">
-        <figcaption>硬筆楷書(芫荽)<div class="cap-sub">像原子筆寫在紙上。5,366 個常用字。冷僻字多的書，建議用明體</div></figcaption>
+        <figcaption>硬筆楷書（芫荽）<div class="cap-sub">像原子筆寫在紙上。5,366 個常用字。冷僻字多的書，建議用明體</div></figcaption>
       </figure>
     </div>
   </div>
@@ -231,7 +231,7 @@
       <div class="feat"><h3>翻頁，跟得上你</h3><p>你還在讀這一頁，下一頁已經備好。大多時候更快；任何時候，都不會更慢<sup class="fn"><a href="#fn-p1">1</a></sup>。</p></div>
       <div class="feat"><h3>無線傳書，無限藏書</h3><p>電腦或手機連上機器的網址，書拖進去就傳好了。不裝 App、不拔卡。</p></div>
       <div class="feat"><h3>查註腳，不怕迷路</h3><p>正文與註釋，像實體書一樣往返——短按電源鍵跳過去、再跳回來，讀到哪裡不會丟。譯注多的書，終於好讀了。</p></div>
-      <div class="feat"><h3>你的書庫，無線上架</h3><p>電腦上用 Calibre(免費書庫軟體)管書的話，X3 直接連上它：瀏覽、下載、開書，全在機器上完成(OPDS)。</p></div>
+      <div class="feat"><h3>你的書庫，無線上架</h3><p>電腦上用 Calibre（免費書庫軟體）管書的話，X3 直接連上它：瀏覽、下載、開書，全在機器上完成(OPDS)。</p></div>
       <div class="feat"><h3>十分鐘，變熟手</h3><p>附一本《歡迎使用 CrossMosa》：十三個短章，一邊讀一邊按。連刷壞了怎麼救回來，都有教。</p></div>
     </div>
   </div>
@@ -259,25 +259,25 @@
     <p class="sub">1.2.0 · 2026 年 8 月。完整紀錄見 <a href="https://github.com/anki630/crossmosa/blob/main/CHANGELOG.md">CHANGELOG</a>。</p>
     <div class="log">
 
-      <h3>有些書打不開,現在打得開了</h3>
+      <h3>有些書打不開，現在打得開了</h3>
       <ul>
-        <li><strong>開書直接顯示「全書完」。</strong>有些 EPUB 開起來書在、頁數是零、一個字都讀不到。原因是目次檔的元素名帶了命名空間前綴(<code>&lt;ns0:package&gt;</code>)。EPUB 規格允許這樣寫,只是不常見。解析器只認裸名,於是收到 0 筆章節——而 0 筆章節在閱讀器裡看起來,就是「你已經讀完了」。</li>
-        <li><strong>書名與作者就這樣不見了。</strong>上面那個修法本身有個陷阱:書目欄位的目標字串自己就帶前綴,只改一半會讓它們永遠對不上。一併處理了。</li>
-        <li><strong>主畫面的封面變成空框。</strong>這是前一個問題的後遺症:書「壞掉」期間縮圖產生失敗,程式寫了一個 0 byte 的檔案當作「這本沒有封面」的記號,於是修好之後封面也回不來。現在會辨認出這種記號並重新產生。</li>
+        <li><strong>開書直接顯示「全書完」。</strong>有些 EPUB 開起來書在、頁數是零、一個字都讀不到。原因是目次檔的元素名帶了命名空間前綴(<code>&lt;ns0:package&gt;</code>)。EPUB 規格允許這樣寫，只是不常見。解析器只認裸名，於是收到 0 筆章節——而 0 筆章節在閱讀器裡看起來，就是「你已經讀完了」。</li>
+        <li><strong>書名與作者就這樣不見了。</strong>上面那個修法本身有個陷阱:書目欄位的目標字串自己就帶前綴，只改一半會讓它們永遠對不上。一併處理了。</li>
+        <li><strong>主畫面的封面變成空框。</strong>這是前一個問題的後遺症:書「壞掉」期間縮圖產生失敗，程式寫了一個 0 byte 的檔案當作「這本沒有封面」的記號，於是修好之後封面也回不來。現在會辨認出這種記號並重新產生。</li>
       </ul>
 
       <h3>閱讀選單重整</h3>
       <ul>
-        <li><strong>14 項 → 12 項</strong>,並依「你為什麼開這個選單」重排:先是位置(選擇章節、註腳、書籤、跳至指定進度),接著是邊看邊調的排版(字級、行距、粗體),一次性的設定與工具放最後。</li>
-        <li><strong>拿掉「回主畫面」與「截圖」。</strong>這兩項的功能都還在,拿掉的是重複的入口:閱讀中按 Back 鍵本來就回得了主畫面,截圖有全域組合鍵<strong>電源 + 下</strong>在任何畫面都有效。原本的路徑比開選單快。</li>
-        <li>設定裡那個按下去沒有反應的「藍牙翻頁器」也移除了。藍牙功能早就關閉,只有這個條目忘了跟著拿掉。</li>
+        <li><strong>14 項 → 12 項</strong>，並依「你為什麼開這個選單」重排:先是位置（選擇章節、註腳、書籤、跳至指定進度），接著是邊看邊調的排版（字級、行距、粗體），一次性的設定與工具放最後。</li>
+        <li><strong>拿掉「回主畫面」與「截圖」。</strong>這兩項的功能都還在，拿掉的是重複的入口:閱讀中按 Back 鍵本來就回得了主畫面，截圖有全域組合鍵<strong>電源 + 下</strong>在任何畫面都有效。原本的路徑比開選單快。</li>
+        <li>設定裡那個按下去沒有反應的「藍牙翻頁器」也移除了。藍牙功能早就關閉，只有這個條目忘了跟著拿掉。</li>
       </ul>
 
       <h3>升級注意</h3>
       <ul>
-        <li><strong>沒有變更任何快取格式</strong>——既有的書不會重新排版,閱讀進度、書籤、設定都不受影響。</li>
-        <li>之前遇過「全書完」或「封面空框」的書,刷完會自己復原,<strong>不需要手動刪 SD 卡上的 <code>/.crossmosa</code></strong>。</li>
-        <li>閱讀選單的順序變了,習慣用位置記憶按的話第一次要看一眼。</li>
+        <li><strong>沒有變更任何快取格式</strong>——既有的書不會重新排版，閱讀進度、書籤、設定都不受影響。</li>
+        <li>之前遇過「全書完」或「封面空框」的書，刷完會自己復原，<strong>不需要手動刪 SD 卡上的 <code>/.crossmosa</code></strong>。</li>
+        <li>閱讀選單的順序變了，習慣用位置記憶按的話第一次要看一眼。</li>
       </ul>
 
     </div>
@@ -291,16 +291,16 @@
     <p class="sub">機器你已經有了，SD 卡就插在上面。剩下的只有三步。</p>
     <div class="steps">
       <div class="step"><div><strong>刷韌體</strong><br>把 zip 裡的 <code>update.bin</code> 用讀卡機放進 SD 卡根目錄，插回機器。關機，按住左側鍵+電源。五分鐘後，它就是 CrossMosa 了。</div></div>
-      <div class="step"><div><strong>放字型(跳過這步，書打開仍是方塊)</strong><br>把字型包解壓縮到 SD 卡的 <code>/.fonts/</code>。內文字型在 SD 卡上、不在韌體裡。刷完看到方塊不是刷壞了，是字型還沒放。</div></div>
+      <div class="step"><div><strong>放字型（跳過這步，書打開仍是方塊）</strong><br>把字型包解壓縮到 SD 卡的 <code>/.fonts/</code>。內文字型在 SD 卡上、不在韌體裡。刷完看到方塊不是刷壞了，是字型還沒放。</div></div>
       <div class="step"><div><strong>讀第一本書</strong><br>把附的《歡迎使用 CrossMosa》複製進 SD 卡，開機就是繁體中文，打開它。再花十分鐘讀完，你就是熟手。</div></div>
     </div>
     <div class="warn" style="background:var(--paper)">
       <strong>開始讀之前，對一下這張清單——五格全勾，體驗最完整；前四格就能開讀：</strong><br>
-      ☐ 韌體已刷(<code>update.bin</code> 放 SD 根目錄)<br>
-      ☐ 字型資料夾在 <code>/.fonts/</code>(缺這步=滿頁方塊)<br>
+      ☐ 韌體已刷（<code>update.bin</code> 放 SD 根目錄）<br>
+      ☐ 字型資料夾在 <code>/.fonts/</code>（缺這步=滿頁方塊）<br>
       ☐ 《歡迎使用 CrossMosa》已複製進 SD 卡<br>
       ☐ 閱讀字型已選：<strong>設定 → 閱讀器 → 閱讀字型</strong><br>
-      ☐ (可選)名畫放進 <code>/.sleep/</code>，待機變畫框<br>
+      ☐ （可選）名畫放進 <code>/.sleep/</code>，待機變畫框<br>
       開機就是繁體中文，不用設定——它本來就該如此。
     </div>
     <div style="display:none">
@@ -315,11 +315,11 @@
     <h2>猶豫的話，先看這裡</h2>
     <div class="faq">
       <details><summary>會把機器刷壞嗎？</summary><div class="a">風險很低。首刷用的是原廠韌體自己的 SD 更新機制；而且 CrossMosa 保留了救援模式：關機後按住左側翻頁鍵再開機，直接進 SD 卡韌體選擇畫面——就算刷了一版開不了機的韌體，也有路回來。風險與退路，安裝文件寫得很白。</div></details>
-      <details><summary>以後怎麼更新？</summary><div class="a">出新版時，到 Release 下載單獨那顆 update.bin(免解壓)，手機開瀏覽器連上機器的網頁傳輸把它丟進 SD 卡，再到「設定 → 系統 → SD 卡韌體更新」點一下——全程不用電腦。</div></details>
-      <details><summary>可以刷回去嗎？</summary><div class="a">可以，隨時。SD 卡救援模式(關機按住左側鍵再開機)能刷回原版 CrossPoint 韌體，不用電腦；要回原廠韌體，用原廠的更新檔或網頁 flasher。來去自由。</div></details>
+      <details><summary>以後怎麼更新？</summary><div class="a">出新版時，到 Release 下載單獨那顆 update.bin（免解壓），手機開瀏覽器連上機器的網頁傳輸把它丟進 SD 卡，再到「設定 → 系統 → SD 卡韌體更新」點一下——全程不用電腦。</div></details>
+      <details><summary>可以刷回去嗎？</summary><div class="a">可以，隨時。SD 卡救援模式（關機按住左側鍵再開機）能刷回原版 CrossPoint 韌體，不用電腦；要回原廠韌體，用原廠的更新檔或網頁 flasher。來去自由。</div></details>
       <details><summary>跟原版 CrossPoint 差在哪？</summary><div class="a">CrossMosa 基於 CrossPoint 1.4.1，重做了中文字集與介面翻譯、加了翻頁預取、OPDS 中文書庫體驗、名畫待機策展、隨附教學書，並修了一批記憶體與穩定性問題。完整差異列表在 <a href="https://github.com/anki630/crossmosa#%E8%88%87%E5%8E%9F%E7%89%88-crosspoint-%E7%9A%84%E9%97%9C%E4%BF%82">GitHub</a>。</div></details>
-      <details><summary>要錢嗎？</summary><div class="a">免費，開源(MIT 授權)，原始碼全部公開。覺得好用的話，頁尾有幾種支持的方式，完全自願。</div></details>
-      <details><summary>書從哪裡來？</summary><div class="a">本專案不提供書，也不處理 DRM。請向正版管道購買、認明「無 DRM」的書(Readmoo、樂天 Kobo、Google Play 圖書都有部分書籍如此，依平台與書而定)，搭配 Calibre 整理後用網頁上傳或 OPDS 傳進機器。有 DRM 的書，這台機器讀不了。</div></details>
+      <details><summary>要錢嗎？</summary><div class="a">免費，開源（MIT 授權），原始碼全部公開。覺得好用的話，頁尾有幾種支持的方式，完全自願。</div></details>
+      <details><summary>書從哪裡來？</summary><div class="a">本專案不提供書，也不處理 DRM。請向正版管道購買、認明「無 DRM」的書（Readmoo、樂天 Kobo、Google Play 圖書都有部分書籍如此，依平台與書而定），搭配 Calibre 整理後用網頁上傳或 OPDS 傳進機器。有 DRM 的書，這台機器讀不了。</div></details>
       <details><summary>沒有 X3 也能用嗎？</summary><div class="a">CrossMosa 目前只為 Xteink X3 調校。X3 是一台口袋大小、58 克的電子紙閱讀器，在 Xteink 官方通路買得到——本專案與 Xteink 無任何關係，純粹是為這台機器做的愛好者韌體。</div></details>
     </div>
   </div>
@@ -329,7 +329,7 @@
   <div class="wrap support">
     <p class="kicker">SUPPORT</p>
     <h2>如果它讓你的 X3 變好用了</h2>
-    <p class="sub" style="margin:0 auto 14px">三件事任何一件都是支持：到 <a href="https://github.com/anki630/crossmosa/discussions">Discussions</a> 留句話說你用得如何；推薦給另一個有 X3 的朋友；或請維護者喝杯咖啡(連結籌備中)。</p>
+    <p class="sub" style="margin:0 auto 14px">三件事任何一件都是支持：到 <a href="https://github.com/anki630/crossmosa/discussions">Discussions</a> 留句話說你用得如何；推薦給另一個有 X3 的朋友；或請維護者喝杯咖啡（連結籌備中）。</p>
     <p class="sub" style="margin:0 auto 30px">這一頁沒有使用者見證——因為我們不編故事。第一句真話，可以是你的。</p>
     <div class="btns" style="margin-bottom:18px">
       <a class="btn primary" href="https://github.com/anki630/crossmosa/releases/latest">下載 CrossMosa 1.1</a>
@@ -340,8 +340,8 @@
 
 <section style="padding:56px 0">
   <div class="wrap fnotes" id="fnotes">
-    <p id="fn-p1">1. 機制：面板刷新的空檔預先載入下一頁字型。實機量測(320 次翻頁):預載完成的頁面繪製中位 952ms，未完成 1,278ms；未完成時走原路徑，無額外代價。</p>
-    <p id="fn-p2">2. 介面字集共 7,413 字 = BIG5 一級全收 + 依教育部標準字體表選出的二級常用字 + 書庫掃描補字；內文另由 SD 卡字型涵蓋(明體 22,219 字)。常見人名用字「喆」「堃」「彣」已於 1.0 補入;其餘 BIG5 範圍外的字為已知缺口。</p>
+    <p id="fn-p1">1. 機制：面板刷新的空檔預先載入下一頁字型。實機量測（320 次翻頁）:預載完成的頁面繪製中位 952ms，未完成 1,278ms；未完成時走原路徑，無額外代價。</p>
+    <p id="fn-p2">2. 介面字集共 7,413 字 = BIG5 一級全收 + 依教育部標準字體表選出的二級常用字 + 書庫掃描補字；內文另由 SD 卡字型涵蓋（明體 22,219 字）。常見人名用字「喆」「堃」「彣」已於 1.0 補入;其餘 BIG5 範圍外的字為已知缺口。</p>
     <p id="fn-p3">3. 名畫皆取自公共領域(Wikimedia Commons)，逐張調整對比與構圖裁切以適配 4 階灰階電子紙。</p>
     <p id="fn-p4">4. 完整版本紀錄公開於 <a href="https://github.com/anki630/crossmosa/blob/main/CHANGELOG.md">GitHub 的 CHANGELOG</a>。</p>
   </div>
@@ -356,7 +356,7 @@
 </footer>
 
 <script>
-// 展開時才載入其餘 37 張(檔名清單由建置時注入)
+// 展開時才載入其餘 37 張（檔名清單由建置時注入）
 const REST = ["birth_of_venus_bouguereau.jpg", "caillebotte_rainy.jpg", "caravaggio_judith.jpg", "cezanne_cardplayers.jpg", "composition_viii.jpg", "creation_of_adam.jpg", "degas_star.jpg", "dore_dante_inferno.jpg", "durer_melencolia.jpg", "ejiri_suruga.jpg", "gauguin_vision.jpg", "goya_third_may.jpg", "gulf_stream.jpg", "hay_wain.jpg", "hunters_snow.jpg", "las_meninas.jpg", "last_supper.jpg", "lautrec_moulin.jpg", "manet_dejeuner.jpg", "milkmaid.jpg", "millais_ophelia.jpg", "modigliani.jpg", "munch_scream.jpg", "night_watch.jpg", "plum_park_kameido.jpg", "red_fuji.jpg", "rousseau_gypsy.jpg", "sargent_madame_x.jpg", "school_of_athens.jpg", "sharaku_otani_oniji.jpg", "starry_night_rhone.jpg", "sudden_shower_shin_ohashi.jpg", "takiyasha_skeleton.jpg", "the_kiss.jpg", "tower_of_babel.jpg", "water_lily_pond.jpg", "whistlers_mother.jpg", "zodiac.jpg"];
 document.querySelector('details.more').addEventListener('toggle', function () {
   const grid = document.getElementById('wp-rest');
