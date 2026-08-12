@@ -25,8 +25,12 @@ EpubReaderMenuActivity::EpubReaderMenuActivity(GfxRenderer& renderer, MappedInpu
 
 std::vector<EpubReaderMenuActivity::MenuItem> EpubReaderMenuActivity::buildMenuItems(bool hasFootnotes,
                                                                                      bool hasBookmarks) {
+  // v129:依「開這個選單的目的」排序,不依「是不是設定」分類。
+  // ⚠️ 直向可見 12 列,最壞情況(有註腳 + 有書籤)正好 12 項——【零餘裕】。
+  //    要加任何一項,必須先砍一項。橫向只看得見 7 列 → 前 7 項決定橫向讀者
+  //    不捲動能碰到什麼。判準與三條否決見 docs/specs/2026-08-12-reader-menu-ia.md。
   std::vector<MenuItem> items;
-  items.reserve(14);
+  items.reserve(12);
   items.push_back({MenuAction::SELECT_CHAPTER, StrId::STR_SELECT_CHAPTER});
   if (hasFootnotes) {
     items.push_back({MenuAction::FOOTNOTES, StrId::STR_FOOTNOTES});
@@ -35,16 +39,17 @@ std::vector<EpubReaderMenuActivity::MenuItem> EpubReaderMenuActivity::buildMenuI
     items.push_back({MenuAction::BOOKMARKS, StrId::STR_BOOKMARKS});
   }
   items.push_back({MenuAction::TOGGLE_BOOKMARK, StrId::STR_TOGGLE_BOOKMARK});
-  items.push_back({MenuAction::FONT_SIZE, StrId::STR_FONT_SIZE});  // v38:閱讀中最高頻的調整免退書
-  items.push_back({MenuAction::LINE_SPACING, StrId::STR_LINE_SPACING});  // v41:同字級機制
-  items.push_back({MenuAction::BOLD_TEXT, StrId::STR_BOLD_TEXT});        // v41:同字級機制
+  // 排版三兄弟必須相鄰:是「邊看邊調」的一叢動作,調完會互相影響
+  // (字級調大之後常常就想收緊行距)。v38/v41 加入,v129 改為集中。
+  items.push_back({MenuAction::FONT_SIZE, StrId::STR_FONT_SIZE});
+  items.push_back({MenuAction::LINE_SPACING, StrId::STR_LINE_SPACING});
+  items.push_back({MenuAction::BOLD_TEXT, StrId::STR_BOLD_TEXT});
+  items.push_back({MenuAction::GO_TO_PERCENT, StrId::STR_GO_TO_PERCENT});
+  // 「一次設定型」與排錯型降位到選單尾。v129 否決了把它們收進子選單:
+  // 兩者已各自帶一個 OptionPopup,再包一層就變三層,而清單底部本來就等於免費的子選單。
   items.push_back({MenuAction::ROTATE_SCREEN, StrId::STR_ORIENTATION});
   items.push_back({MenuAction::AUTO_PAGE_TURN, StrId::STR_AUTO_TURN_PAGES_PER_MIN});
-  items.push_back({MenuAction::GO_TO_PERCENT, StrId::STR_GO_TO_PERCENT});
-  items.push_back({MenuAction::GO_HOME, StrId::STR_GO_HOME_BUTTON});
   items.push_back({MenuAction::DELETE_CACHE, StrId::STR_DELETE_CACHE});
-  // 低頻項降位到選單尾(v38)
-  items.push_back({MenuAction::SCREENSHOT, StrId::STR_SCREENSHOT_BUTTON});
   items.push_back({MenuAction::DISPLAY_QR, StrId::STR_DISPLAY_QR});
   return items;
 }

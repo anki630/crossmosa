@@ -559,7 +559,7 @@ void BleRemoteManager::handleScanResult(const NimBLEAdvertisedDevice* dev) {
   strlcpy(e.name, name.empty() ? e.addr : name.c_str(), sizeof(e.name));
 
   // v95/v98: NimBLE sometimes hands us an all-zero address for a peer we are already
-  // bonded to (diag94: the same Kobo listed as a4:3c:d7:94:89:5d in one session and
+  // bonded to (diag94: the same Kobo listed with its real address in one session and
   // 00:00:00:00:00:00 in the next, name and HID flag intact). A zero address matches no
   // stored pairing, so pairWith()'s stale-bond drop never fires and beginConnect() dials an
   // address nothing answers -- that was the whole "must forget before re-pairing" complaint.

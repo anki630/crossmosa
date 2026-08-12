@@ -6,6 +6,7 @@
 #include <XmlParserUtils.h>
 
 #include <cctype>
+#include <cstring>
 
 #include "Epub/BookMetadataCache.h"
 
@@ -14,6 +15,7 @@ constexpr char MEDIA_TYPE_NCX[] = "application/x-dtbncx+xml";
 constexpr char MEDIA_TYPE_CSS[] = "text/css";
 constexpr char MEDIA_TYPE_IMAGE_PREFIX[] = "image/";
 constexpr char itemCacheFile[] = "/.items.bin";
+
 
 bool startsWithImageMediaType(const std::string& mediaType) {
   constexpr size_t prefixLen = sizeof(MEDIA_TYPE_IMAGE_PREFIX) - 1;
@@ -93,19 +95,19 @@ size_t ContentOpfParser::write(const uint8_t* buffer, const size_t size) {
 
 void XMLCALL ContentOpfParser::startElement(void* userData, const XML_Char* name, const XML_Char** atts) {
   auto* self = static_cast<ContentOpfParser*>(userData);
-  (void)atts;
+  const char* const element = xmlLocalName(name);
 
-  if (self->state == START && (strcmp(name, "package") == 0 || strcmp(name, "opf:package") == 0)) {
+  if (self->state == START && strcmp(element, "package") == 0) {
     self->state = IN_PACKAGE;
     return;
   }
 
-  if (self->state == IN_PACKAGE && (strcmp(name, "metadata") == 0 || strcmp(name, "opf:metadata") == 0)) {
+  if (self->state == IN_PACKAGE && strcmp(element, "metadata") == 0) {
     self->state = IN_METADATA;
     return;
   }
 
-  if (self->state == IN_METADATA && strcmp(name, "dc:title") == 0) {
+  if (self->state == IN_METADATA && strcmp(element, "title") == 0) {
     // Only capture the first dc:title element; subsequent ones are subtitles
     if (self->title.empty()) {
       self->state = IN_BOOK_TITLE;
@@ -113,17 +115,17 @@ void XMLCALL ContentOpfParser::startElement(void* userData, const XML_Char* name
     return;
   }
 
-  if (self->state == IN_METADATA && strcmp(name, "dc:creator") == 0) {
+  if (self->state == IN_METADATA && strcmp(element, "creator") == 0) {
     self->state = IN_BOOK_AUTHOR;
     return;
   }
 
-  if (self->state == IN_METADATA && strcmp(name, "dc:language") == 0) {
+  if (self->state == IN_METADATA && strcmp(element, "language") == 0) {
     self->state = IN_BOOK_LANGUAGE;
     return;
   }
 
-  if (self->state == IN_PACKAGE && (strcmp(name, "manifest") == 0 || strcmp(name, "opf:manifest") == 0)) {
+  if (self->state == IN_PACKAGE && strcmp(element, "manifest") == 0) {
     self->state = IN_MANIFEST;
     if (!Storage.openFileForWrite("COF", self->cachePath + itemCacheFile, self->tempItemStore)) {
       LOG_ERR("COF", "Couldn't open temp items file for writing. This is probably going to be a fatal error.");
@@ -131,7 +133,7 @@ void XMLCALL ContentOpfParser::startElement(void* userData, const XML_Char* name
     return;
   }
 
-  if (self->state == IN_PACKAGE && (strcmp(name, "spine") == 0 || strcmp(name, "opf:spine") == 0)) {
+  if (self->state == IN_PACKAGE && strcmp(element, "spine") == 0) {
     self->state = IN_SPINE;
     if (!Storage.openFileForRead("COF", self->cachePath + itemCacheFile, self->tempItemStore)) {
       LOG_ERR("COF", "Couldn't open temp items file for reading. This is probably going to be a fatal error.");
@@ -150,7 +152,7 @@ void XMLCALL ContentOpfParser::startElement(void* userData, const XML_Char* name
     return;
   }
 
-  if (self->state == IN_PACKAGE && (strcmp(name, "guide") == 0 || strcmp(name, "opf:guide") == 0)) {
+  if (self->state == IN_PACKAGE && strcmp(element, "guide") == 0) {
     self->state = IN_GUIDE;
     // TODO Remove print
     LOG_DBG("COF", "Entering guide state.");
@@ -160,7 +162,7 @@ void XMLCALL ContentOpfParser::startElement(void* userData, const XML_Char* name
     return;
   }
 
-  if (self->state == IN_METADATA && (strcmp(name, "meta") == 0 || strcmp(name, "opf:meta") == 0)) {
+  if (self->state == IN_METADATA && strcmp(element, "meta") == 0) {
     bool isCover = false;
     std::string coverItemId;
 
@@ -178,7 +180,7 @@ void XMLCALL ContentOpfParser::startElement(void* userData, const XML_Char* name
     return;
   }
 
-  if (self->state == IN_MANIFEST && (strcmp(name, "item") == 0 || strcmp(name, "opf:item") == 0)) {
+  if (self->state == IN_MANIFEST && strcmp(element, "item") == 0) {
     std::string itemId;
     std::string href;
     std::string mediaType;
@@ -255,7 +257,7 @@ void XMLCALL ContentOpfParser::startElement(void* userData, const XML_Char* name
   // NOTE: This relies on spine appearing after item manifest (which is pretty safe as it's part of the EPUB spec)
   // Only run the spine parsing if there's a cache to add it to
   if (self->cache) {
-    if (self->state == IN_SPINE && (strcmp(name, "itemref") == 0 || strcmp(name, "opf:itemref") == 0)) {
+    if (self->state == IN_SPINE && strcmp(element, "itemref") == 0) {
       for (int i = 0; atts[i]; i += 2) {
         if (strcmp(atts[i], "idref") == 0) {
           const std::string idref = atts[i + 1];
@@ -309,7 +311,7 @@ void XMLCALL ContentOpfParser::startElement(void* userData, const XML_Char* name
     }
   }
   // parse the guide
-  if (self->state == IN_GUIDE && (strcmp(name, "reference") == 0 || strcmp(name, "opf:reference") == 0)) {
+  if (self->state == IN_GUIDE && strcmp(element, "reference") == 0) {
     std::string type;
     std::string guideHref;
     for (int i = 0; atts[i]; i += 2) {
@@ -356,47 +358,47 @@ void XMLCALL ContentOpfParser::characterData(void* userData, const XML_Char* s, 
 
 void XMLCALL ContentOpfParser::endElement(void* userData, const XML_Char* name) {
   auto* self = static_cast<ContentOpfParser*>(userData);
-  (void)name;
+  const char* const element = xmlLocalName(name);
 
-  if (self->state == IN_SPINE && (strcmp(name, "spine") == 0 || strcmp(name, "opf:spine") == 0)) {
+  if (self->state == IN_SPINE && strcmp(element, "spine") == 0) {
     self->state = IN_PACKAGE;
     self->tempItemStore.close();
     return;
   }
 
-  if (self->state == IN_GUIDE && (strcmp(name, "guide") == 0 || strcmp(name, "opf:guide") == 0)) {
+  if (self->state == IN_GUIDE && strcmp(element, "guide") == 0) {
     self->state = IN_PACKAGE;
     self->tempItemStore.close();
     return;
   }
 
-  if (self->state == IN_MANIFEST && (strcmp(name, "manifest") == 0 || strcmp(name, "opf:manifest") == 0)) {
+  if (self->state == IN_MANIFEST && strcmp(element, "manifest") == 0) {
     self->state = IN_PACKAGE;
     self->tempItemStore.close();
     return;
   }
 
-  if (self->state == IN_BOOK_TITLE && strcmp(name, "dc:title") == 0) {
+  if (self->state == IN_BOOK_TITLE && strcmp(element, "title") == 0) {
     self->state = IN_METADATA;
     return;
   }
 
-  if (self->state == IN_BOOK_AUTHOR && strcmp(name, "dc:creator") == 0) {
+  if (self->state == IN_BOOK_AUTHOR && strcmp(element, "creator") == 0) {
     self->state = IN_METADATA;
     return;
   }
 
-  if (self->state == IN_BOOK_LANGUAGE && strcmp(name, "dc:language") == 0) {
+  if (self->state == IN_BOOK_LANGUAGE && strcmp(element, "language") == 0) {
     self->state = IN_METADATA;
     return;
   }
 
-  if (self->state == IN_METADATA && (strcmp(name, "metadata") == 0 || strcmp(name, "opf:metadata") == 0)) {
+  if (self->state == IN_METADATA && strcmp(element, "metadata") == 0) {
     self->state = IN_PACKAGE;
     return;
   }
 
-  if (self->state == IN_PACKAGE && (strcmp(name, "package") == 0 || strcmp(name, "opf:package") == 0)) {
+  if (self->state == IN_PACKAGE && strcmp(element, "package") == 0) {
     self->state = START;
     return;
   }

@@ -492,6 +492,26 @@ bool BookMetadataCache::load() {
   serialization::readString(bookFile, coreMetadata.coverItemHref);
   serialization::readString(bookFile, coreMetadata.textReferenceHref);
 
+  // A cache that resolves to zero spine entries must be rejected, not loaded. Two
+  // different failures land here and both used to survive as a "valid" cache:
+  //   - a short read (readPod has no return value and leaves its target untouched,
+  //     so spineCount simply keeps its 0 initialiser), and
+  //   - an OPF the parser understood structurally but drew no itemrefs from
+  //     (pre-v127: any OPF using a namespace PREFIX, e.g. <ns0:spine>).
+  // Downstream, getSpineItemsCount() == 0 makes EpubReaderActivity's
+  // `currentSpineIndex == getSpineItemsCount()` true on the first render, so the
+  // book opens straight onto the End-of-Book screen -- and because the bad book.bin
+  // lives on the SD card, reflashing never cleared it.
+  //
+  // Rejecting here rebuilds on the next open, which self-heals cards already poisoned
+  // by the pre-v127 parser WITHOUT bumping BOOK_CACHE_VERSION (a bump would re-index
+  // every book, and the re-index window is the highest memory-pressure moment there is).
+  if (spineCount == 0) {
+    LOG_ERR("BMC", "Cache has 0 spine entries; rejecting so the next open rebuilds");
+    bookFile.close();
+    return false;
+  }
+
   loaded = true;
   LOG_DBG("BMC", "Loaded cache data: %d spine, %d TOC entries", spineCount, tocCount);
   return true;

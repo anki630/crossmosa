@@ -51,19 +51,20 @@ size_t ContainerParser::write(const uint8_t* buffer, const size_t size) {
 
 void XMLCALL ContainerParser::startElement(void* userData, const XML_Char* name, const XML_Char** atts) {
   auto* self = static_cast<ContainerParser*>(userData);
+  const char* const element = xmlLocalName(name);
 
   // Simple state tracking to ensure we are looking at the valid schema structure
-  if (self->state == START && strcmp(name, "container") == 0) {
+  if (self->state == START && strcmp(element, "container") == 0) {
     self->state = IN_CONTAINER;
     return;
   }
 
-  if (self->state == IN_CONTAINER && strcmp(name, "rootfiles") == 0) {
+  if (self->state == IN_CONTAINER && strcmp(element, "rootfiles") == 0) {
     self->state = IN_ROOTFILES;
     return;
   }
 
-  if (self->state == IN_ROOTFILES && strcmp(name, "rootfile") == 0) {
+  if (self->state == IN_ROOTFILES && strcmp(element, "rootfile") == 0) {
     const char* mediaType = nullptr;
     const char* path = nullptr;
 
@@ -84,10 +85,11 @@ void XMLCALL ContainerParser::startElement(void* userData, const XML_Char* name,
 
 void XMLCALL ContainerParser::endElement(void* userData, const XML_Char* name) {
   auto* self = static_cast<ContainerParser*>(userData);
+  const char* const element = xmlLocalName(name);
 
-  if (self->state == IN_ROOTFILES && strcmp(name, "rootfiles") == 0) {
+  if (self->state == IN_ROOTFILES && strcmp(element, "rootfiles") == 0) {
     self->state = IN_CONTAINER;
-  } else if (self->state == IN_CONTAINER && strcmp(name, "container") == 0) {
+  } else if (self->state == IN_CONTAINER && strcmp(element, "container") == 0) {
     self->state = START;
   }
 }

@@ -22,7 +22,7 @@
 // 進度會漂掉。串流之後兩者都只是「用同一個位元組位移重排當前頁」,約一秒。
 class TxtReaderMenuActivity final : public Activity {
  public:
-  enum class MenuAction { GO_TO_PERCENT, FONT_SIZE, ROTATE_SCREEN, GO_HOME };
+  enum class MenuAction { GO_TO_PERCENT, FONT_SIZE, ROTATE_SCREEN };
 
   explicit TxtReaderMenuActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, const std::string& title,
                                  float bookProgressPercent, uint8_t currentOrientation);

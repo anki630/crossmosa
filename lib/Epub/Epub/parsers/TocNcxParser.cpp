@@ -70,19 +70,20 @@ void XMLCALL TocNcxParser::startElement(void* userData, const XML_Char* name, co
   // </navPoint>
 
   auto* self = static_cast<TocNcxParser*>(userData);
+  const char* const element = xmlLocalName(name);
 
-  if (self->state == START && strcmp(name, "ncx") == 0) {
+  if (self->state == START && strcmp(element, "ncx") == 0) {
     self->state = IN_NCX;
     return;
   }
 
-  if (self->state == IN_NCX && strcmp(name, "navMap") == 0) {
+  if (self->state == IN_NCX && strcmp(element, "navMap") == 0) {
     self->state = IN_NAV_MAP;
     return;
   }
 
   // Handles both top-level and nested navPoints
-  if ((self->state == IN_NAV_MAP || self->state == IN_NAV_POINT) && strcmp(name, "navPoint") == 0) {
+  if ((self->state == IN_NAV_MAP || self->state == IN_NAV_POINT) && strcmp(element, "navPoint") == 0) {
     self->state = IN_NAV_POINT;
     self->currentDepth++;
 
@@ -91,17 +92,17 @@ void XMLCALL TocNcxParser::startElement(void* userData, const XML_Char* name, co
     return;
   }
 
-  if (self->state == IN_NAV_POINT && strcmp(name, "navLabel") == 0) {
+  if (self->state == IN_NAV_POINT && strcmp(element, "navLabel") == 0) {
     self->state = IN_NAV_LABEL;
     return;
   }
 
-  if (self->state == IN_NAV_LABEL && strcmp(name, "text") == 0) {
+  if (self->state == IN_NAV_LABEL && strcmp(element, "text") == 0) {
     self->state = IN_NAV_LABEL_TEXT;
     return;
   }
 
-  if (self->state == IN_NAV_POINT && strcmp(name, "content") == 0) {
+  if (self->state == IN_NAV_POINT && strcmp(element, "content") == 0) {
     for (int i = 0; atts[i]; i += 2) {
       if (strcmp(atts[i], "src") == 0) {
         self->currentSrc = atts[i + 1];
@@ -121,18 +122,19 @@ void XMLCALL TocNcxParser::characterData(void* userData, const XML_Char* s, cons
 
 void XMLCALL TocNcxParser::endElement(void* userData, const XML_Char* name) {
   auto* self = static_cast<TocNcxParser*>(userData);
+  const char* const element = xmlLocalName(name);
 
-  if (self->state == IN_NAV_LABEL_TEXT && strcmp(name, "text") == 0) {
+  if (self->state == IN_NAV_LABEL_TEXT && strcmp(element, "text") == 0) {
     self->state = IN_NAV_LABEL;
     return;
   }
 
-  if (self->state == IN_NAV_LABEL && strcmp(name, "navLabel") == 0) {
+  if (self->state == IN_NAV_LABEL && strcmp(element, "navLabel") == 0) {
     self->state = IN_NAV_POINT;
     return;
   }
 
-  if (self->state == IN_NAV_POINT && strcmp(name, "navPoint") == 0) {
+  if (self->state == IN_NAV_POINT && strcmp(element, "navPoint") == 0) {
     self->currentDepth--;
     if (self->currentDepth == 0) {
       self->state = IN_NAV_MAP;
@@ -140,7 +142,7 @@ void XMLCALL TocNcxParser::endElement(void* userData, const XML_Char* name) {
     return;
   }
 
-  if (self->state == IN_NAV_POINT && strcmp(name, "content") == 0) {
+  if (self->state == IN_NAV_POINT && strcmp(element, "content") == 0) {
     // At this point (end of content tag), we likely have both Label (from previous tags) and Src.
     // This is the safest place to push the data, assuming <navLabel> always comes before <content>.
     // NCX spec says navLabel comes before content.

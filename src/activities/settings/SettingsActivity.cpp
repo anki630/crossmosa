@@ -59,7 +59,12 @@ void SettingsActivity::rebuildSettingsLists() {
   // Append device-only ACTION items
   controlsSettings.insert(controlsSettings.begin(),
                           SettingInfo::Action(StrId::STR_REMAP_FRONT_BUTTONS, SettingAction::RemapFrontButtons));
+  // v130:條目與 include(檔頭)、動作 handler(下方 SettingAction::BleRemote)必須同一個守衛。
+  // v108 把 BLE 關掉(platformio.ini build_src_filter 排掉 -<ble/> 與 BleRemotePairingActivity.cpp)
+  // 時只加了那兩處,漏了這裡 → 條目照樣顯示,選下去 handler 被編譯掉、直接 break,按了完全沒反應。
+#ifdef CROSSMOSA_BLE
   controlsSettings.push_back(SettingInfo::Action(StrId::STR_BLE_REMOTE, SettingAction::BleRemote));
+#endif
   systemSettings.push_back(SettingInfo::Action(StrId::STR_WIFI_NETWORKS, SettingAction::Network));
   systemSettings.push_back(SettingInfo::Action(StrId::STR_OPDS_SERVERS, SettingAction::OPDSBrowser));
   systemSettings.push_back(SettingInfo::Action(StrId::STR_CLEAR_READING_CACHE, SettingAction::ClearCache));

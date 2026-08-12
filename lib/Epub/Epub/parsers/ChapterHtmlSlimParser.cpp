@@ -76,7 +76,13 @@ const char* getAttribute(const XML_Char** atts, const char* attrName) {
 // of such IDs for progress tracking or internal bookkeeping, and recording each one
 // as a navigation anchor exhausts the heap on memory-constrained devices.
 // Block-level, sectioning, and structural elements are always considered navigable.
-bool isNonNavigableInlineElement(const char* name) { return strcmp(name, "span") == 0; }
+// Normalises its own input: callers pass expat's raw element name, which carries any
+// namespace prefix the document declared. xmlLocalName is idempotent, so passing an
+// already-stripped name is fine too.
+bool isNonNavigableInlineElement(const char* rawName) {
+  const char* const name = xmlLocalName(rawName);
+  return strcmp(name, "span") == 0;
+}
 
 bool isInternalEpubLink(const char* href) {
   if (!href || href[0] == '\0') return false;
@@ -93,7 +99,8 @@ bool isHeaderOrBlock(const char* name) {
 }
 
 bool isTableStructuralTag(const char* name) {
-  return strcmp(name, "table") == 0 || strcmp(name, "tr") == 0 || strcmp(name, "td") == 0 || strcmp(name, "th") == 0;
+  const char* const tag = xmlLocalName(name);
+  return strcmp(tag, "table") == 0 || strcmp(tag, "tr") == 0 || strcmp(tag, "td") == 0 || strcmp(tag, "th") == 0;
 }
 
 void ChapterHtmlSlimParser::applyDirectionToEntry(StyleStackEntry& entry, const CssStyle& css) {
@@ -364,6 +371,7 @@ void ChapterHtmlSlimParser::emitHorizontalRule(const BlockStyle& blockStyle) {
 
 void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char* name, const XML_Char** atts) {
   auto* self = static_cast<ChapterHtmlSlimParser*>(userData);
+  const char* const element = xmlLocalName(name);
 
   // Middle of skip
   if (self->skipUntilDepth < self->depth) {
@@ -371,10 +379,10 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
     return;
   }
 
-  if (strcmp(name, "p") == 0) {
+  if (strcmp(element, "p") == 0) {
     self->xpathParagraphIndex++;
   }
-  if (strcmp(name, "li") == 0) {
+  if (strcmp(element, "li") == 0) {
     self->xpathListItemIndex++;
   }
 
@@ -457,7 +465,7 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
   }
 
   // Special handling for tables/cells: flatten into per-cell paragraphs with a prefixed header.
-  if (strcmp(name, "table") == 0) {
+  if (strcmp(element, "table") == 0) {
     // skip nested tables
     if (self->tableDepth > 0) {
       self->tableDepth += 1;
@@ -474,14 +482,14 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
     return;
   }
 
-  if (self->tableDepth == 1 && strcmp(name, "tr") == 0) {
+  if (self->tableDepth == 1 && strcmp(element, "tr") == 0) {
     self->tableRowIndex += 1;
     self->tableColIndex = 0;
     self->depth += 1;
     return;
   }
 
-  if (self->tableDepth == 1 && (strcmp(name, "td") == 0 || strcmp(name, "th") == 0)) {
+  if (self->tableDepth == 1 && (strcmp(element, "td") == 0 || strcmp(element, "th") == 0)) {
     if (self->partWordBufferIndex > 0) {
       self->flushPartWordBuffer();
     }
@@ -520,7 +528,7 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
     return;
   }
 
-  if (self->tableDepth == 1 && strcmp(name, "hr") == 0) {
+  if (self->tableDepth == 1 && strcmp(element, "hr") == 0) {
     self->depth += 1;
     return;
   }
@@ -859,7 +867,7 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
   // Detect internal <a href="..."> links (footnotes, cross-references)
   // Note: <aside epub:type="footnote"> elements are rendered as normal content
   // without special handling. Links pointing to them are collected as footnotes.
-  if (strcmp(name, "a") == 0) {
+  if (strcmp(element, "a") == 0) {
     const char* href = getAttribute(atts, "href");
 
     bool isInternalLink = isInternalEpubLink(href);
@@ -904,7 +912,7 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
   const auto userAlignmentBlockStyle = BlockStyle::fromCssStyle(
       cssStyle, emSize, static_cast<CssTextAlign>(self->paragraphAlignment), self->viewportWidth);
 
-  if (strcmp(name, "hr") == 0) {
+  if (strcmp(element, "hr") == 0) {
     auto hrBlockStyle = BlockStyle::fromCssStyle(cssStyle, emSize, CssTextAlign::Left, self->viewportWidth);
     if (!self->embeddedStyle) {
       hrBlockStyle.marginLeft = 0;
@@ -937,7 +945,7 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
     self->boldUntilDepth = std::min(self->boldUntilDepth, self->depth);
     self->updateEffectiveInlineStyle();
   } else if (matches(name, BLOCK_TAGS, std::size(BLOCK_TAGS))) {
-    if (strcmp(name, "br") == 0) {
+    if (strcmp(element, "br") == 0) {
       if (self->partWordBufferIndex > 0) {
         // flush word preceding <br/> to currentTextBlock before calling startNewTextBlock
         self->flushPartWordBuffer();
@@ -959,7 +967,7 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
       self->updateEffectiveInlineStyle();
 
       if (!self->currentTextBlock) return;  // block alloc refused under low heap; don't deref null
-      if (strcmp(name, "li") == 0) {
+      if (strcmp(element, "li") == 0) {
         self->currentTextBlock->addWord("\xe2\x80\xa2", EpdFontFamily::REGULAR);
         self->listItemBulletOnly = true;
       }
@@ -1018,14 +1026,14 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
     applyDirectionToEntry(entry, cssStyle);
     self->inlineStyleStack.push_back(entry);
     self->updateEffectiveInlineStyle();
-  } else if (strcmp(name, "sup") == 0 || strcmp(name, "sub") == 0) {
+  } else if (strcmp(element, "sup") == 0 || strcmp(element, "sub") == 0) {
     if (self->partWordBufferIndex > 0) {
       self->flushPartWordBuffer();
       self->nextWordContinues = true;
     }
     StyleStackEntry entry;
     entry.depth = self->depth;
-    if (strcmp(name, "sup") == 0) {
+    if (strcmp(element, "sup") == 0) {
       entry.hasSup = true;
       entry.sup = true;
     } else {
@@ -1034,7 +1042,7 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
     }
     self->inlineStyleStack.push_back(entry);
     self->updateEffectiveInlineStyle();
-  } else if (strcmp(name, "span") == 0 || !isHeaderOrBlock(name)) {
+  } else if (strcmp(element, "span") == 0 || !isHeaderOrBlock(name)) {
     // Handle span and other inline elements for CSS styling
     if (cssStyle.hasFontWeight() || cssStyle.hasFontStyle() || cssStyle.hasTextDecoration() ||
         cssStyle.hasDirection() || cssStyle.hasVerticalAlign()) {
@@ -1266,6 +1274,7 @@ void XMLCALL ChapterHtmlSlimParser::defaultHandlerExpand(void* userData, const X
 
 void XMLCALL ChapterHtmlSlimParser::endElement(void* userData, const XML_Char* name) {
   auto* self = static_cast<ChapterHtmlSlimParser*>(userData);
+  const char* const element = xmlLocalName(name);
 
   // Check if any style state will change after we decrement depth
   // If so, we MUST flush the partWordBuffer with the CURRENT style first
@@ -1279,7 +1288,7 @@ void XMLCALL ChapterHtmlSlimParser::endElement(void* userData, const XML_Char* n
   const bool headerOrBlockTag = isHeaderOrBlock(name);
   const bool tableStructuralTag = isTableStructuralTag(name);
 
-  if (self->tableDepth > 1 && strcmp(name, "table") == 0) {
+  if (self->tableDepth > 1 && strcmp(element, "table") == 0) {
     // get rid of all text inside the nested table
     self->partWordBufferIndex = 0;
     self->tableDepth -= 1;
@@ -1329,15 +1338,15 @@ void XMLCALL ChapterHtmlSlimParser::endElement(void* userData, const XML_Char* n
     self->skipUntilDepth = INT_MAX;
   }
 
-  if (self->tableDepth == 1 && (strcmp(name, "td") == 0 || strcmp(name, "th") == 0)) {
+  if (self->tableDepth == 1 && (strcmp(element, "td") == 0 || strcmp(element, "th") == 0)) {
     self->nextWordContinues = false;
   }
 
-  if (self->tableDepth == 1 && (strcmp(name, "tr") == 0)) {
+  if (self->tableDepth == 1 && (strcmp(element, "tr") == 0)) {
     self->nextWordContinues = false;
   }
 
-  if (self->tableDepth == 1 && strcmp(name, "table") == 0) {
+  if (self->tableDepth == 1 && strcmp(element, "table") == 0) {
     self->tableDepth -= 1;
     self->tableRowIndex = 0;
     self->tableColIndex = 0;
@@ -1367,7 +1376,7 @@ void XMLCALL ChapterHtmlSlimParser::endElement(void* userData, const XML_Char* n
     self->updateEffectiveInlineStyle();
 
     // br is self-closing and not a container — it doesn't push/pop the stack.
-    if (strcmp(name, "br") != 0 && self->blockStyleStack.size() > 1) {
+    if (strcmp(element, "br") != 0 && self->blockStyleStack.size() > 1) {
       // Apply closing element's bottom margin to the current text block so
       // container spacing appears after the element's content (on the last child),
       // not on the first child via the empty-block merge in startNewTextBlock.
@@ -1381,7 +1390,7 @@ void XMLCALL ChapterHtmlSlimParser::endElement(void* userData, const XML_Char* n
     // </li> closes: if the bullet never got inline text (empty <li> or <li> with only
     // block children that were flushed), clear the flag so the next sibling doesn't
     // merge into this block.
-    if (strcmp(name, "li") == 0) {
+    if (strcmp(element, "li") == 0) {
       self->listItemBulletOnly = false;
     }
   }

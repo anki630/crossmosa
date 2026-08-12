@@ -52,11 +52,17 @@ std::unique_ptr<Epub> ReaderActivity::loadEpub(const std::string& path) {
     if (uncached) loan.emplace(renderer);
     loaded = epub->load(true, SETTINGS.embeddedStyle == 0);
   }
-  if (loaded) {
+  // load() only reports that the metadata cache is readable; it says nothing about
+  // whether the book has any content. A spine of 0 renders as the End-of-Book screen
+  // (EpubReaderActivity's `currentSpineIndex == getSpineItemsCount()`), which reads as
+  // "you finished this book" rather than "this book could not be parsed". Refuse it
+  // here so the failure is reported as a failure.
+  if (loaded && epub->getSpineItemsCount() > 0) {
     return epub;
   }
 
-  LOG_ERR("READER", "Failed to load epub");
+  LOG_ERR("READER", "Failed to load epub (loaded=%d, spine=%d)", loaded ? 1 : 0,
+          loaded ? epub->getSpineItemsCount() : -1);
   return nullptr;
 }
 

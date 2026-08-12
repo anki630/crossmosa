@@ -616,9 +616,35 @@ std::string Epub::getThumbBmpPath() const { return cachePath + "/thumb_[HEIGHT].
 std::string Epub::getThumbBmpPath(int height) const { return cachePath + "/thumb_" + std::to_string(height) + ".bmp"; }
 
 bool Epub::generateThumbBmp(int height) const {
-  // Already generated, return true
-  if (Storage.exists(getThumbBmpPath(height).c_str())) {
-    return true;
+  const auto thumbPath = getThumbBmpPath(height);
+
+  // Already generated, return true.
+  //
+  // ...except that "exists" is not the same as "usable". The tail of this function
+  // deliberately writes a ZERO-BYTE file as a "don't try again" marker, and the
+  // coverItemHref-is-empty branch falls through into it -- but an empty coverItemHref
+  // is TRANSIENT state (it comes from book.bin), not a property of the book. v127's
+  // namespace-prefix bug made every affected book parse to an empty spine AND an empty
+  // coverItemHref, so each one got a permanent no-cover marker; fixing the parser could
+  // not undo it, because this function returned early on the marker's mere existence.
+  // A zero-byte marker must therefore not outlive the condition that produced it: once
+  // a cover href is known, drop the marker and regenerate. Books that genuinely have no
+  // cover keep theirs and still short-circuit, so this costs them nothing.
+  if (Storage.exists(thumbPath.c_str())) {
+    bool emptyMarker = false;
+    HalFile existing;
+    if (Storage.openFileForRead("EBP", thumbPath, existing)) {
+      emptyMarker = existing.fileSize() == 0;
+      // Explicit close() required before the Storage.remove() below.
+      existing.close();
+    }
+    const bool coverKnown = bookMetadataCache && bookMetadataCache->isLoaded() &&
+                            !bookMetadataCache->coreMetadata.coverItemHref.empty();
+    if (!emptyMarker || !coverKnown) {
+      return true;
+    }
+    LOG_DBG("EBP", "Stale empty thumb marker but a cover is now known; regenerating");
+    Storage.remove(thumbPath.c_str());
   }
 
   if (!bookMetadataCache || !bookMetadataCache->isLoaded()) {

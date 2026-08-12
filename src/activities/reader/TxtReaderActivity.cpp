@@ -854,9 +854,6 @@ void TxtReaderActivity::openReaderMenu() {
         }
 
         switch (static_cast<TxtReaderMenuActivity::MenuAction>(menu.action)) {
-          case TxtReaderMenuActivity::MenuAction::GO_HOME:
-            onGoHome();
-            return;
           case TxtReaderMenuActivity::MenuAction::GO_TO_PERCENT: {
             const size_t size = txt->getFileSize();
             const int initial = size != 0 ? static_cast<int>(pageStartOffset_ * 100 / size) : 0;

@@ -23,9 +23,7 @@ class EpubReaderMenuActivity final : public Activity {
     FONT_SIZE,
     LINE_SPACING,
     BOLD_TEXT,
-    SCREENSHOT,
     DISPLAY_QR,
-    GO_HOME,
     DELETE_CACHE
   };
 

@@ -48,7 +48,6 @@
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "util/BookmarkUtil.h"
-#include "util/ScreenshotUtil.h"
 
 namespace {
 // ImageBlock low-memory relief hooks: temporarily unload the SD reading font so a
@@ -338,8 +337,11 @@ void EpubReaderActivity::openReaderMenu() {
                            applyOrientation(menu.orientation);
                            toggleAutoPageTurn(menu.pageTurnOption);
                            // 字級與方向同語意:彈窗選定即生效(選單取消也套用)。設定先提交,重啟與否分開判斷:
-                           // - GO_HOME:走正常退出(onExit 完整執行),重排延到下次開書,不吞使用者按的動作
                            // - 內建 fallback 字型(v30 OMIT_FONTS)四級同一字面 → 字面沒變就不重排重啟(免白重啟)
+                           // v129:GO_HOME 已移出選單(Back 短按即回主畫面),原本「選了回主畫面就不重啟、
+                           // 把重排延到下次開書」的特例隨之消失——現在改了字級/行距/粗體後離開選單一律照
+                           // needsReflow 判斷。行為與原本「按 Back 離開選單」那條路徑一致(isCancelled=true
+                           // 時 goingHome 本來就是 false),所以這不是新語意,只是少了一個出口。
                            const bool fontSizeChanged = menu.fontSize != SETTINGS.fontSize;
                            const bool lineSpacingChanged = menu.lineSpacing != SETTINGS.lineSpacing;
                            const bool boldChanged = menu.boldBody != SETTINGS.boldBodyText;
@@ -349,9 +351,6 @@ void EpubReaderActivity::openReaderMenu() {
                              SETTINGS.lineSpacing = menu.lineSpacing;
                              SETTINGS.boldBodyText = menu.boldBody;
                              SETTINGS.saveToFile();
-                             const bool goingHome =
-                                 !result.isCancelled && static_cast<EpubReaderMenuActivity::MenuAction>(menu.action) ==
-                                                            EpubReaderMenuActivity::MenuAction::GO_HOME;
                              // 行距/粗體都在 section 檔頭,改了必然要重排;字級則要問登錄表字面
                              // 是否真的會變(sizeChangeTakesEffect 註解有 v38 誤判的教訓)
                              bool needsReflow = lineSpacingChanged || boldChanged;
@@ -362,7 +361,7 @@ void EpubReaderActivity::openReaderMenu() {
 #endif
                                needsReflow = needsReflow || faceChanges;
                              }
-                             if (!goingHome && needsReflow) {
+                             if (needsReflow) {
                                restartToReflow();
                                return;  // 重啟中
                              }
@@ -876,10 +875,6 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
       requestUpdate();
       break;
     }
-    case EpubReaderMenuActivity::MenuAction::GO_HOME: {
-      onGoHome();
-      return;
-    }
     case EpubReaderMenuActivity::MenuAction::DELETE_CACHE: {
       {
         RenderLock lock(*this);
@@ -897,14 +892,6 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
       }
       onGoHome();
       return;
-    }
-    case EpubReaderMenuActivity::MenuAction::SCREENSHOT: {
-      {
-        RenderLock lock(*this);
-        pendingScreenshot = true;
-      }
-      requestUpdate();
-      break;
     }
     case EpubReaderMenuActivity::MenuAction::BOOKMARKS: {
       startActivityForResult(
@@ -1532,11 +1519,6 @@ void EpubReaderActivity::render(RenderLock&& lock) {
       lastSavedPage = section->currentPage;
       lastSavedPageCount = section->estimatedTotalPages();
     }
-  }
-
-  if (pendingScreenshot) {
-    pendingScreenshot = false;
-    ScreenshotUtil::takeScreenshot(renderer);
   }
 
   if (showBookmarkMessage) {

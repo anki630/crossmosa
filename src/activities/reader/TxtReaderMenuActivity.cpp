@@ -22,13 +22,15 @@ TxtReaderMenuActivity::TxtReaderMenuActivity(GfxRenderer& renderer, MappedInputM
 
 std::vector<TxtReaderMenuActivity::MenuItem> TxtReaderMenuActivity::buildMenuItems() {
   std::vector<MenuItem> items;
-  items.reserve(4);
+  items.reserve(3);
   // 跳到百分比排第一:txt 沒有目錄也沒有書籤,它是唯一的隨機存取手段,
   // 同時也是「進度掉了找得回來」的安全網。
   items.push_back({MenuAction::GO_TO_PERCENT, StrId::STR_GO_TO_PERCENT});
   items.push_back({MenuAction::FONT_SIZE, StrId::STR_FONT_SIZE});
+  // v129:GO_HOME 移除——閱讀中 Back 鍵本來就回得了主畫面(ReaderUtils.h handleBackNavigation:
+  // 預設短按回主畫面,開了 backShortToFileBrowser 則改成長按)。註腳開著或自動翻頁進行中時
+  // 第一次 Back 會先被那個狀態吃掉,需要按第二次——仍然比「開選單→選項目」便宜。
   items.push_back({MenuAction::ROTATE_SCREEN, StrId::STR_ORIENTATION});
-  items.push_back({MenuAction::GO_HOME, StrId::STR_GO_HOME_BUTTON});
   return items;
 }
 

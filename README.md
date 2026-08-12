@@ -58,7 +58,12 @@ Wi-Fi 連線當機**,這裡先修掉了(細節見 CHANGELOG 的 1.0.0 節)。
 
 ## 這是什麼
 
-版本:`1.1.0`
+版本:`1.2.0`
+
+> **1.2.0 修了什麼**:有些 EPUB 開起來直接顯示「全書完」——目次檔的元素名帶了命名空間前綴
+> (`<ns0:package>`,EPUB 規格允許但不常見),而解析器只認裸名,於是收到 0 筆章節。連帶修好書名作者消失、
+> 主畫面封面變空框。**中招的書刷完會自動復原,不必手動刪 SD 卡上的快取。**
+> 另外重整了閱讀選單(14 → 12 項)。完整說明見 [CHANGELOG](CHANGELOG.md)。
 
 CrossMosa 是原版 [CrossPoint](https://github.com/crosspoint-reader/crosspoint-reader)(本分支的來源專案,開發圈慣稱 upstream)的繁體中文分支。
 原版是通用的開源電子書系統,支援兩種機型、二十幾種介面語言、多種檔案格式。
@@ -121,8 +126,8 @@ CrossMosa 是下班後的個人專案。如果它讓你的 X3 變好用了,幾�
 
 | 步驟 | 檔案 | 去哪 |
 |---|---|---|
-| **1. 刷韌體** | `crossmosa-1.1.0-firmware.zip` | 裝置的 flash |
-| **2. 複製字型** | `crossmosa-1.1.0-sd-fonts.zip` | SD 卡的 `/.fonts/` |
+| **1. 刷韌體** | `crossmosa-1.2.0-firmware.zip` | 裝置的 flash |
+| **2. 複製字型** | `crossmosa-1.2.0-sd-fonts.zip` | SD 卡的 `/.fonts/` |
 
 兩個檔案都在同一個 [Release](../../releases) 頁面。
 
@@ -174,7 +179,7 @@ esptool.py --chip esp32c3 --port /dev/ttyACM0 --baud 921600 \
 
 ### 步驟 2:複製 SD 卡字型
 
-解開 `crossmosa-1.1.0-sd-fonts.zip`,把**整個字型資料夾**複製到 SD 卡的 `/.fonts/` 底下:
+解開 `crossmosa-1.2.0-sd-fonts.zip`,把**整個字型資料夾**複製到 SD 卡的 `/.fonts/` 底下:
 
 ```
 SD 卡根目錄
@@ -213,7 +218,7 @@ SD 卡根目錄
 
 代表更新器有啟動,是後半段沒過。依序檢查:
 
-1. **檔案大小是否恰為 6,003,776 bytes**(v1.1.0)——九成的問題在這:
+1. **檔案大小是否恰為 6,003,296 bytes**(v1.2.0)——九成的問題在這:
    下載不完整、瀏覽器存成 `update (1).bin`、Windows 隱藏副檔名變成
    `update.bin.bin`、誤放整個 zip 沒解壓,**或 SD 卡上殘留著一顆舊的
    `update.bin`**(更新器抓到的是舊檔——社群實例,換上正確的檔就成功了)。
@@ -246,7 +251,7 @@ SD 韌體選擇畫面(救援模式)——這條路只要機器上還是 CrossMos
    （沒看到就代表 SD 卡路徑不對,檢查是 `/.fonts/字型名/` 而不是 `/.fonts/`。）
 3. 選字級:**設定 → 閱讀器 → 閱讀字級**(對應 SD 字型的 16/18/20/22)。
 4. 裝置會在 SD 卡建 `/.crossmosa/` 放進度、書籤、Wi-Fi 憑證與快取。**不要刪它。**
-5. 版號顯示在**開機畫面**與**設定頁**,確認是 `1.1.0`。
+5. 版號顯示在**開機畫面**與**設定頁**,確認是 `1.2.0`。
 
 ### 傳書進去
 
@@ -259,7 +264,7 @@ SD 韌體選擇畫面(救援模式)——這條路只要機器上還是 CrossMos
 
 ### 待機壁紙(選配)
 
-[Release](../../releases) 另附 `crossmosa-1.1.0-wallpapers.zip`:**50 張世界名畫**,
+[Release](../../releases) 另附 `crossmosa-1.2.0-wallpapers.zip`:**50 張世界名畫**,
 全部取自 Wikimedia Commons 的公共領域作品,每一張都為 X3 這塊 4 階灰階面板挑過、裁過、調過。
 
 把 `.bmp` 複製到 SD 卡的 `/.sleep/`(**放兩張以上才會輪播**),
@@ -441,7 +446,7 @@ core 裡,不是本專案能改的),兩次建置就會差幾十個位元組。設
 
 ![CrossMosa on real hardware: Traditional Chinese home menu, serif body text, masterpiece sleep screen](docs/promo/hero-photo.jpg)
 
-Version: `1.1.0`
+Version: `1.2.0`
 
 ## What it is
 
@@ -508,7 +513,7 @@ renders as boxes (□□□□)**.
    **Settings → System → SD Card Firmware Update** — or
    the rescue combo (power off, hold the left side button, press power) straight into the
    SD firmware picker.
-2. **Copy the fonts** from `crossmosa-1.1.0-sd-fonts.zip` into `/.fonts/` on the SD card,
+2. **Copy the fonts** from `crossmosa-1.2.0-sd-fonts.zip` into `/.fonts/` on the SD card,
    keeping one folder per family (`/.fonts/NotoSerifTC/…`). One family is enough;
    **NotoSerifTC** is the recommended first choice (22,219 Han, widest coverage).
    Folder names must not contain spaces.
@@ -521,7 +526,7 @@ First boot: the UI defaults to **Traditional Chinese** (this fork's whole point)
 **Settings → Reader → Reader Font Family** to pick the SD font. The device creates
 `/.crossmosa/` on the card for progress, bookmarks and Wi-Fi credentials — don't delete it.
 
-**Optional — sleep wallpapers.** `crossmosa-1.1.0-wallpapers.zip` holds **50 public-domain
+**Optional — sleep wallpapers.** `crossmosa-1.2.0-wallpapers.zip` holds **50 public-domain
 masterpieces** from Wikimedia Commons, each individually checked and tuned for this panel's
 4 grey levels. Copy the `.bmp` files to `/.sleep/` on the SD card (two or more to rotate),
 then **Settings → Display → Sleep Screen → Custom**. The converter, the curation manifest and

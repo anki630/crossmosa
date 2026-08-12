@@ -33,7 +33,7 @@ Response:
 
 ```json
 {
-  "version": "1.1.0",
+  "version": "1.2.0",
   "ip": "192.168.1.100",
   "mode": "STA",
   "rssi": -45,
