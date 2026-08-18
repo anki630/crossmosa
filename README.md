@@ -138,7 +138,10 @@ CrossMosa 是下班後的個人專案。如果它讓你的 X3 變好用了，幾
 1. **把 SD 卡上的 `/.crossmosa/` 整個資料夾備份到電腦。** 設定、Wi-Fi 憑證、OPDS 設定，以及
    每一本書的閱讀進度都在裡面——重刷韌體救不回來，而救援流程可能還會要求你重新格式化 SD 卡。
 2. **SD 卡根目錄只留一個 `.bin` 檔。** 救援時螢幕可能完全沒有畫面，你會看不到自己選了什麼。
-3. **確認你能接受最壞的情況**:刷完可能要走一輪全盲操作的救援流程，甚至需要聯繫原廠更換機器。
+3. **確認你能接受最壞的情況——最壞就是機器救不回來。**
+   **已經有使用者的機器變成磚**，而且**救援程序本身也有人走不通**。
+   救援不是「有代價但一定成得了」的保險，它只是一條**可能有用**的路。
+   刷之前請先假設「這台機器可能就這樣沒了」，你仍然願意，再開始。
 
 ### ⚠️ 一定要做兩件事，少做一件，中文書就是滿頁方塊
 
@@ -196,10 +199,12 @@ esptool.py --chip esp32c3 --port /dev/ttyACM0 --baud 921600 \
 > 直接向 xteink.com 買的沒有鎖。**方法 A 不受鎖定影響**。上游的警告仍然算數:
 > **不要用 Xteink Unlocker 來刷 CrossMosa**(該工具官方只支援 CrossPoint 與 CrossInk，
 > 刷其他韌體有變磚風險)。退路:CrossMosa 保留完整的 SD 救援模式（見「日後更新」），
-> 但**它有兩個重要限制，不是「任何時候都能」**——本專案 2026-08 兩件都實際踩過:
+> 但**請不要把它當成保證**:已有使用者照著救援程序仍然**沒有把機器救回來**。
+> 已知會讓救援失效的情況至少有兩種（本專案 2026-08 都實際踩過）:
 > ①救援模式需要**以電源鍵喚醒**才會觸發，所以**韌體一旦卡在開機迴圈就進不去**
 > （重置迴圈的喚醒原因不是電源鍵）;那種情況要先讓**電池完全放光**打斷迴圈才有機會。
 > ②**部分 X3 的 USB 只有充電、沒有資料傳輸**，那種機器上方法 B 與方法 C 完全不可用。
+> 除此之外還有目前無法解釋的失敗案例。**沒有任何一條路能保證把機器救回來。**
 > 上游完整原文:[`docs/UPSTREAM-README.md`](docs/UPSTREAM-README.md) "USB-locked devices"。
 
 ### 步驟 2:複製 SD 卡字型
@@ -426,7 +431,8 @@ core 裡，不是本專案能改的)，兩次建置就會差幾十個位元組�
 - **本專案不提供任何書籍內容，也不內建任何書源。** 韌體與 Release 裡沒有書。
   請從正版管道取得電子書(無 DRM 的正版 EPUB:出版社或獨立書店直售、公共領域書庫、
   你自己的文件)，放進 SD 卡或自架書庫使用。請支持正版，尊重創作者。
-- **刷機有風險，自負。** 刷第三方韌體可能讓裝置無法開機，**而且不保證救得回來**。
+- **刷機有風險，自負。** 刷第三方韌體可能讓裝置無法開機。**已經有實際變磚的案例，
+  而且救援程序對部分機器無效——請假設有可能救不回來。**
   開始之前請先讀安裝章開頭的「刷機無法保證成功」與 USB-locked 注意事項:
   SD 救援模式在韌體卡住開機迴圈時進不去，部分機器的 USB 也沒有資料傳輸。
 - **與 Xteink 無關，與原版 CrossPoint 專案也無隸屬關係。** 兩者都不為這個分支負責。
@@ -536,7 +542,9 @@ that upstream arduino-esp32 still carries**. See the [CHANGELOG](CHANGELOG.md) f
 > Wi-Fi credentials, OPDS config and every book's reading position live there and cannot be
 > recovered by reflashing); keep **only one** `.bin` in the SD card root (rescue may run with
 > no display at all, so you cannot see what you are selecting); and be sure you can live with
-> the worst case — a blind rescue procedure, or contacting the vendor for a replacement.
+> the worst case — **which is losing the device.** Users have bricked units, and **the rescue
+> procedure has failed for some of them too.** Rescue is a path that *may* work, not insurance.
+> Assume the device might not come back, and only proceed if you still accept that.
 
 Flashing the firmware only fixes the **menus**. **Book text needs fonts on the SD card.**
 The built-in fallback reader font is Latin-only, so **without the SD fonts every Chinese book
@@ -549,7 +557,9 @@ renders as boxes (□□□□)**.
 > and community documentation confirms it works even on USB-locked units. Do not use the
 > Xteink Unlocker to flash this firmware (that tool officially supports only CrossPoint and
 > CrossInk). Escape hatch on locked units: CrossMosa keeps the full SD rescue mode — but
-> it has **two important limits, so it is not "always"**, both hit by this project in 2026-08:
+> **do not treat it as a guarantee** — some users have followed the rescue procedure and still
+> did not get their device back. At least two known conditions defeat it (both hit by this
+> project in 2026-08), and there are further failures with no explanation yet:
 > (1) rescue mode only triggers on a **power-button wake**, so it is **unreachable once the
 > firmware is stuck in a boot loop** (a reset loop does not wake via the power button); you
 > must let the **battery drain completely** to break the loop first. (2) **on some X3 units the
