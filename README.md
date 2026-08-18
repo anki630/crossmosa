@@ -117,6 +117,29 @@ CrossMosa 是下班後的個人專案。如果它讓你的 X3 變好用了，幾
 
 以下把這套系統（技術上叫「韌體」）刷進機器。
 
+### ⚠️ 先讀這段:刷機無法保證成功
+
+同一份韌體在不同的 X3 機台上，結果**並不一致**——有些機器刷完正常運作，有些機器刷完之後
+面板就不再更新。**目前找不到原因，本專案無法保證任何版本能在你的機器上運作。**
+
+**已知症狀**:刷入後畫面停在最後一幀不動；韌體的 log 可能顯示每一次刷新都「成功」，面板卻實體不動。
+
+⚠️ **e-ink 會保留殘影，所以「畫面上有東西」不代表機器還活著**；反過來，韌體也可能仍在正常執行，
+只是面板收不到命令。要判斷機器是死是活，請**看 SD 卡上檔案的時間戳，不要看螢幕**。
+
+**這不是本專案獨有的問題。** 上游 CrossPoint 有一筆至今尚未解決的同類回報:
+[#2183 — Screen refresh not working on crosspoint but functional on official firmwares](https://github.com/crosspoint-reader/crosspoint-reader/issues/2183)
+（2026-05-28 開啟，目前仍是 open）。該案中韌體的 log 顯示刷新成功、面板卻不動，而官方韌體在
+同一台機器上正常；維護者提供的客製韌體測試無效，回報者最後聯繫原廠更換機器。高度懷疑是
+**面板批次或硬體差異**，而非單一韌體版本的缺陷。
+
+**開始之前務必做的三件事**
+
+1. **把 SD 卡上的 `/.crossmosa/` 整個資料夾備份到電腦。** 設定、Wi-Fi 憑證、OPDS 設定，以及
+   每一本書的閱讀進度都在裡面——重刷韌體救不回來，而救援流程可能還會要求你重新格式化 SD 卡。
+2. **SD 卡根目錄只留一個 `.bin` 檔。** 救援時螢幕可能完全沒有畫面，你會看不到自己選了什麼。
+3. **確認你能接受最壞的情況**:刷完可能要走一輪全盲操作的救援流程，甚至需要聯繫原廠更換機器。
+
 ### ⚠️ 一定要做兩件事，少做一件，中文書就是滿頁方塊
 
 刷韌體**只解決介面**。**書的內文字型不在韌體裡**，它在 SD 卡上。
@@ -173,8 +196,10 @@ esptool.py --chip esp32c3 --port /dev/ttyACM0 --baud 921600 \
 > 直接向 xteink.com 買的沒有鎖。**方法 A 不受鎖定影響**。上游的警告仍然算數:
 > **不要用 Xteink Unlocker 來刷 CrossMosa**(該工具官方只支援 CrossPoint 與 CrossInk，
 > 刷其他韌體有變磚風險)。退路:CrossMosa 保留完整的 SD 救援模式（見「日後更新」），
-> 任何時候都能經它刷回官方 CrossPoint release——這條退路是架構上的保證，也是社群的
-> 常規做法，但本專案尚未在「確認被鎖」的機器上親自驗證過，誠實記錄於此。
+> 但**它有兩個重要限制，不是「任何時候都能」**——本專案 2026-08 兩件都實際踩過:
+> ①救援模式需要**以電源鍵喚醒**才會觸發，所以**韌體一旦卡在開機迴圈就進不去**
+> （重置迴圈的喚醒原因不是電源鍵）;那種情況要先讓**電池完全放光**打斷迴圈才有機會。
+> ②**部分 X3 的 USB 只有充電、沒有資料傳輸**，那種機器上方法 B 與方法 C 完全不可用。
 > 上游完整原文:[`docs/UPSTREAM-README.md`](docs/UPSTREAM-README.md) "USB-locked devices"。
 
 ### 步驟 2:複製 SD 卡字型
@@ -401,8 +426,9 @@ core 裡，不是本專案能改的)，兩次建置就會差幾十個位元組�
 - **本專案不提供任何書籍內容，也不內建任何書源。** 韌體與 Release 裡沒有書。
   請從正版管道取得電子書(無 DRM 的正版 EPUB:出版社或獨立書店直售、公共領域書庫、
   你自己的文件)，放進 SD 卡或自架書庫使用。請支持正版，尊重創作者。
-- **刷機有風險，自負。** 刷第三方韌體可能讓裝置無法開機。務必留意安裝章的 USB-locked 注意事項、
-  也就是說你有一條刷回官方韌體的路。
+- **刷機有風險，自負。** 刷第三方韌體可能讓裝置無法開機，**而且不保證救得回來**。
+  開始之前請先讀安裝章開頭的「刷機無法保證成功」與 USB-locked 注意事項:
+  SD 救援模式在韌體卡住開機迴圈時進不去，部分機器的 USB 也沒有資料傳輸。
 - **與 Xteink 無關，與原版 CrossPoint 專案也無隸屬關係。** 兩者都不為這個分支負責。
 - **只在一台 X3 上測試過。** 沒有 X4，沒有第二台機器，沒有自動化的硬體測試。
   很多改動的驗證方式就是「用了幾天沒出事」。
@@ -485,6 +511,33 @@ that upstream arduino-esp32 still carries**. See the [CHANGELOG](CHANGELOG.md) f
 
 ## Install — you must do BOTH steps
 
+> ### ⚠️ Read this first: flashing is not guaranteed to work
+>
+> The same firmware behaves **differently on different X3 units** — some work fine after
+> flashing, others end up with a panel that no longer refreshes. **The cause is unknown and
+> this project cannot guarantee any release will work on your device.**
+>
+> **Known symptom:** the screen freezes on its last frame; the firmware's log may report every
+> refresh as successful while the panel physically does not update.
+>
+> ⚠️ **E-ink retains its last image, so "something is on screen" does not mean the device is
+> alive** — and conversely the firmware may still be running fine while the panel simply never
+> hears a command. Judge by **timestamps of files on the SD card, not by the screen.**
+>
+> **This is not specific to this fork.** Upstream CrossPoint has an unresolved report of the
+> same class: [#2183 — Screen refresh not working on crosspoint but functional on official
+> firmwares](https://github.com/crosspoint-reader/crosspoint-reader/issues/2183) (opened
+> 2026-05-28, still open). There the log reported successful refreshes, the panel did not move,
+> official firmware worked on the same unit, a maintainer's custom build did not help, and the
+> reporter ended up contacting the vendor for a replacement. Panel-batch or hardware variation
+> is the leading suspicion, not a defect in one firmware version.
+>
+> **Before you start:** back up the whole `/.crossmosa/` folder from your SD card (settings,
+> Wi-Fi credentials, OPDS config and every book's reading position live there and cannot be
+> recovered by reflashing); keep **only one** `.bin` in the SD card root (rescue may run with
+> no display at all, so you cannot see what you are selecting); and be sure you can live with
+> the worst case — a blind rescue procedure, or contacting the vendor for a replacement.
+
 Flashing the firmware only fixes the **menus**. **Book text needs fonts on the SD card.**
 The built-in fallback reader font is Latin-only, so **without the SD fonts every Chinese book
 renders as boxes (□□□□)**.
@@ -495,10 +548,12 @@ renders as boxes (□□□□)**.
 > to a computer** (you only need to copy one file onto the SD card),
 > and community documentation confirms it works even on USB-locked units. Do not use the
 > Xteink Unlocker to flash this firmware (that tool officially supports only CrossPoint and
-> CrossInk). Escape hatch on locked units: CrossMosa keeps the full SD rescue mode, so you can
-> always flash back to an official CrossPoint release from the SD card — an architectural
-> guarantee and common community practice, though this project has not personally verified it
-> on a confirmed-locked unit. Full upstream text:
+> CrossInk). Escape hatch on locked units: CrossMosa keeps the full SD rescue mode — but
+> it has **two important limits, so it is not "always"**, both hit by this project in 2026-08:
+> (1) rescue mode only triggers on a **power-button wake**, so it is **unreachable once the
+> firmware is stuck in a boot loop** (a reset loop does not wake via the power button); you
+> must let the **battery drain completely** to break the loop first. (2) **on some X3 units the
+> USB port is charge-only with no data lines**, which makes Methods B and C unusable entirely. Full upstream text:
 > [`docs/UPSTREAM-README.md`](docs/UPSTREAM-README.md), "USB-locked devices".
 
 1. **Flash** (first install) — **Method A, recommended — the device never touches a computer**:
