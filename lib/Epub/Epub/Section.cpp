@@ -1,16 +1,15 @@
+#include <esp_heap_caps.h>
+#include <esp_timer.h>
 #include "Section.h"
 
 #include <HalStorage.h>
 #include <Logging.h>
 #include <Memory.h>
 #include <Serialization.h>
-#include <esp_heap_caps.h>
 
-#include <cstdio>
-
-#include "BuildDiag.h"
 #include "Epub/css/CssParser.h"
 #include "Page.h"
+#include "ParsedText.h"
 #include "hyphenation/Hyphenator.h"
 #include "parsers/ChapterHtmlSlimParser.h"
 
@@ -21,20 +20,49 @@ namespace {
 // v30: Arabic shaping changed both drawing and measurement (getTextAdvanceX now
 //      measures the shaped visual text); cached word positions from v29 no longer
 //      match what drawText renders.
-// v32: image dimension probing (getDimensions) is no longer gated on free heap, so
-//      images that were silently dropped from a chapter's layout under memory
-//      pressure (and baked into the cache image-less) are now laid out. Bump forces
-//      a one-time re-layout so those chapters regain their images without the user
-//      having to manually invalidate the cache.
-// v33: built-in italic/bold-italic faces removed (aliased to regular/bold); caches
-//      laid out with italic metrics re-layout once.
-// v34: boldBodyText added to the header (bold-reading mode is baked into layout).
-// v123:34 → 35。圖片溢出頁面時的縮放修正改變了【排版結果】,而已排好的 section 快取
-// 不會自己重排 —— 不 bump 的話,那種「已經被固化成溢出座標」的章節照樣不顯示圖,
-// 看起來就像沒修好。bump 讓每本書下次開時自動重排一次(進度 progress.bin 不受影響)。
-// v126:35 → 36。放寬 MAX_SOURCE_PIXELS 之後,原本被版面階段丟掉的圖要重新進版面,
-// 而已排好的 section 快取記的是「這一頁沒有圖」—— 不 bump 就等於沒修。
-constexpr uint8_t SECTION_FILE_VERSION = 36;
+// v32: ImageBlock serializes the book-internal source href after the cache path
+//      (lazy extraction: images are header-probed at build time and extracted on
+//      first render).
+// v33: Support <ruby> and <rt> tags. Skip <rp> tags
+// v34: Word gaps are only suppressed for tokens glued in the source, so spaces between
+//      Hangul words survive again; ruby element boundaries carry the continuation flag
+//      instead. Invalidates v33 caches, whose word positions have the spaces collapsed.
+
+// v34: <br> handling changed layout — a <br> after text is now a margin-stripped
+//      line break (browser-like) and only a <br> whose block stays empty injects
+//      the scene-break gap, so cached pages laid out by older versions no longer
+//      match. Keeps <br>-per-paragraph books (common CJK formatting) from
+//      re-adding container spacing at every paragraph.
+// v35: Persist a uint32_t visible-text start offset for every page.
+// CrossMosa：跳號到 100，與上游【脫鉤】。
+// 我們的 36 與上游的 36 是【同號不同義】，檔頭佈局不相容：
+//   我們 36 = 上游 35 + v126（MAX_SOURCE_PIXELS 放寬，圖片重進版面）+ boldBodyText 欄位
+//   上游 36 = ruby / CJK justification（另有我們沒有的 ReaderRenderSpec）
+// 從 v130 升上這個新基底時，若沿用 36 -> 版本檢查【會通過】但佈局對不上 -> 排版錯亂，
+// 而壞掉的快取住在 SD 卡上，重刷韌體清不掉。
+// 為什麼是 100 不是 37/50：上游現在 41、每個 minor +2~3，跳 50 大約半年就被追上，
+// 而那時已經改不動了。跳 100 讓未來合併時這一行【必定衝突】，強迫人工判讀。
+// v144：100 → 101。v123 的圖片溢出縮放【改變了排版結果】，而已排好的 section 快取
+// 已經把溢出座標固化進去了 —— 不 bump 的話舊快取照樣記著「這張圖在螢幕外」，
+// 使用者看起來就像沒修好（教訓 A-11，v24/v123/v126 踩過三次）。
+// 代價：每本書下次開會重排一次，【閱讀進度不受影響】。
+// ⚠️ 重排視窗是記憶體壓力最高的時候，所以這一版特別要看實機的 alloc_fail 與 p2/p3 數字。
+// v145：101 → 102。v24 的「讀檔頭取寬高」讓記憶體吃緊時不再於版面階段丟圖，
+// 但已經固化成【無圖排版】的舊快取不會自己重排 —— 不 bump 就等於沒修。
+// ⚠️ 這是連續第二次 bump（v144 已 100 → 101）。代價是書再重排一次，
+//    而我在 v144 刻意不綁其他排版改動，這就是那個決定的帳單。進度仍不受影響。
+// v187：102 → 103（bump 批次，四件事一次跳號）：①上游 #2959 圖片上邊界夾限改變圖片頁的版面；
+// ②註腳 href 96→256（FootnoteEntry 存在頁資料裡）；③粗體閱讀 boldBodyText 進檔頭（v31/v41 回歸）；
+// ④CSS 載入狀態進檔頭——在記憶體地板下被截斷的規則集排出來的版面不再被當成永久正確（v163 複查）。
+constexpr uint8_t SECTION_FILE_VERSION = 103;
+// v187 檔頭的 cssState 欄位：0 = 沒用 CSS（embeddedStyle 關或載入失敗）、1 = 規則全載、
+// 2 = 撞記憶體地板被截斷（樣式打折的版面）。loadSectionFile 看到 2 且此刻記憶體寬裕就重排。
+constexpr uint8_t CSS_STATE_NONE = 0;
+constexpr uint8_t CSS_STATE_FULL = 1;
+constexpr uint8_t CSS_STATE_TRUNCATED = 2;
+// 3 = 已經為了截斷重排過一次、還是截斷（或載入失敗）：版面就這樣了，不再重排（收斂）。
+constexpr uint8_t CSS_STATE_TRUNCATED_FINAL = 3;
+
 // Written into the version field while a build is in progress; patched to
 // SECTION_FILE_VERSION only when the build is finalized. An abandoned /
 // crash-interrupted .bin therefore carries version 0, which loadSectionFile rejects
@@ -52,10 +80,23 @@ constexpr uint8_t SECTION_FILE_INCOMPLETE_VERSION = 0;
 // only fails (noisily, via the block-decode error path) when a page is loaded.
 // Derived so the pairing can't be forgotten: 0xFE for v28, 0xFD for v29, ...
 constexpr uint8_t SECTION_FILE_PARTIAL_VERSION = 0xFE - (SECTION_FILE_VERSION - 28);
+// CrossMosa：哨兵是【反向】遞減的，與 SECTION_FILE_VERSION 在 V=141 撞號。
+// 撞號後「建到一半」的 section 會被當成完整檔讀入，而失敗只在載入某一頁時才浮現。
+// 原本完全沒有護欄。純編譯期，不影響執行期行為。
+static_assert(SECTION_FILE_PARTIAL_VERSION != SECTION_FILE_VERSION,
+              "SECTION_FILE_PARTIAL_VERSION collides with SECTION_FILE_VERSION (they meet at 141)");
 constexpr uint32_t HEADER_SIZE = sizeof(uint8_t) + sizeof(int) + sizeof(float) + sizeof(bool) + sizeof(uint8_t) +
                                  sizeof(uint16_t) + sizeof(uint16_t) + sizeof(uint16_t) + sizeof(bool) + sizeof(bool) +
-                                 sizeof(uint8_t) + sizeof(bool) + sizeof(bool) + sizeof(uint32_t) + sizeof(uint32_t) +
-                                 sizeof(uint32_t) + sizeof(uint32_t);
+                                 sizeof(uint8_t) + sizeof(bool) + sizeof(bool) /*boldBodyText*/ +
+                                 sizeof(uint8_t) /*cssState*/ + sizeof(uint32_t) + sizeof(uint32_t) +
+                                 sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint32_t);
+// v187：五個「只讀檔頭尾段」的讀取點（loadPageAt／anchor／paragraph／li）原本不驗版號——跳號後
+// 還沒重開的舊 .bin 會被用舊偏移讀，拿到的是別的欄位（KOReader 同步的 ProgressMapper 會經過這條路）。
+bool headerVersionOk(HalFile& f) {
+  uint8_t version = 0;
+  serialization::readPod(f, version);
+  return version == SECTION_FILE_VERSION || version == SECTION_FILE_PARTIAL_VERSION;
+}
 }  // namespace
 
 // Out-of-line so the unique_ptr<ChapterHtmlSlimParser> in BuildContext can be
@@ -82,6 +123,7 @@ uint32_t Section::onPageComplete(std::unique_ptr<Page> page) {
     LOG_ERR("SCT", "Failed to serialize page %d", builtPageCount_);
     return 0;
   }
+  ParsedText::noteBuildProbe(3);  // v190：頁序列化到 SD，parseStep 內另一段不返回
   LOG_DBG("SCT", "Page %d processed", builtPageCount_);
 
   builtPageCount_++;
@@ -93,47 +135,43 @@ uint32_t Section::onPageComplete(std::unique_ptr<Page> page) {
   return position;
 }
 
-void Section::writeSectionFileHeader(const int fontId, const float lineCompression, const bool extraParagraphSpacing,
-                                     const uint8_t paragraphAlignment, const uint16_t viewportWidth,
-                                     const uint16_t viewportHeight, const bool hyphenationEnabled,
-                                     const bool embeddedStyle, const uint8_t imageRendering,
-                                     const bool focusReadingEnabled, const bool boldBodyText) {
+void Section::writeSectionFileHeader(const ReaderRenderSpec& spec) {
   if (!file) {
     LOG_DBG("SCT", "File not open for writing header");
     return;
   }
-  static_assert(HEADER_SIZE == sizeof(SECTION_FILE_VERSION) + sizeof(fontId) + sizeof(lineCompression) +
-                                   sizeof(extraParagraphSpacing) + sizeof(paragraphAlignment) + sizeof(viewportWidth) +
-                                   sizeof(viewportHeight) + sizeof(pageCount) + sizeof(hyphenationEnabled) +
-                                   sizeof(embeddedStyle) + sizeof(imageRendering) + sizeof(focusReadingEnabled) + sizeof(boldBodyText) +
+  static_assert(HEADER_SIZE == sizeof(SECTION_FILE_VERSION) + sizeof(spec.fontId) + sizeof(spec.lineCompression) +
+                                   sizeof(spec.extraParagraphSpacing) + sizeof(spec.paragraphAlignment) +
+                                   sizeof(spec.viewportWidth) + sizeof(spec.viewportHeight) + sizeof(pageCount) +
+                                   sizeof(spec.hyphenationEnabled) + sizeof(spec.embeddedStyle) +
+                                   sizeof(spec.imageRendering) + sizeof(spec.focusReadingEnabled) +
+                                   sizeof(spec.boldBodyText) + sizeof(uint8_t) + sizeof(uint32_t) +
                                    sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint32_t),
                 "Header size mismatch");
   // Written as the incomplete sentinel; finalizeBuild() patches it to
   // SECTION_FILE_VERSION as the last step, committing the file.
   serialization::writePod(file, SECTION_FILE_INCOMPLETE_VERSION);
-  serialization::writePod(file, fontId);
-  serialization::writePod(file, lineCompression);
-  serialization::writePod(file, extraParagraphSpacing);
-  serialization::writePod(file, paragraphAlignment);
-  serialization::writePod(file, viewportWidth);
-  serialization::writePod(file, viewportHeight);
-  serialization::writePod(file, hyphenationEnabled);
-  serialization::writePod(file, embeddedStyle);
-  serialization::writePod(file, imageRendering);
-  serialization::writePod(file, focusReadingEnabled);
-  serialization::writePod(file, boldBodyText);
+  serialization::writePod(file, spec.fontId);
+  serialization::writePod(file, spec.lineCompression);
+  serialization::writePod(file, spec.extraParagraphSpacing);
+  serialization::writePod(file, spec.paragraphAlignment);
+  serialization::writePod(file, spec.viewportWidth);
+  serialization::writePod(file, spec.viewportHeight);
+  serialization::writePod(file, spec.hyphenationEnabled);
+  serialization::writePod(file, spec.embeddedStyle);
+  serialization::writePod(file, spec.imageRendering);
+  serialization::writePod(file, spec.focusReadingEnabled);
+  serialization::writePod(file, spec.boldBodyText);
+  serialization::writePod(file, CSS_STATE_NONE);  // 佔位，commitBuildFile 補成這次建置的實際狀態
   serialization::writePod(file, pageCount);  // Placeholder for page count (will be initially 0, patched later)
   serialization::writePod(file, static_cast<uint32_t>(0));  // Placeholder for LUT offset (patched later)
   serialization::writePod(file, static_cast<uint32_t>(0));  // Placeholder for anchor map offset (patched later)
   serialization::writePod(file, static_cast<uint32_t>(0));  // Placeholder for paragraph LUT offset (patched later)
   serialization::writePod(file, static_cast<uint32_t>(0));  // Placeholder for li LUT offset (patched later)
+  serialization::writePod(file, static_cast<uint32_t>(0));  // Placeholder for visible-offset LUT (patched later)
 }
 
-bool Section::loadSectionFile(const int fontId, const float lineCompression, const bool extraParagraphSpacing,
-                              const uint8_t paragraphAlignment, const uint16_t viewportWidth,
-                              const uint16_t viewportHeight, const bool hyphenationEnabled, const bool embeddedStyle,
-                              const uint8_t imageRendering, const bool focusReadingEnabled,
-                              const bool boldBodyText) {
+bool Section::loadSectionFile(const ReaderRenderSpec& spec) {
   if (!Storage.openFileForRead("SCT", filePath, file)) {
     return false;
   }
@@ -143,10 +181,12 @@ bool Section::loadSectionFile(const int fontId, const float lineCompression, con
   {
     uint8_t version;
     serialization::readPod(file, version);
+    lastLoadReject_ = 0;
     if (version != SECTION_FILE_VERSION && version != SECTION_FILE_PARTIAL_VERSION) {
       // Explicit close() required: member variable persists beyond function scope
       file.close();
       LOG_ERR("SCT", "Deserialization failed: Unknown version %u", version);
+      lastLoadReject_ = 1;
       clearCache();
       return false;
     }
@@ -162,6 +202,7 @@ bool Section::loadSectionFile(const int fontId, const float lineCompression, con
     uint8_t fileImageRendering;
     bool fileFocusReadingEnabled;
     bool fileBoldBodyText;
+    uint8_t fileCssState;
     serialization::readPod(file, fileFontId);
     serialization::readPod(file, fileLineCompression);
     serialization::readPod(file, fileExtraParagraphSpacing);
@@ -173,34 +214,57 @@ bool Section::loadSectionFile(const int fontId, const float lineCompression, con
     serialization::readPod(file, fileImageRendering);
     serialization::readPod(file, fileFocusReadingEnabled);
     serialization::readPod(file, fileBoldBodyText);
+    serialization::readPod(file, fileCssState);
 
-    if (fontId != fileFontId || lineCompression != fileLineCompression ||
-        extraParagraphSpacing != fileExtraParagraphSpacing || paragraphAlignment != fileParagraphAlignment ||
-        viewportWidth != fileViewportWidth || viewportHeight != fileViewportHeight ||
-        hyphenationEnabled != fileHyphenationEnabled || embeddedStyle != fileEmbeddedStyle ||
-        imageRendering != fileImageRendering || focusReadingEnabled != fileFocusReadingEnabled ||
-        boldBodyText != fileBoldBodyText) {
+    if (spec.fontId != fileFontId || spec.lineCompression != fileLineCompression ||
+        spec.extraParagraphSpacing != fileExtraParagraphSpacing || spec.paragraphAlignment != fileParagraphAlignment ||
+        spec.viewportWidth != fileViewportWidth || spec.viewportHeight != fileViewportHeight ||
+        spec.hyphenationEnabled != fileHyphenationEnabled || spec.embeddedStyle != fileEmbeddedStyle ||
+        spec.imageRendering != fileImageRendering || spec.focusReadingEnabled != fileFocusReadingEnabled ||
+        spec.boldBodyText != fileBoldBodyText) {
       file.close();
       LOG_ERR("SCT", "Deserialization failed: Parameters do not match");
+      lastLoadReject_ = 2;
       clearCache();
       return false;
     }
+    // v187：這份版面是在 CSS 撞地板、規則集被截斷（或根本載不到）的情況下排的（樣式打折）。當時是為了
+    // 「書開得起來」，不是永久正確。現在記憶體寬裕（門檻高於過濾模式地板 20KB 很多）就丟掉重排【一次】：
+    // 重建若又截斷會寫 CSS_STATE_TRUNCATED_FINAL，之後不再為此重排（複查：沒有這條會每次開章都重排）。
+    // ⚠️ partial 不因 CSS 丟掉（丟掉＝整章從第 0 頁重排，而延伸建置沒有 framebuffer 借用、更容易再截斷 →
+    //    驗證者抓到的乒乓）；partial 由延伸建置決定最終狀態，且延伸時若再截斷就寫 FINAL。
+    if (!filePartial && spec.embeddedStyle && fileCssState == CSS_STATE_TRUNCATED &&
+        heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT) >= 64 * 1024) {
+      file.close();
+      LOG_INF("SCT", "Cached layout was built with a truncated CSS rule set; rebuilding once now that memory allows");
+      lastLoadReject_ = 3;
+      cssRetry_ = true;
+      clearCache();
+      return false;
+    }
+    // 載入成功：partial 的延伸建置、或已標 FINAL 的章，之後若再截斷一律寫 FINAL——狀態只能往「定案」走，
+    // 不能被延伸建置降回 2 再被下次開啟丟掉。
+    cssRetry_ = filePartial || fileCssState == CSS_STATE_TRUNCATED_FINAL;
   }
 
   serialization::readPod(file, pageCount);
 
   if (filePartial) {
     // A partial's pageCount is the watermark of a suspended build. Read the watermark
-    // trailer (appended after the li LUT) so estimatedTotalPages can extrapolate.
+    // trailer (appended after the visible-offset LUT) so estimatedTotalPages can extrapolate.
     uint32_t liLutOffset = 0;
-    file.seek(HEADER_SIZE - sizeof(uint32_t));
+    file.seek(HEADER_SIZE - sizeof(uint32_t) * 2);
     serialization::readPod(file, liLutOffset);
-    const uint32_t trailerOffset = liLutOffset + static_cast<uint32_t>(pageCount) * sizeof(uint16_t);
-    const bool trailerValid =
-        pageCount > 0 && liLutOffset >= HEADER_SIZE && trailerOffset + 2 * sizeof(uint32_t) <= file.size();
+    uint32_t visibleLutOffset = 0;
+    file.seek(HEADER_SIZE - sizeof(uint32_t));
+    serialization::readPod(file, visibleLutOffset);
+    const uint32_t trailerOffset = visibleLutOffset + static_cast<uint32_t>(pageCount) * sizeof(uint32_t);
+    const bool trailerValid = pageCount > 0 && liLutOffset >= HEADER_SIZE && visibleLutOffset > liLutOffset &&
+                              trailerOffset + 2 * sizeof(uint32_t) <= file.size();
     if (!trailerValid) {
       file.close();
       LOG_ERR("SCT", "Deserialization failed: malformed partial section");
+      lastLoadReject_ = 4;
       clearCache();
       pageCount = 0;
       return false;
@@ -238,14 +302,9 @@ bool Section::clearCache() const {
   return true;
 }
 
-bool Section::createSectionFile(const int fontId, const float lineCompression, const bool extraParagraphSpacing,
-                                const uint8_t paragraphAlignment, const uint16_t viewportWidth,
-                                const uint16_t viewportHeight, const bool hyphenationEnabled, const bool embeddedStyle,
-                                const uint8_t imageRendering, const bool focusReadingEnabled, const bool boldBodyText,
-                                const std::function<void()>& popupFn) {
+bool Section::createSectionFile(const ReaderRenderSpec& spec, const std::function<void()>& popupFn) {
   // One-shot build: start, then lay out the whole section in a single pass.
-  if (!startBuild(fontId, lineCompression, extraParagraphSpacing, paragraphAlignment, viewportWidth, viewportHeight,
-                  hyphenationEnabled, embeddedStyle, imageRendering, focusReadingEnabled, boldBodyText, popupFn)) {
+  if (!startBuild(spec, popupFn)) {
     return false;
   }
   if (!buildSomeMore(0)) {  // 0 = build to completion
@@ -254,18 +313,14 @@ bool Section::createSectionFile(const int fontId, const float lineCompression, c
   return buildComplete_;
 }
 
-bool Section::startBuild(const int fontId, const float lineCompression, const bool extraParagraphSpacing,
-                         const uint8_t paragraphAlignment, const uint16_t viewportWidth, const uint16_t viewportHeight,
-                         const bool hyphenationEnabled, const bool embeddedStyle, const uint8_t imageRendering,
-                         const bool focusReadingEnabled, const bool boldBodyText, const std::function<void()>& popupFn) {
-  builddiag::maxAllocAtBuildStart = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);  // v96: what the build really saw
+// v175（diag174）：startBuild 有三個出口（inflate 失敗、bin 開檔、beginParse）沒有掛 lastBuildWasLowMemory_
+// latch —— XML_ParserCreate 與 inflate 的 zlib 狀態在最大連續塊只剩 7KB 時會失敗，呼叫端卻只看得到
+// 「無效的書籍檔」（diag174：一次 lowmem 之後連續 8 次「索引失敗」，每次 300ms 就退）。
+// 這裡不改失敗語意，只在出口當下堆積真的瀕死（<16KB）時補 latch，讓呼叫端分流成「記憶體不足」。
+bool Section::startBuild(const ReaderRenderSpec& spec, const std::function<void()>& popupFn) {
+  lastBuildWasLowMemory_ = false;
   if (build_) {
     LOG_ERR("SCT", "startBuild called while a build is already active");
-    // v96: every early return in startBuild used to leave builddiag::note empty, so the
-    // on-screen "Bfail sp=N @startB ? m=NNk" could not say WHICH of the three pre-inflate
-    // exits fired. A field report hit exactly that ("?") and it sent the last round chasing the
-    // wrong cause. Each one now names itself.
-    snprintf(builddiag::note, sizeof(builddiag::note), "busy");
     return false;
   }
   buildComplete_ = false;
@@ -341,10 +396,7 @@ bool Section::startBuild(const int fontId, const float lineCompression, const bo
 
     if (!streamed) {
       LOG_ERR("SCT", "Failed to stream item contents to temp file after retries");
-      // v96: this is the inflate. It wants a ~32KB contiguous block for the DEFLATE
-      // back-reference window, so it is the one pre-inflate exit that a tight heap can
-      // cause -- distinguish it from the two that cannot.
-      snprintf(builddiag::note, sizeof(builddiag::note), "inflate");
+      if (heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT) < 16 * 1024) lastBuildWasLowMemory_ = true;  // v175：見下
       return false;
     }
 
@@ -362,17 +414,16 @@ bool Section::startBuild(const int fontId, const float lineCompression, const bo
 
   if (!Storage.openFileForWrite("SCT", binTmpPath(), file)) {
     if (!reusedHtml) Storage.remove(tmpHtmlPath.c_str());
-    snprintf(builddiag::note, sizeof(builddiag::note), "binopen");  // v96: SD, not memory
+    if (heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT) < 16 * 1024) lastBuildWasLowMemory_ = true;  // v175：見下
     return false;
   }
   // Header is written with the incomplete-version sentinel; finalizeBuild() commits it.
-  writeSectionFileHeader(fontId, lineCompression, extraParagraphSpacing, paragraphAlignment, viewportWidth,
-                         viewportHeight, hyphenationEnabled, embeddedStyle, imageRendering, focusReadingEnabled,
-                         boldBodyText);
+  writeSectionFileHeader(spec);
 
   auto ctx = makeUniqueNoThrow<BuildContext>();
   if (!ctx) {
     LOG_ERR("SCT", "OOM: BuildContext");
+    lastBuildWasLowMemory_ = true;  // v165：讓呼叫端分流成「記憶體不足」而非「無效的書籍檔」
     file.close();
     Storage.remove(binTmpPath().c_str());
     if (!reusedHtml) Storage.remove(tmpHtmlPath.c_str());
@@ -390,10 +441,17 @@ bool Section::startBuild(const int fontId, const float lineCompression, const bo
   ctx->contentBase = (lastSlash != std::string::npos) ? localPath.substr(0, lastSlash + 1) : "";
   ctx->imageBasePath = epub->getCachePath() + "/img_" + std::to_string(spineIndex) + "_";
 
-  if (embeddedStyle) {
+  if (spec.embeddedStyle) {
     ctx->cssParser = epub->getCssParser();
-    if (ctx->cssParser && !ctx->cssParser->loadFromCache()) {
+    // v176：按章過濾 —— parsePath 此刻已是完整的章節 HTML（inflate 在上面完成）。
+    // 載入失敗與截斷同等對待（都是「樣式打折的版面」，複查：NONE 不能同時代表「沒開 CSS」與「載不到」）；
+    // 已經為此重排過一次就標 FINAL，不再重排。
+    if (ctx->cssParser && !ctx->cssParser->loadFromCache(ctx->parsePath.c_str())) {
       LOG_ERR("SCT", "Failed to load CSS from cache");
+      ctx->cssState = cssRetry_ ? CSS_STATE_TRUNCATED_FINAL : CSS_STATE_TRUNCATED;
+    } else if (ctx->cssParser) {
+      ctx->cssState = !ctx->cssParser->lastLoadTruncated_ ? CSS_STATE_FULL
+                      : (cssRetry_ ? CSS_STATE_TRUNCATED_FINAL : CSS_STATE_TRUNCATED);
     }
   }
 
@@ -416,15 +474,19 @@ bool Section::startBuild(const int fontId, const float lineCompression, const bo
   // context for the parser's whole lifetime.
   BuildContext* ctxPtr = ctx.get();
   ctx->parser = makeUniqueNoThrow<ChapterHtmlSlimParser>(
-      epub, ctxPtr->parsePath, renderer, fontId, lineCompression, extraParagraphSpacing, paragraphAlignment,
-      viewportWidth, viewportHeight, hyphenationEnabled, focusReadingEnabled,
-      [this, ctxPtr](std::unique_ptr<Page> page, const uint16_t paragraphIndex, const uint16_t listItemIndex) {
-        ctxPtr->lut.push_back({this->onPageComplete(std::move(page)), paragraphIndex, listItemIndex});
+      epub, ctxPtr->parsePath, renderer, spec.fontId, spec.lineCompression, spec.extraParagraphSpacing,
+      spec.paragraphAlignment, spec.viewportWidth, spec.viewportHeight, spec.hyphenationEnabled,
+      spec.focusReadingEnabled,
+      [this, ctxPtr](std::unique_ptr<Page> page, const uint16_t paragraphIndex, const uint16_t listItemIndex,
+                     const uint32_t visibleTextOffset) {
+        ctxPtr->lut.push_back(
+            {this->onPageComplete(std::move(page)), paragraphIndex, listItemIndex, visibleTextOffset});
       },
-      embeddedStyle, ctxPtr->contentBase, ctxPtr->imageBasePath, imageRendering, std::move(tocAnchors), popupFn,
-      ctxPtr->cssParser);
+      spec.embeddedStyle, ctxPtr->contentBase, ctxPtr->imageBasePath, spec.imageRendering, std::move(tocAnchors),
+      popupFn, ctxPtr->cssParser);
   if (!ctx->parser) {
     LOG_ERR("SCT", "OOM: ChapterHtmlSlimParser");
+    lastBuildWasLowMemory_ = true;  // v165：同 BuildContext——分流成「記憶體不足」
     if (ctx->cssParser) ctx->cssParser->clear();
     file.close();
     Storage.remove(binTmpPath().c_str());
@@ -438,13 +500,33 @@ bool Section::startBuild(const int fontId, const float lineCompression, const bo
   if (!build_->parser->beginParse()) {
     LOG_ERR("SCT", "Failed to begin parse");
     abandonBuild();
+    if (heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT) < 16 * 1024) lastBuildWasLowMemory_ = true;  // v175：見下
     return false;
   }
   build_->totalBytes = build_->parser->parseTotalBytes();
+  // v189：頁表一次配到位。push_back 的倍增成長（12→24→…→3,072B）是「先配新的、複製、再刪舊」
+  // 的搬遷，每一步都在 p2 中段留一個洞（CLAUDE.md 硬限制 6）；排到底之後整章的 LUT 都在爆發期內
+  // 長出來，洞會排成一串。估計值：這台中文書約 2KB HTML／頁（含標記），寧可多估（上限 320 筆＝3.8KB，
+  // 巨型章超過再讓它倍增一次）也不要少估；partial 延伸時 watermark 是已知下界。
+  // 守衛：reserve 走會丟例外的 operator new，-fno-exceptions 下配不到就 abort——地板之下不 reserve，
+  // 退回倍增（原本的行為）。
+  {
+    size_t want = build_->totalBytes / 2048;
+    if (want < 64) want = 64;
+    if (want > 320) want = 320;
+    if (partial_ && want < static_cast<size_t>(partialPageCount_) + 16) want = partialPageCount_ + 16;
+    const size_t bytes = want * sizeof(PageLutEntry);
+    if (heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT) > bytes + 8 * 1024) build_->lut.reserve(want);
+  }
   return true;
 }
 
-bool Section::buildSomeMore(const int maxPages) {
+uint32_t Section::buildStepMaxMs = 0;
+uint32_t Section::buildStepTotalUs = 0;
+uint32_t Section::buildStepCount = 0;
+int Section::lastPoisonAvoidedSpine = -1;
+
+bool Section::buildSomeMore(const int maxPages, bool (*shouldYield)(void*), void* yieldCtx) {
   if (!build_ || !build_->parser) {
     LOG_ERR("SCT", "buildSomeMore with no active build");
     return false;
@@ -454,14 +536,44 @@ bool Section::buildSomeMore(const int maxPages) {
   // would otherwise turn one "small" chunk into a blocking rebuild of the whole watermark.
   const int startCount = builtPageCount_;
   for (;;) {
-    const auto status = build_->parser->parseStep();
-    if (status == ChapterHtmlSlimParser::ParseStatus::Error) {
-      LOG_ERR("SCT", "Parse error during incremental build");
-      abandonBuild();
-      return false;
+    // v189：每一步之前問一次（第一步也問：按鍵已經按著就一步都別做）。
+    if (shouldYield && shouldYield(yieldCtx)) {
+      build_->bytesConsumed = build_->parser->parseBytesConsumed();
+      return true;
     }
+    // v189 儀器：一步多長。一步＝1KB HTML 餵 expat，但 callback 裡會排完整個段落（可能好幾頁）、
+    // 序列化到 SD、圖片探頭——這才是按鍵盲區的真實上界，不是「1KB」。只有量到才能說它小。
+    const int64_t stepT0 = esp_timer_get_time();
+    ParsedText::resetBuildProbeClock();  // v190：與 stepmax 同一處起算，不含步間讓路
+    const auto status = build_->parser->parseStep();
+    ParsedText::stopBuildProbeClock();  // v190：步外的排版（設定頁預覽）不得計入盲區
+    const auto noteStep = [&]() {
+      const uint32_t us = static_cast<uint32_t>(esp_timer_get_time() - stepT0);
+      if (us / 1000 > buildStepMaxMs) buildStepMaxMs = us / 1000;
+      buildStepTotalUs += us;
+      buildStepCount++;
+    };
     if (status == ChapterHtmlSlimParser::ParseStatus::Done) {
-      return finalizeBuild();
+      // 收尾（最後一頁的排版＋序列化＋commit 改名）也在同一個 tick 裡、也不能讓路——算進最後一步。
+      const bool fin = finalizeBuild();
+      noteStep();
+      return fin;
+    }
+    noteStep();
+    if (status == ChapterHtmlSlimParser::ParseStatus::Error) {
+      // v149：低記憶體中止與「XHTML 真的壞了」要分開處置。
+      // abandonBuild() 連既有 partial 與 filePath 一起刪 —— 對會重現的 parse error 是對的，
+      // 對暫時性 OOM 是災難：使用者每重試一次就更貴，還配上無退避的重建迴圈。
+      // OOM 走 suspendBuild()：保留舊 partial、丟掉這輪的 tmp，等記憶體寬鬆時再試。
+      if (build_->parser->hasBuildAborted()) {
+        LOG_ERR("SCT", "Low-memory abort during incremental build, keeping partial");
+        lastBuildWasLowMemory_ = true;
+        suspendBuild();
+      } else {
+        LOG_ERR("SCT", "Parse error during incremental build");
+        abandonBuild();
+      }
+      return false;
     }
     // ParseStatus::More: yield once we've laid out the requested number of pages.
     if (maxPages > 0 && (builtPageCount_ - startCount) >= maxPages) {
@@ -586,19 +698,26 @@ bool Section::commitBuildFile(const uint8_t version, const uint32_t bytesConsume
     serialization::writePod(file, entry.listItemIndex);
   }
 
+  const uint32_t visibleLutFileOffset = static_cast<uint32_t>(file.position());
+  for (const auto& entry : build_->lut) {
+    serialization::writePod(file, entry.visibleTextOffset);
+  }
+
   if (asPartial) {
-    // Watermark trailer, located on load as liLutOffset + pageCount * sizeof(uint16_t).
+    // Watermark trailer, located on load immediately after the visible-offset LUT.
     serialization::writePod(file, bytesConsumed);
     serialization::writePod(file, totalBytes);
   }
 
-  // Patch header with the built page count and section offsets...
-  file.seek(HEADER_SIZE - sizeof(uint32_t) * 4 - sizeof(builtPageCount_));
+  // Patch header with the CSS state (v187), the built page count and section offsets...
+  file.seek(HEADER_SIZE - sizeof(uint32_t) * 5 - sizeof(builtPageCount_) - sizeof(uint8_t));
+  serialization::writePod(file, build_->cssState);
   serialization::writePod(file, builtPageCount_);
   serialization::writePod(file, lutOffset);
   serialization::writePod(file, anchorMapOffset);
   serialization::writePod(file, paragraphLutOffset);
   serialization::writePod(file, liLutFileOffset);
+  serialization::writePod(file, visibleLutFileOffset);
   // ...then commit by overwriting the sentinel version with the real one. Writing the
   // version last makes it the commit point: a crash before here leaves version 0.
   file.seek(0);
@@ -621,12 +740,14 @@ bool Section::commitBuildFile(const uint8_t version, const uint32_t bytesConsume
 
 bool Section::finalizeBuild() {
   // Flush the trailing page (emits the last page via the completePageFn into the LUT).
+  // v149：⚠️ 回傳值要接。低記憶體中止的半截章節不可提交（教訓 A-20）。
+  // 不走 abandonBuild() —— 它會連既有 partial 一起刪（它的理由「parse error 會重現」
+  // 對暫時性 OOM 不成立）；suspendBuild() 配下面的 aborted 檢查 = 不提交這份壞的、
+  // 保留舊的、丟掉 tmp。
   if (!build_->parser->finishParse()) {
-    // Trailing-block layout was refused under low heap. Abandon rather than commit a truncated,
-    // valid-looking chapter to the cache (which would survive reboots); the caller then shows the
-    // index-failed popup.
-    snprintf(builddiag::note, sizeof(builddiag::note), "finlz");
-    abandonBuild();
+    LOG_ERR("SCT", "finalizeBuild: low-memory abort, keeping existing partial");
+    lastBuildWasLowMemory_ = true;
+    suspendBuild();
     return false;
   }
 
@@ -644,7 +765,6 @@ bool Section::finalizeBuild() {
   build_.reset();
   if (!committed) {
     // commitBuildFile removed filePath before the failed swap, so nothing valid remains.
-    snprintf(builddiag::note, sizeof(builddiag::note), "commit");
     partial_ = false;
     partialPageCount_ = 0;
     pageCount = 0;
@@ -663,7 +783,16 @@ void Section::suspendBuild() {
 
   // Only worth persisting if this build produced pages a pre-existing partial doesn't
   // already cover; otherwise keep the older (bigger) partial and just drop the tmp.
-  const bool worthKeeping = builtPageCount_ > 0 && (!partial_ || builtPageCount_ > partialPageCount_);
+  // v149：低記憶體中止的建置不可落地 —— 它的頁數看起來變多，但內容掉過字。
+  // ~Section()（使用者離開書、裝置休眠）也走這裡，少了這條，半截章節就以 PARTIAL 進 SD。
+  const bool aborted = build_->parser && build_->parser->hasBuildAborted();
+  if (aborted) {
+    // v194：低記憶體中止的排版不可寫成看起來合法的 SD 快取（教訓 A-20）。
+    lastPoisonAvoidedSpine = spineIndex;
+    LOG_ERR("SCT", "SECTPOISON avoided spine=%d", spineIndex);
+  }
+  const bool worthKeeping =
+      !aborted && builtPageCount_ > 0 && (!partial_ || builtPageCount_ > partialPageCount_);
 
   bool committed = false;
   if (worthKeeping) {
@@ -736,6 +865,12 @@ std::unique_ptr<Page> Section::loadPageDuringBuild(const int page) {
   file.seek(pos);
   auto p = Page::deserialize(file);
   file.seek(writePos);
+  if (p) {
+    p->visibleTextOffset = build_->lut[page].visibleTextOffset;
+  } else if (Page::lastAllocFail[0] != '\0') {
+    // v194：反序列化配不到 Page → 暫時性 OOM，不是壞檔。
+    lastLoadWasLowMemory_ = true;
+  }
   return p;
 }
 
@@ -747,21 +882,55 @@ std::unique_ptr<Page> Section::loadPageAt(const int page) const {
   if (!Storage.openFileForRead("SCT", filePath, f)) {
     return nullptr;
   }
+  if (!headerVersionOk(f)) return nullptr;  // v187
 
-  f.seek(HEADER_SIZE - sizeof(uint32_t) * 4);
+  f.seek(HEADER_SIZE - sizeof(uint32_t) * 5);
   uint32_t lutOffset;
   serialization::readPod(f, lutOffset);
   f.seek(lutOffset + sizeof(uint32_t) * page);
   uint32_t pagePos;
   serialization::readPod(f, pagePos);
-  f.seek(pagePos);
 
-  return Page::deserialize(f);
+  // Read this page's visible-codepoint start offset from the visible-offset LUT (last header slot)
+  // in the same open handle, so the reader can persist progress without reopening the section file
+  // on every page turn (see Page::visibleTextOffset). A malformed/old file leaves it at 0.
+  f.seek(HEADER_SIZE - sizeof(uint32_t));
+  uint32_t visibleLutOffset;
+  serialization::readPod(f, visibleLutOffset);
+  uint32_t visibleTextOffset = 0;
+  const uint32_t visibleEntry = visibleLutOffset + sizeof(uint32_t) * page;
+  if (visibleLutOffset >= HEADER_SIZE && visibleEntry + sizeof(uint32_t) <= f.size()) {
+    f.seek(visibleEntry);
+    serialization::readPod(f, visibleTextOffset);
+  }
+
+  f.seek(pagePos);
+  auto p = Page::deserialize(f);
+  if (p) {
+    p->visibleTextOffset = visibleTextOffset;
+  } else if (Page::lastAllocFail[0] != '\0') {
+    lastLoadWasLowMemory_ = true;
+  }
+  return p;
   // No f.close() needed -- DESTRUCTOR_CLOSES_FILE=1 handles it at scope exit
 }
 
 std::unique_ptr<Page> Section::loadPage(const int page) {
+  lastLoadWasLowMemory_ = false;
   if (page < 0) {
+    return nullptr;
+  }
+  // v152：反序列化一頁要配 PageLine/TextBlock 與它們的字詞 vector（都是 throwing）。
+  // 實機 v151 的 abort：圖片頁 render 期間（pxc slot 握著大塊）loadPage 的
+  // shared_ptr 控制塊（~32 bytes！）配不到 -> terminate。32B 失敗 = 那一瞬間堆積是零，
+  // 事前地板是唯一擋法。4KB 遠低於任何正常狀態（CAPS 實測 boot 114K、穩態 >24K），
+  // 只在瀕死時成立；回 nullptr 由呼叫端走「跳過本輪、下輪重試」的降級。
+  // v187：註腳項目 96→256 後 footnotes.resize(16) 要 4,608 B 連續——那一筆改在 Page::deserialize 讀到
+  // fnCount 後單獨守（守不過就這次不帶註腳），地板維持 4KB（v152 刻意設在瀕死線）。
+  if (heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT) < 4 * 1024) {
+    LOG_ERR("SCT", "loadPage deferred: low memory (defaultMax=%u)",
+            static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT)));
+    lastLoadWasLowMemory_ = true;
     return nullptr;
   }
   if (build_ && page < static_cast<int>(build_->lut.size())) {
@@ -777,10 +946,13 @@ std::unique_ptr<Page> Section::loadPage(const int page) {
 }
 
 namespace {
-// 中文排版裡每個漢字自成一個「詞」(CJK 逐字斷行),重組純文字時字與字之間不能補空格,
-// 否則輸出變成「偉 大 力 量。」(v39 實機回報:QR 掃出的書摘每字帶空格;書籤摘要同病)。
-// lead byte 判斷:0xE3-0xE9 = U+3000-U+9FFF(CJK 標點/假名/注音/漢字)、0xEF = 全形區。
-// 拉丁詞之間(兩側皆非 CJK)維持補空格。
+// 中文排版裡每個漢字自成一個「詞」（CJK 逐字斷行），重組純文字時字與字之間不能補空格，
+// 否則輸出變成「偉 大 力 量。」（v39/v40 實機回報：QR 掃出的書摘每字帶空格；書籤摘要同病）。
+// 副作用不只難看：payload 膨脹約 33%（3 bytes 的漢字變 4 bytes），而 QR 的真實容量上限
+// 是 858 bytes（ECC_LOW / version 20，見 util/QrUtils.cpp）—— 可容字數直接少四分之一。
+//
+// lead byte 判斷：0xE3-0xE9 = U+3000-U+9FFF（CJK 標點／假名／注音／漢字）、0xEF = 全形區。
+// 兩側皆非 CJK（＝拉丁詞之間）才補空格，維持英文原樣。
 bool cjkLeadByte(const uint8_t b) { return (b >= 0xE3 && b <= 0xE9) || b == 0xEF; }
 
 uint8_t lastUtf8LeadByte(const std::string& s) {
@@ -838,7 +1010,7 @@ std::optional<uint16_t> Section::getCachedPageCount() const {
     return std::nullopt;
   }
 
-  f.seek(HEADER_SIZE - sizeof(uint32_t) * 4 - sizeof(uint16_t));
+  f.seek(HEADER_SIZE - sizeof(uint32_t) * 5 - sizeof(uint16_t));
   uint16_t count;
   serialization::readPod(f, count);
   return count;
@@ -850,8 +1022,9 @@ std::optional<uint16_t> Section::getPageForAnchor(const std::string& anchor) con
     return std::nullopt;
   }
 
+  if (!headerVersionOk(f)) return std::nullopt;  // v187
   const uint32_t fileSize = f.size();
-  f.seek(HEADER_SIZE - sizeof(uint32_t) * 3);
+  f.seek(HEADER_SIZE - sizeof(uint32_t) * 4);
   uint32_t anchorMapOffset;
   serialization::readPod(f, anchorMapOffset);
   if (anchorMapOffset == 0 || anchorMapOffset >= fileSize) {
@@ -880,8 +1053,9 @@ std::optional<uint16_t> Section::getPageForParagraphIndex(const uint16_t pIndex)
     return std::nullopt;
   }
 
+  if (!headerVersionOk(f)) return std::nullopt;  // v187
   const uint32_t fileSize = f.size();
-  f.seek(HEADER_SIZE - sizeof(uint32_t) * 2);
+  f.seek(HEADER_SIZE - sizeof(uint32_t) * 3);
   uint32_t paragraphLutOffset;
   serialization::readPod(f, paragraphLutOffset);
   if (paragraphLutOffset == 0 || paragraphLutOffset >= fileSize) {
@@ -919,8 +1093,9 @@ std::optional<uint16_t> Section::getParagraphIndexForPage(const uint16_t page) c
     return std::nullopt;
   }
 
+  if (!headerVersionOk(f)) return std::nullopt;  // v187
   const uint32_t fileSize = f.size();
-  f.seek(HEADER_SIZE - sizeof(uint32_t) * 2);
+  f.seek(HEADER_SIZE - sizeof(uint32_t) * 3);
   uint32_t paragraphLutOffset;
   serialization::readPod(f, paragraphLutOffset);
   if (paragraphLutOffset == 0 || paragraphLutOffset >= fileSize) {
@@ -951,8 +1126,9 @@ std::optional<uint16_t> Section::getPageForListItemIndex(const uint16_t liIndex)
     return std::nullopt;
   }
 
+  if (!headerVersionOk(f)) return std::nullopt;  // v187
   const uint32_t fileSize = f.size();
-  f.seek(HEADER_SIZE - sizeof(uint32_t));
+  f.seek(HEADER_SIZE - sizeof(uint32_t) * 2);
   uint32_t liLutOffset;
   serialization::readPod(f, liLutOffset);
   if (liLutOffset == 0 || liLutOffset >= fileSize) {
@@ -960,7 +1136,7 @@ std::optional<uint16_t> Section::getPageForListItemIndex(const uint16_t liIndex)
   }
 
   // The li LUT shares count with the paragraph LUT; read count from paragraphLutOffset
-  f.seek(HEADER_SIZE - sizeof(uint32_t) * 2);
+  f.seek(HEADER_SIZE - sizeof(uint32_t) * 3);
   uint32_t paragraphLutOffset;
   serialization::readPod(f, paragraphLutOffset);
   if (paragraphLutOffset == 0 || paragraphLutOffset >= fileSize) {
@@ -991,4 +1167,110 @@ std::optional<uint16_t> Section::getPageForListItemIndex(const uint16_t liIndex)
   }
 
   return resultPage;
+}
+
+std::optional<uint32_t> Section::getVisibleTextOffsetForPage(const uint16_t page) const {
+  if (build_ && page < build_->lut.size()) {
+    return build_->lut[page].visibleTextOffset;
+  }
+
+  HalFile f;
+  if (!Storage.openFileForRead("SCT", filePath, f) || f.size() < HEADER_SIZE) {
+    return std::nullopt;
+  }
+
+  uint8_t version;
+  serialization::readPod(f, version);
+  if (version != SECTION_FILE_VERSION && version != SECTION_FILE_PARTIAL_VERSION) {
+    return std::nullopt;
+  }
+
+  f.seek(HEADER_SIZE - sizeof(uint32_t) * 5 - sizeof(uint16_t));
+  uint16_t count;
+  serialization::readPod(f, count);
+  if (page >= count) {
+    return std::nullopt;
+  }
+
+  f.seek(HEADER_SIZE - sizeof(uint32_t));
+  uint32_t visibleLutOffset;
+  serialization::readPod(f, visibleLutOffset);
+  const uint32_t entryOffset = visibleLutOffset + static_cast<uint32_t>(page) * sizeof(uint32_t);
+  if (visibleLutOffset < HEADER_SIZE || entryOffset + sizeof(uint32_t) > f.size()) {
+    return std::nullopt;
+  }
+
+  f.seek(entryOffset);
+  uint32_t result;
+  serialization::readPod(f, result);
+  return result;
+}
+
+std::optional<uint16_t> Section::getPageForVisibleTextOffset(const uint32_t offset,
+                                                             const bool preferFirstAtOffset) const {
+  const auto findInEntries = [offset, preferFirstAtOffset](const auto& entries) -> std::optional<uint16_t> {
+    if (entries.empty()) return std::nullopt;
+    uint16_t result = 0;
+    for (size_t i = 0; i < entries.size(); i++) {
+      const uint32_t pageStart = entries[i].visibleTextOffset;
+      if (preferFirstAtOffset && pageStart == offset) {
+        return static_cast<uint16_t>(i);
+      }
+      if (pageStart > offset) break;
+      result = static_cast<uint16_t>(i);
+    }
+    return result;
+  };
+
+  if (build_ && !build_->lut.empty()) {
+    // Resolve within the active build's known range. Later offsets may still be
+    // covered by an on-disk partial that the resumed build has not reached yet.
+    if (offset <= build_->lut.back().visibleTextOffset) {
+      return findInEntries(build_->lut);
+    }
+  }
+
+  HalFile f;
+  if (!Storage.openFileForRead("SCT", filePath, f) || f.size() < HEADER_SIZE) {
+    return std::nullopt;
+  }
+
+  uint8_t version;
+  serialization::readPod(f, version);
+  if (version != SECTION_FILE_VERSION && version != SECTION_FILE_PARTIAL_VERSION) {
+    return std::nullopt;
+  }
+  const bool partial = version == SECTION_FILE_PARTIAL_VERSION;
+
+  f.seek(HEADER_SIZE - sizeof(uint32_t) * 5 - sizeof(uint16_t));
+  uint16_t count;
+  serialization::readPod(f, count);
+  if (count == 0) {
+    return std::nullopt;
+  }
+
+  f.seek(HEADER_SIZE - sizeof(uint32_t));
+  uint32_t visibleLutOffset;
+  serialization::readPod(f, visibleLutOffset);
+  if (visibleLutOffset < HEADER_SIZE || visibleLutOffset + static_cast<uint32_t>(count) * sizeof(uint32_t) > f.size()) {
+    return std::nullopt;
+  }
+
+  f.seek(visibleLutOffset);
+  uint16_t result = 0;
+  uint32_t lastPageStart = 0;
+  for (uint16_t page = 0; page < count; page++) {
+    uint32_t pageStart;
+    serialization::readPod(f, pageStart);
+    lastPageStart = pageStart;
+    if (preferFirstAtOffset && pageStart == offset) {
+      return page;
+    }
+    if (pageStart > offset) break;
+    result = page;
+  }
+  if (partial && offset > lastPageStart) {
+    return std::nullopt;
+  }
+  return result;
 }

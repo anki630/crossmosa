@@ -1,33 +1,68 @@
+#include <Arduino.h>
+#include <cstdarg>
 #include "ImageBlock.h"
 
-#include <Arduino.h>  // ESP.getMaxAllocHeap / getFreeHeap
 #include <FontCacheManager.h>
 #include <GfxRenderer.h>
 #include <Logging.h>
+#include <Memory.h>
 #include <Serialization.h>
 
+#include <algorithm>
 #include <cstdlib>
+#include <cstring>
+#include <new>
 
 #include "Epub/converters/DirectPixelWriter.h"
+#include "Epub/converters/ImageToFramebufferDecoder.h"
 #include "Epub/converters/ImageDecoderFactory.h"
-
-char ImageBlock::lastFailPath[96] = {0};
-char ImageBlock::lastDrawGeom[64] = {0};
-
-void ImageBlock::noteRenderFailure(const int stage, const std::string& path, const int w, const int h, const int x,
-                                   const int y) {
-  if (ImageBlock::lastFailPath[0] != '\0') return;  // 先到先得,見標頭說明
-  snprintf(ImageBlock::lastFailPath, sizeof(ImageBlock::lastFailPath), "%dx%d@%d,%d %s", w, h, x, y, path.c_str());
-  ImageToFramebufferDecoder::noteFailure(stage, 0);
-}
 
 // Cache file format:
 // - uint16_t width
 // - uint16_t height
 // - uint8_t pixels[...] - 2 bits per pixel, packed (4 pixels per byte), row-major order
 
-ImageBlock::ImageBlock(const std::string& imagePath, int16_t width, int16_t height)
-    : imagePath(imagePath), width(width), height(height) {}
+char ImageBlock::lastFailPath[112] = {0};
+
+// v24/v148 低記憶體紓解 hook（見標頭）。
+// 門檻 48KB：抽取的最大單塊是 32,768 的 LZ77 window，解碼器物件另需 20–44KB（先後配置，
+// 非同時）；48KB 涵蓋「window ＋ 小配置」與「解碼器 ＋ 邊際」兩種形狀。實測 v147 在
+// maxAlloc=32,160 時 window 差 608 bytes 配不到 —— 卸載字型可騰回 43K+ 的連續塊。
+// 過度觸發的代價只是一次字型重載（約 300ms SD 讀取），且只發生在「首次看到這張圖」。
+static constexpr size_t IMAGE_RENDER_RELIEF_MAX_ALLOC = 48 * 1024;
+// v54 的教訓：解碼器自己另有【總量】門檻（MIN_FREE_HEAP_FOR_PNG ≈ 60KB / JPEG ≈ 36KB，
+// 都是對 getFreeHeap）。只看連續塊時，總量落在中間帶 relief 不觸發、卻被解碼器自己擋下
+// → 圖片變佔位框，而且 rememberImageFailure 讓它【整個 session 不再重試】。
+// 兩側都檢查把這個縫隙補起來；76KB = PNG 的 60KB 門檻 + 16KB 邊際。
+static constexpr size_t IMAGE_RENDER_RELIEF_MIN_FREE = 76 * 1024;
+static ImageBlock::MemoryReliefFn g_imageReliefFn = nullptr;
+static ImageBlock::MemoryReliefFn g_imageRestoreFn = nullptr;
+static void* g_imageReliefCtx = nullptr;
+
+void ImageBlock::setMemoryReliefHooks(MemoryReliefFn reliefFn, MemoryReliefFn restoreFn, void* ctx) {
+  g_imageReliefFn = reliefFn;
+  g_imageRestoreFn = restoreFn;
+  g_imageReliefCtx = ctx;
+}
+
+void ImageBlock::noteFailure(const char* fmt, ...) {
+  if (lastFailPath[0] != '\0') return;  // 先到先得，見標頭
+  va_list ap;
+  va_start(ap, fmt);
+  vsnprintf(lastFailPath, sizeof(lastFailPath), fmt, ap);
+  va_end(ap);
+}
+
+ImageBlock::ImageBlock(const std::string& imagePath, const std::string& srcPath, int16_t width, int16_t height)
+    : imagePath(imagePath), srcPath(srcPath), width(width), height(height) {}
+
+void* ImageBlock::extractCtx = nullptr;
+ImageBlock::ExtractFn ImageBlock::extractFn = nullptr;
+
+void ImageBlock::setExtractor(void* ctx, ExtractFn fn) {
+  extractCtx = ctx;
+  extractFn = fn;
+}
 
 bool ImageBlock::imageExists() const { return Storage.exists(imagePath.c_str()); }
 
@@ -66,20 +101,29 @@ bool readValidCacheHeader(HalFile& cacheFile, const int expectedWidth, const int
 // are retried.
 constexpr size_t MAX_SESSION_IMAGE_FAILURES = 16;
 uint64_t failedImageHashes[MAX_SESSION_IMAGE_FAILURES];
+// v190：render-remembered 累計；閱讀器取差值綁定 spine/page，不在這裡清表。
+uint32_t rememberedPlaceholderCount_ = 0;
+// v193：延後解碼旗標與計數。旗標由閱讀器整輪 renderContents 以 RAII 固定，
+// 計數只加、身分由呼叫端綁（與 rememberedPlaceholderCount_ 同一手法）。
+bool deferHeavyDecode_ = false;
+uint32_t deferredDecodeCount_ = 0;
+// v176：0 = 永久失敗（整個 session 不重試）；非 0 = 暫時性（記憶體）失敗當時的最大連續塊，
+// 只在堆積明顯好轉（+8KB）時才重試 —— 否則每次重繪都重試會變成效能懸崖（codex 複查）。
+uint32_t failedImageMaxAlloc[MAX_SESSION_IMAGE_FAILURES];
 size_t failedImageCount = 0;
-
-// Low-memory relief hooks (installed by the reader). When free heap is below this
-// before a first-time decode, reliefFn is invoked to free RAM (e.g. unload the SD
-// reading font) so the decoder can allocate, then restoreFn reloads it.
-//
-// v54:總 free 那一側的額外餘裕。解碼器自身也有一道總量門檻(PNG 60KB / JPEG 36KB),
-// 若只看連續塊,總量落在中間帶時 relief 不觸發、卻被解碼器自己擋下 → 圖片變佔位框且
-// 整個 session 不再重試。用「該解碼器的連續需求 + 此餘裕」把窗口補起來,兩種解碼器
-// 各自得到貼合的值(PNG 64KB / JPEG 40KB),而不是共用一個對 JPEG 過度保守的固定值。
-constexpr size_t IMAGE_DECODE_TOTAL_HEAP_MARGIN = 12 * 1024;
-ImageBlock::MemoryReliefFn g_imageReliefFn = nullptr;
-ImageBlock::MemoryReliefFn g_imageRestoreFn = nullptr;
-void* g_imageReliefCtx = nullptr;
+// v191：1 專屬於「下一頁再試」哨兵，避免開檔失敗誤走 +8KB 記憶體規則。
+// ⚠️ 解碼失敗記的是 std::max(2u, maxAlloc)（下面），刻意讓 1 不可能由記憶體路徑產生——
+// 原本的 max(1u, …) 在 maxAlloc==0 時會寫出 1，被 clearRetryableFailures 當哨兵清掉（複查抓到）。
+constexpr uint32_t IMAGE_FAILURE_RETRY_NEXT_RENDER = 1;
+// v191：失敗表 16 格滿了就記不進去，而同一頁的 BW／灰階帶會重入 render 十幾次 —— 沒有備援就是
+// 一次翻頁抽十幾次（正是這一版要避免的效能懸崖）。這一格只記「本次 render 已經失敗過的那張」。
+uint64_t currentRenderFailHash = 0;
+bool currentRenderFailValid = false;
+// v191：n= 要跨頁累計才看得出暫時性 SD 失誤有沒有自己好，所以不能跟哨兵項一起清。
+// 16×(8+1) BSS、固定大小；不用 heap，因為這是診斷計數、上限已知。
+uint64_t openFailHashes[MAX_SESSION_IMAGE_FAILURES];
+uint8_t openFailN[MAX_SESSION_IMAGE_FAILURES];
+size_t openFailEntries = 0;
 
 uint64_t imagePathHash(const std::string& path) {
   uint64_t hash = 14695981039346656037ull;
@@ -90,21 +134,160 @@ uint64_t imagePathHash(const std::string& path) {
   return hash;
 }
 
+// 回傳 0 = 記不下了（診斷欄位印 n=0 表示未知，不謊報成 1；複查抓到）。
+unsigned bumpOpenFailN(const std::string& path) {
+  const uint64_t hash = imagePathHash(path);
+  for (size_t i = 0; i < openFailEntries; i++) {
+    if (openFailHashes[i] != hash) continue;
+    if (openFailN[i] < 255) openFailN[i]++;
+    return openFailN[i];
+  }
+  if (openFailEntries < MAX_SESSION_IMAGE_FAILURES) {
+    openFailHashes[openFailEntries] = hash;
+    openFailN[openFailEntries] = 1;
+    openFailEntries++;
+    return 1;
+  }
+  return 0;
+}
+
 bool imageFailedThisSession(const std::string& path) {
   const uint64_t hash = imagePathHash(path);
+  if (currentRenderFailValid && currentRenderFailHash == hash) return true;  // v191：滿表備援
   for (size_t i = 0; i < failedImageCount; i++) {
-    if (failedImageHashes[i] == hash) return true;
+    if (failedImageHashes[i] != hash) continue;
+    // v191：同一頁 BW／灰階帶會重入 render，哨兵必須仍擋下來，否則一次翻頁抽十幾次。
+    if (failedImageMaxAlloc[i] == IMAGE_FAILURE_RETRY_NEXT_RENDER) return true;
+    if (failedImageMaxAlloc[i] == 0) return true;                                      // 永久
+    if (ESP.getMaxAllocHeap() < failedImageMaxAlloc[i] + 8 * 1024) return true;         // 還沒好轉
+    // 好轉了：移除紀錄讓它重試；再失敗會以新水位重新記錄。
+    failedImageHashes[i] = failedImageHashes[failedImageCount - 1];
+    failedImageMaxAlloc[i] = failedImageMaxAlloc[failedImageCount - 1];
+    failedImageCount--;
+    return false;
   }
   return false;
 }
 
-void rememberImageFailure(const std::string& path) {
-  if (failedImageCount == MAX_SESSION_IMAGE_FAILURES || imageFailedThisSession(path)) return;
-  failedImageHashes[failedImageCount++] = imagePathHash(path);
+// transientMaxAlloc = 0 → 永久失敗；否則記錄當時的最大連續塊，作為重試門檻。
+void rememberImageFailure(const std::string& path, const uint32_t transientMaxAlloc = 0) {
+  if (failedImageCount == MAX_SESSION_IMAGE_FAILURES) return;
+  const uint64_t hash = imagePathHash(path);
+  for (size_t i = 0; i < failedImageCount; i++) {
+    if (failedImageHashes[i] == hash) return;
+  }
+  failedImageHashes[failedImageCount] = hash;
+  failedImageMaxAlloc[failedImageCount] = transientMaxAlloc;
+  failedImageCount++;
+}
+
+// --- Per-page-render RAM slot for the pixel cache ----------------------------
+// The tiled grayscale flow re-renders an image page once for the BW
+// double-refresh and again for every band of both gray planes, and each pass
+// re-read the whole .pxc off SD (~100 ms for a full-page image, ~13 passes).
+// Column clipping cannot reduce the SD traffic: the row stride (~100 B) is
+// smaller than an SD sector, so every sector is touched regardless of the band
+// window. Instead the first pass loads the payload into RAM and later passes
+// render from it. Chunked allocation because a single full-image block (up to
+// 96 KB) rarely fits the fragmented mid-render heap; each chunk is heap-gated
+// and any failure falls back to the streaming path unchanged. The reader
+// releases the slot when the page render completes, so nothing stays resident
+// across page turns.
+constexpr size_t PXC_CHUNK_SHIFT = 14;  // 16 KB chunks
+constexpr size_t PXC_CHUNK_SIZE = 1u << PXC_CHUNK_SHIFT;
+constexpr size_t PXC_MAX_CHUNKS = 6;  // 96 KB: a full-screen 2bpp image
+constexpr size_t PXC_HEAP_RESERVE = 24 * 1024;
+constexpr size_t PXC_MAX_ALLOC_RESERVE = 8 * 1024;
+// Rows can straddle a chunk boundary; they are reassembled into a stack
+// buffer. (screenWidth + 3) / 4 caps at 200 B for an 800px panel.
+constexpr int PXC_MAX_BYTES_PER_ROW = 208;
+
+std::unique_ptr<uint8_t[]> pxcChunks[PXC_MAX_CHUNKS];
+uint64_t pxcSlotHash = 0;
+uint16_t pxcSlotWidth = 0;
+uint16_t pxcSlotHeight = 0;
+
+void releasePxcSlot() {
+  for (auto& chunk : pxcChunks) chunk.reset();
+  pxcSlotHash = 0;
+  pxcSlotWidth = 0;
+  pxcSlotHeight = 0;
+}
+
+const uint8_t* pxcRowPtr(size_t rowStart, int bytesPerRow, uint8_t* tempRow) {
+  const size_t chunk = rowStart >> PXC_CHUNK_SHIFT;
+  const size_t offset = rowStart & (PXC_CHUNK_SIZE - 1);
+  if (offset + bytesPerRow <= PXC_CHUNK_SIZE) {
+    return pxcChunks[chunk].get() + offset;
+  }
+  const size_t firstPart = PXC_CHUNK_SIZE - offset;
+  memcpy(tempRow, pxcChunks[chunk].get() + offset, firstPart);
+  memcpy(tempRow + firstPart, pxcChunks[chunk + 1].get(), bytesPerRow - firstPart);
+  return tempRow;
+}
+
+// cacheFile is positioned just past the header. True when the slot holds the
+// full pixel payload for this cache path afterward.
+bool loadPxcSlot(uint64_t cacheHash, HalFile& cacheFile, uint16_t cachedWidth, uint16_t cachedHeight, int bytesPerRow) {
+  releasePxcSlot();
+  if (bytesPerRow > PXC_MAX_BYTES_PER_ROW) {
+    return false;
+  }
+  size_t remaining = (size_t)bytesPerRow * cachedHeight;
+  const size_t chunkCount = (remaining + PXC_CHUNK_SIZE - 1) >> PXC_CHUNK_SHIFT;
+  if (chunkCount == 0 || chunkCount > PXC_MAX_CHUNKS) {
+    return false;
+  }
+  for (size_t i = 0; i < chunkCount; i++) {
+    const size_t want = remaining < PXC_CHUNK_SIZE ? remaining : PXC_CHUNK_SIZE;
+    if (ESP.getFreeHeap() < remaining + PXC_HEAP_RESERVE || ESP.getMaxAllocHeap() < want + PXC_MAX_ALLOC_RESERVE) {
+      releasePxcSlot();
+      return false;
+    }
+    pxcChunks[i] = makeUniqueNoThrow<uint8_t[]>(want);
+    if (!pxcChunks[i] || cacheFile.read(pxcChunks[i].get(), want) != static_cast<int>(want)) {
+      releasePxcSlot();
+      return false;
+    }
+    remaining -= want;
+  }
+  pxcSlotHash = cacheHash;
+  pxcSlotWidth = cachedWidth;
+  pxcSlotHeight = cachedHeight;
+  return true;
+}
+
+void renderRowsFromPxcSlot(GfxRenderer& renderer, int x, int y) {
+  const int bytesPerRow = (pxcSlotWidth + 3) / 4;
+  uint8_t tempRow[PXC_MAX_BYTES_PER_ROW];
+
+  DirectPixelWriter pw;
+  pw.init(renderer);
+
+  for (int row = 0; row < pxcSlotHeight; row++) {
+    const uint8_t* rowBuffer = pxcRowPtr((size_t)row * bytesPerRow, bytesPerRow, tempRow);
+    pw.beginRow(y + row);
+    int colStart, colEnd;
+    pw.bandColRange(x, pxcSlotWidth, colStart, colEnd);
+    for (int col = colStart; col < colEnd; col++) {
+      const int byteIdx = col >> 2;            // col / 4
+      const int bitShift = 6 - (col & 3) * 2;  // MSB first within byte
+      const uint8_t pixelValue = (rowBuffer[byteIdx] >> bitShift) & 0x03;
+      pw.writePixel(x + col, pixelValue);
+    }
+  }
 }
 
 bool renderFromCache(GfxRenderer& renderer, const std::string& cachePath, int x, int y, int expectedWidth,
                      int expectedHeight) {
+  // A later pass of the same page render: the payload is already in RAM, skip
+  // the file entirely.
+  const uint64_t cacheHash = imagePathHash(cachePath);
+  if (pxcSlotHash == cacheHash && pxcSlotWidth != 0) {
+    renderRowsFromPxcSlot(renderer, x, y);
+    return true;
+  }
+
   HalFile cacheFile;
   if (!Storage.openFileForRead("IMG", cachePath, cacheFile)) {
     return false;
@@ -122,12 +305,29 @@ bool renderFromCache(GfxRenderer& renderer, const std::string& cachePath, int x,
 
   LOG_DBG("IMG", "Loading from cache: %s (%dx%d)", cachePath.c_str(), cachedWidth, cachedHeight);
 
-  // Read several rows per SD access. A full-page image is re-rendered on every
-  // grayscale strip pass (~14x per page), and a one-row-per-read loop here means
-  // cachedHeight (~728) tiny reads through the storage mutex + SdFat each time —
-  // the dominant cost of displaying an image page. Batching rows into a ~4KB
-  // buffer cuts that to ~20 reads per pass without holding the whole image.
   const int bytesPerRow = (cachedWidth + 3) / 4;  // 2 bits per pixel, 4 pixels per byte
+
+  // First pass of a page render: try to pull the payload into the RAM slot so
+  // the remaining ~12 passes skip SD entirely. Only an EMPTY slot is claimed:
+  // the slot lives until the page render completes, so a populated slot with a
+  // different hash means another image on this same page owns it. Evicting it
+  // here would make 2+ image pages reload each other from SD on every pass
+  // (all the SD traffic of streaming plus the slot alloc churn); instead later
+  // images take the streaming path below, unchanged from pre-cache behavior.
+  if (pxcSlotHash == 0 && loadPxcSlot(cacheHash, cacheFile, cachedWidth, cachedHeight, bytesPerRow)) {
+    renderRowsFromPxcSlot(renderer, x, y);
+    LOG_DBG("IMG", "Cache render complete (payload now in RAM)");
+    return true;
+  }
+
+  // Streaming fallback (slot didn't fit). A failed slot load may have consumed
+  // part of the payload; rewind to just past the header.
+  cacheFile.seek(4);
+
+  // Read several rows per SD access. A one-row-per-read loop here means
+  // cachedHeight (~728) tiny reads through the storage mutex + SdFat; batching
+  // rows into a ~4KB buffer cuts that to ~20 reads per pass without holding the
+  // whole image.
   int rowsPerRead = 4096 / bytesPerRow;
   if (rowsPerRead < 1) rowsPerRead = 1;
   if (rowsPerRead > cachedHeight) rowsPerRead = cachedHeight;
@@ -138,6 +338,9 @@ bool renderFromCache(GfxRenderer& renderer, const std::string& cachePath, int x,
     readBuffer = (uint8_t*)malloc(bytesPerRow);
   }
   if (!readBuffer) {
+    // v194：LOG_ERR 在這台等於丟掉。走既有 noteFailure，閱讀器每圈倒進 diag.log。
+    ImageBlock::noteFailure("cache-rowbuf bytes=%u max=%u", static_cast<unsigned>(bytesPerRow),
+                            static_cast<unsigned>(ESP.getMaxAllocHeap()));
     LOG_ERR("IMG", "Failed to allocate row buffer");
     return false;
   }
@@ -198,13 +401,35 @@ bool ImageBlock::hasValidCache() const {
 
 bool ImageBlock::needsDecode() const { return !imageFailedThisSession(imagePath) && !hasValidCache(); }
 
-void ImageBlock::clearSessionRenderFailures() { failedImageCount = 0; }
-
-void ImageBlock::setMemoryReliefHooks(MemoryReliefFn reliefFn, MemoryReliefFn restoreFn, void* ctx) {
-  g_imageReliefFn = reliefFn;
-  g_imageRestoreFn = restoreFn;
-  g_imageReliefCtx = ctx;
+void ImageBlock::clearSessionRenderFailures() {
+  failedImageCount = 0;
+  rememberedPlaceholderCount_ = 0;  // v190：與失敗表同一 session 起點，否則新 activity 的差值會吃到上一本
+  deferredDecodeCount_ = 0;         // v193：同上，避免新 activity 的差值吃到上一本
+  openFailEntries = 0;              // v191：n= 跟 session 走，進閱讀器時才歸零
+  currentRenderFailValid = false;
 }
+
+void ImageBlock::clearRetryableFailures() {
+  currentRenderFailValid = false;  // v191：備援格與哨兵同壽命——每頁 render 給一次機會
+  size_t i = 0;
+  while (i < failedImageCount) {
+    if (failedImageMaxAlloc[i] != IMAGE_FAILURE_RETRY_NEXT_RENDER) {
+      i++;
+      continue;
+    }
+    failedImageHashes[i] = failedImageHashes[failedImageCount - 1];
+    failedImageMaxAlloc[i] = failedImageMaxAlloc[failedImageCount - 1];
+    failedImageCount--;
+  }
+}
+
+uint32_t ImageBlock::rememberedPlaceholderCount() { return rememberedPlaceholderCount_; }
+
+void ImageBlock::setDeferHeavyDecode(bool on) { deferHeavyDecode_ = on; }  // v193
+
+uint32_t ImageBlock::deferredDecodeCount() { return deferredDecodeCount_; }  // v193
+
+void ImageBlock::releaseRenderCache() { releasePxcSlot(); }
 
 void ImageBlock::renderPlaceholder(GfxRenderer& renderer, const int x, const int y) const {
   renderer.fillRect(x, y, width, height, true);
@@ -229,22 +454,11 @@ void ImageBlock::render(GfxRenderer& renderer, const int x, const int y) {
 
   // Bounds check render position using logical screen dimensions
   if (x < 0 || y < 0 || x + width > screenWidth || y + height > screenHeight) {
+    noteFailure("render-bounds x=%d y=%d w=%d h=%d %s", x, y, width, height, imagePath.c_str());
     LOG_ERR("IMG", "Invalid render position: (%d,%d) size (%dx%d) screen (%dx%d)", x, y, width, height, screenWidth,
             screenHeight);
-    // v122:這條路徑【什麼都不畫、也不記失敗】,所以每次進來重演一次而診斷上完全看不見。
-    // diag121 的 SEG 顯示那兩個圖片頁 dec=0(連解碼都沒開始),這裡是頭號嫌疑。
-    // 把座標寫進去讓實機指名 —— 數字排在最前面,路徑被截斷也不影響歸因。
-    if (ImageBlock::lastFailPath[0] == '\0') {
-      snprintf(ImageBlock::lastFailPath, sizeof(ImageBlock::lastFailPath), "%dx%d@%d,%d scr=%dx%d %s", width, height, x,
-               y, screenWidth, screenHeight, imagePath.c_str());
-      ImageToFramebufferDecoder::noteFailure(ImageToFramebufferDecoder::FAIL_BOUNDS, 0);
-    }
     return;
   }
-
-  // v125:通過邊界檢查 = 這張圖【會】被畫下去。把版面實際給的幾何記下來,因為失敗碼答不出
-  // 「畫出來了但小到看不見」。同一次 render 內會被每條灰階帶重寫,值相同,無害。
-  snprintf(ImageBlock::lastDrawGeom, sizeof(ImageBlock::lastDrawGeom), "%dx%d@%d,%d", width, height, x, y);
 
   // Tiled grayscale (#2190): skip the whole image when it doesn't touch the
   // active band. The per-pixel writer already clips off-band pixels, but without
@@ -257,11 +471,8 @@ void ImageBlock::render(GfxRenderer& renderer, const int x, const int y) {
   }
 
   if (imageFailedThisSession(imagePath)) {
-    // v122:本 session 先前失敗過。只在還沒有待回報的紀錄時寫入,免得蓋掉真正的首次失敗原因。
-    if (ImageBlock::lastFailPath[0] == '\0') {
-      snprintf(ImageBlock::lastFailPath, sizeof(ImageBlock::lastFailPath), "%s", imagePath.c_str());
-      ImageToFramebufferDecoder::noteFailure(ImageToFramebufferDecoder::FAIL_REMEMBERED, 0);
-    }
+    noteFailure("render-remembered %s", imagePath.c_str());
+    rememberedPlaceholderCount_++;  // v190：只加計數，身分由呼叫端綁定
     renderPlaceholder(renderer, x, y);
     return;
   }
@@ -272,13 +483,60 @@ void ImageBlock::render(GfxRenderer& renderer, const int x, const int y) {
     return;  // Successfully rendered from cache
   }
 
+  // v193：只延後「快取未命中、接下來要真的解碼」這條路。不是失敗，不准寫進失敗表。
+  if (deferHeavyDecode_) {
+    deferredDecodeCount_++;
+    renderPlaceholder(renderer, x, y);
+    return;
+  }
+
+  // v24/v148：紓解窗口涵蓋【懶抽取＋解碼】兩段（v147 實測 render 時的抽取在
+  // maxAlloc=32,160 下差 608 bytes 失敗 —— 舊樹只包解碼，因為舊樹在建置期抽取）。
+  // RAII 讓下面每一條 return 路徑都會 restore；restore = ensureLoaded，在同一個
+  // render 內把字型載回來，圖之後的文字照常畫（字型 ID 是內容雜湊，重載後不變）。
+  struct ReliefWindow {
+    bool active = false;
+    ~ReliefWindow() {
+      if (active && g_imageRestoreFn) g_imageRestoreFn(g_imageReliefCtx);
+    }
+  } relief;
+  if (g_imageReliefFn && (ESP.getMaxAllocHeap() < IMAGE_RENDER_RELIEF_MAX_ALLOC ||
+                          ESP.getFreeHeap() < IMAGE_RENDER_RELIEF_MIN_FREE)) {
+    g_imageReliefFn(g_imageReliefCtx);
+    relief.active = true;
+  }
+
+  // The build only header-probed the image for dimensions; pull the actual
+  // file out of the book now, on first visit to the page.
+  if (!srcPath.empty() && extractFn && !Storage.exists(imagePath.c_str())) {
+    LOG_DBG("IMG", "Lazy-extracting %s -> %s", srcPath.c_str(), imagePath.c_str());
+    if (!extractFn(extractCtx, srcPath.c_str(), imagePath.c_str())) {
+      LOG_ERR("IMG", "Lazy extraction failed: %s", srcPath.c_str());
+      // v191：抽取器說失敗就是失敗，不要再去開那個檔 —— 抽到一半的殘檔【開得起來】，
+      // 於是原本的寫法會完全沒有證據（而且 Storage.exists 之後永遠不再重抽）。複查抓到。
+      // 印的是【來源路徑】（EPUB 內的項目名），那才是能拿去對書查的東西。
+      Storage.remove(imagePath.c_str());
+      const unsigned n = bumpOpenFailN(imagePath);
+      noteFailure("render-extract n=%u %s", n, srcPath.c_str());
+      rememberImageFailure(imagePath, IMAGE_FAILURE_RETRY_NEXT_RENDER);
+      currentRenderFailHash = imagePathHash(imagePath);
+      currentRenderFailValid = true;
+      renderPlaceholder(renderer, x, y);
+      return;
+    }
+  }
+
   // No cache - need to decode the image
   // Check if image file exists
   HalFile file;
   if (!Storage.openFileForRead("IMG", imagePath, file)) {
     LOG_ERR("IMG", "Image file not found: %s", imagePath.c_str());
-    noteRenderFailure(ImageToFramebufferDecoder::FAIL_NOT_FOUND, imagePath, width, height, x, y);
-    rememberImageFailure(imagePath);
+    // v191：ex= 放前面，長路徑截斷仍留得住原因；n= 看得出暫時性 SD 失誤有沒有自己好。
+    const unsigned n = bumpOpenFailN(imagePath);
+    noteFailure("render-open n=%u %s", n, imagePath.c_str());
+    rememberImageFailure(imagePath, IMAGE_FAILURE_RETRY_NEXT_RENDER);
+    currentRenderFailHash = imagePathHash(imagePath);
+    currentRenderFailValid = true;
     renderPlaceholder(renderer, x, y);
     return;
   }
@@ -287,7 +545,7 @@ void ImageBlock::render(GfxRenderer& renderer, const int x, const int y) {
 
   if (fileSize == 0) {
     LOG_ERR("IMG", "Image file is empty: %s", imagePath.c_str());
-    noteRenderFailure(ImageToFramebufferDecoder::FAIL_EMPTY, imagePath, width, height, x, y);
+    noteFailure("render-empty %s", imagePath.c_str());
     rememberImageFailure(imagePath);
     renderPlaceholder(renderer, x, y);
     return;
@@ -309,7 +567,7 @@ void ImageBlock::render(GfxRenderer& renderer, const int x, const int y) {
   ImageToFramebufferDecoder* decoder = ImageDecoderFactory::getDecoder(imagePath);
   if (!decoder) {
     LOG_ERR("IMG", "No decoder found for image: %s", imagePath.c_str());
-    noteRenderFailure(ImageToFramebufferDecoder::FAIL_NO_DECODER, imagePath, width, height, x, y);
+    noteFailure("render-nodecoder %s", imagePath.c_str());
     rememberImageFailure(imagePath);
     renderPlaceholder(renderer, x, y);
     return;
@@ -317,38 +575,18 @@ void ImageBlock::render(GfxRenderer& renderer, const int x, const int y) {
 
   LOG_DBG("IMG", "Using %s decoder", decoder->getFormatName());
 
-  // First-time decode allocates the ~44 KB PNG / ~20 KB JPEG decoder. Under heap
-  // pressure that allocation fails and the image would fall back to a placeholder.
-  // Give the reader a chance to free RAM (unload the SD reading font) for just this
-  // decode, then restore it. Scoped tightly around the decode so no text drawing
-  // happens while the font is unloaded; the reader's fontId comes from SETTINGS and
-  // is unchanged by the reload. Once decoded the pixel cache is written, so later
-  // views take the cheap renderFromCache path and never reach here again.
-  // v54:雙判準,兩個都要看——
-  // ①【最大連續塊】:解碼器要的是一整塊連續空間(PNG ~44KB / JPEG ~20KB),總量足夠但沒有
-  //   夠大連續塊時,舊的「總 free」判斷會誤放行(專案鐵律,見 CLAUDE.md「硬限制 2」)。
-  //   門檻由各解碼器自報,共用一個保守值會讓 JPEG 頁白拆字型快取。
-  // ②【總 free】:解碼器自己內部還有一道總量門檻(PNG 60KB / JPEG 36KB),若只看連續塊,
-  //   總量落在中間帶時 relief 不觸發、卻被解碼器自己的門檻擋下 → 圖片變佔位框且整個
-  //   session 不再重試。保留一個總量下限把這個窗口補起來。
-  const size_t needContiguous = decoder->minContiguousHeapForDecode();
-  const bool relieve = g_imageReliefFn && (ESP.getMaxAllocHeap() < needContiguous ||
-                                           ESP.getFreeHeap() < needContiguous + IMAGE_DECODE_TOTAL_HEAP_MARGIN);
-  if (relieve) g_imageReliefFn(g_imageReliefCtx);
+  ImageToFramebufferDecoder::clearLastError();
   bool success = decoder->decodeToFramebuffer(imagePath, renderer, config);
-  if (relieve && g_imageRestoreFn) g_imageRestoreFn(g_imageReliefCtx);
   if (!success) {
     LOG_ERR("IMG", "Failed to decode image: %s", imagePath.c_str());
-    // v120:記下是哪一張、哪一個階段;由閱讀器那一層寫進 diag.log(見標頭說明)。
-    // v125:加上幾何並改成先到先得。解碼器自己回報的階段碼優先,不覆寫。
-    if (ImageBlock::lastFailPath[0] == '\0') {
-      if (ImageToFramebufferDecoder::lastFailStage == ImageToFramebufferDecoder::FAIL_NONE) {
-        ImageToFramebufferDecoder::noteFailure(ImageToFramebufferDecoder::FAIL_DECODE, 0);
-      }
-      snprintf(ImageBlock::lastFailPath, sizeof(ImageBlock::lastFailPath), "%dx%d@%d,%d %s", width, height, x, y,
-               imagePath.c_str());
-    }
-    rememberImageFailure(imagePath);
+    // v176：render 階段的方框終於有證人（v125 那套在 v145 移植時掉了 —— diag175 那次實機的方框
+    // 零紀錄）。記憶體類失敗（transient）不進 session 封殺名單，下一頁重試。
+    noteFailure("render-decode %s tr=%u max=%u free=%u %s", ImageToFramebufferDecoder::lastError,
+                ImageToFramebufferDecoder::lastErrorTransient ? 1u : 0u, static_cast<unsigned>(ESP.getMaxAllocHeap()),
+                static_cast<unsigned>(ESP.getFreeHeap()), imagePath.c_str());
+    rememberImageFailure(imagePath, ImageToFramebufferDecoder::lastErrorTransient
+                                        ? std::max(2u, static_cast<unsigned>(ESP.getMaxAllocHeap()))
+                                        : 0u);
     renderPlaceholder(renderer, x, y);
     return;
   }
@@ -358,6 +596,7 @@ void ImageBlock::render(GfxRenderer& renderer, const int x, const int y) {
 
 bool ImageBlock::serialize(HalFile& file) {
   serialization::writeString(file, imagePath);
+  serialization::writeString(file, srcPath);
   serialization::writePod(file, width);
   serialization::writePod(file, height);
   return true;
@@ -365,9 +604,17 @@ bool ImageBlock::serialize(HalFile& file) {
 
 std::unique_ptr<ImageBlock> ImageBlock::deserialize(HalFile& file) {
   std::string path;
+  std::string src;
   serialization::readString(file, path);
+  serialization::readString(file, src);
   int16_t w, h;
   serialization::readPod(file, w);
   serialization::readPod(file, h);
-  return std::unique_ptr<ImageBlock>(new ImageBlock(path, w, h));
+  auto block = std::unique_ptr<ImageBlock>(new (std::nothrow) ImageBlock(path, src, w, h));
+  if (!block) {
+    // v194：nothrow 配不到。LOG_ERR 在這台等於丟掉，走既有 noteFailure 進 diag.log。
+    noteFailure("deserialize-alloc max=%u", static_cast<unsigned>(ESP.getMaxAllocHeap()));
+    return nullptr;
+  }
+  return block;
 }

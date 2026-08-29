@@ -1,14 +1,16 @@
 #include "WebDAVHandler.h"
 
+#include "util/ProtectedPath.h"
+
 #include <FsHelpers.h>
 #include <HalStorage.h>
 #include <Logging.h>
-#include <esp_task_wdt.h>
 
 #include "util/BookCacheUtils.h"
-#include "util/ProtectedPath.h"
+#include "util/TaskWatchdog.h"
 
 namespace {
+constexpr const char* HIDDEN_ITEMS[] = {"System Volume Information", "XTCache"};
 
 // RFC 1123 date format helper: "Sun, 06 Nov 1994 08:49:37 GMT"
 // ESP32 doesn't have real-time clock set by default, so we use a fixed epoch date
@@ -84,7 +86,7 @@ void WebDAVHandler::raw(WebServer& server, const String& uri, HTTPRaw& raw) {
 
   } else if (raw.status == RAW_WRITE) {
     if (_putFile && _putOk) {
-      esp_task_wdt_reset();
+      resetTaskWatchdogIfSubscribed();
       size_t written = _putFile.write(raw.buf, raw.currentSize);
       if (written != raw.currentSize) {
         _putOk = false;
@@ -228,7 +230,15 @@ void WebDAVHandler::handlePropfind(WebServer& s) {
       String fileName(name);
 
       // Skip hidden/protected items
-      bool shouldHide = ProtectedPath::isProtectedName(fileName.c_str());
+      bool shouldHide = fileName.startsWith(".");
+      if (!shouldHide) {
+        for (const auto* item : HIDDEN_ITEMS) {
+          if (fileName.equals(item)) {
+            shouldHide = true;
+            break;
+          }
+        }
+      }
 
       if (!shouldHide) {
         String childPath = path;
@@ -244,7 +254,7 @@ void WebDAVHandler::handlePropfind(WebServer& s) {
 
       file.close();
       yield();
-      esp_task_wdt_reset();
+      resetTaskWatchdogIfSubscribed();
       file = root.openNextFile();
     }
   }
@@ -620,7 +630,7 @@ void WebDAVHandler::handleCopy(WebServer& s) {
   uint8_t buf[4096];
   bool copyOk = true;
   while (srcFile.available()) {
-    esp_task_wdt_reset();
+    resetTaskWatchdogIfSubscribed();
     int bytesRead = srcFile.read(buf, sizeof(buf));
     if (bytesRead <= 0) break;
     size_t written = dstFile.write(buf, bytesRead);
@@ -655,7 +665,7 @@ void WebDAVHandler::handleLock(WebServer& s) {
       "<D:locktype><D:write/></D:locktype>\n"
       "<D:lockscope><D:exclusive/></D:lockscope>\n"
       "<D:depth>infinity</D:depth>\n"
-      "<D:owner><D:href>crossmosa</D:href></D:owner>\n"
+      "<D:owner><D:href>crosspoint</D:href></D:owner>\n"
       "<D:timeout>Second-3600</D:timeout>\n"
       "<D:locktoken><D:href>urn:uuid:dummy-lock-token</D:href></D:locktoken>\n"
       "<D:lockroot><D:href>/</D:href></D:lockroot>\n"
@@ -751,10 +761,12 @@ void WebDAVHandler::urlEncodePath(const String& path, String& out) const {
 }
 
 bool WebDAVHandler::isProtectedPath(const String& path) const {
-  // Shared with the SMB2 server's create_cmd (see ProtectedPath.h) so both
-  // protocols enforce identical rules -- checks every segment of the path,
-  // not just the last one, so e.g. /.hidden/somefile and
-  // /System Volume Information/foo are both caught.
+  // v77/v78：逐段比對的規則已抽到 util/ProtectedPath —— 網頁檔案管理與 WebDAV
+  // 共用【單一副本】。這裡原本只有「逐段 + 字面比對」，缺三層：
+  //   ① FAT 大小寫不敏感（xtcache == XTCache）
+  //   ② 8.3 短名別名（.crosspoint -> CROSSM~1 / CRO~1A2F，SdFat 兩者都開得起來）
+  //   ③ parsePathName 會先去掉開頭空白與結尾的點與空白（"/ .crosspoint/x" 走得過去）
+  // 這條規則歷史上連修四次，每次都是「另一個入口沒守到」——所以不要在這裡重寫一份。
   return ProtectedPath::isProtected(path.c_str());
 }
 

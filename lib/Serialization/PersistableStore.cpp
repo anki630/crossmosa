@@ -1,9 +1,13 @@
 #include "PersistableStore.h"
+#include <DataDir.h>
 
 #include <HalStorage.h>
-#include <DataDir.h>
 #include <Logging.h>
 #include <ObfuscationUtils.h>
+
+#include <cstring>
+#include <string>
+#include <limits>
 
 bool PersistableStoreBase::writeDocAtomic(const char* path, const JsonDocument& doc) {
   const std::string finalPath = path;
@@ -19,7 +23,7 @@ bool PersistableStoreBase::writeDocAtomic(const char* path, const JsonDocument& 
     }
     written = serializeJson(doc, f);
     f.flush();
-    // f 於 scope 結束時關閉(DESTRUCTOR_CLOSES_FILE=1);SdFat 不可 rename 仍開啟的路徑。
+    // f 於 scope 結束時關閉（DESTRUCTOR_CLOSES_FILE=1）；SdFat 不可 rename 仍開啟的路徑。
   }
 
   if (written != expected || expected == 0) {
@@ -39,11 +43,8 @@ bool PersistableStoreBase::writeDocAtomic(const char* path, const JsonDocument& 
 
 bool PersistableStoreBase::writeDocToFile(const char* path, const JsonDocument& doc) {
   Storage.mkdir(DataDir::path());
-  if (!writeDocAtomic(path, doc)) {
-    LOG_ERR("PERSIST", "Failed to write %s", path);
-    return false;
-  }
-  return true;
+  // 所有 JSON 落地一律走原子路徑 —— 呼叫端不必改。
+  return writeDocAtomic(path, doc);
 }
 
 bool PersistableStoreBase::readDocFromFile(const char* path, JsonDocument& doc) {
@@ -64,11 +65,29 @@ bool PersistableStoreBase::readDocFromFile(const char* path, JsonDocument& doc) 
 }
 
 std::string PersistableStoreBase::extractPassword(JsonVariantConst doc, bool& needsResave) {
+  bool valid = false;
+  return extractPassword(doc, needsResave, std::numeric_limits<size_t>::max(), valid);
+}
+
+std::string PersistableStoreBase::extractPassword(JsonVariantConst doc, bool& needsResave, const size_t maxLength,
+                                                  bool& valid) {
+  valid = true;
   bool ok = false;
-  std::string pass = obfuscation::deobfuscateFromBase64(doc["password_obf"] | "", &ok);
+  bool tooLong = false;
+  std::string pass = obfuscation::deobfuscateFromBase64(doc["password_obf"] | "", maxLength, &ok, &tooLong);
+  if (tooLong) {
+    valid = false;
+    return "";
+  }
   if (!ok) {
     // Deobfuscation failed — fall back to legacy plaintext password.
-    pass = doc["password"] | "";
+    const char* legacyPassword = doc["password"] | "";
+    const size_t legacyLength = strlen(legacyPassword);
+    if (legacyLength > maxLength) {
+      valid = false;
+      return "";
+    }
+    pass.assign(legacyPassword, legacyLength);
     if (!pass.empty()) needsResave = true;
   }
   // A successfully decoded empty string is a legitimate value; preserve as-is.

@@ -2,16 +2,18 @@
 
 #include <FsHelpers.h>
 #include <GfxRenderer.h>
+#include <HalGPIO.h>
 #include <Logging.h>
 
+#include <algorithm>
 #include <memory>
 
 #include "MappedInputManager.h"
 #include "RecentBooksStore.h"
 #include "components/themes/BaseTheme.h"
+#include "components/themes/formosapro/FormosaProTheme.h"
 #include "components/themes/lyra/Lyra3CoversTheme.h"
 #include "components/themes/lyra/LyraTheme.h"
-#include "components/themes/roundedraff/RoundedRaffTheme.h"
 
 UITheme UITheme::instance;
 
@@ -27,13 +29,8 @@ void UITheme::reload() {
 
 void UITheme::setTheme(CrossPointSettings::UI_THEME type) {
   switch (type) {
-    // v52:Classic(BaseTheme 直用)與 RoundedRaff 退役——不再實例化,linker --gc-sections
-    // 回收 RoundedRaffTheme 整條鏈(v27 手法,檔案保留可回退);殘存設定值 fallback Formosa。
-    // BaseTheme 類別本身是 Lyra 家族的父類,持續存活。
-    case CrossPointSettings::UI_THEME::CLASSIC:
-    case CrossPointSettings::UI_THEME::ROUNDEDRAFF:
     case CrossPointSettings::UI_THEME::LYRA:
-      LOG_DBG("UI", "Using Formosa theme");
+      LOG_DBG("UI", "Using Lyra theme");
       currentTheme = std::make_unique<LyraTheme>();
       currentMetrics = &LyraMetrics::values;
       break;
@@ -42,12 +39,34 @@ void UITheme::setTheme(CrossPointSettings::UI_THEME type) {
       currentTheme = std::make_unique<Lyra3CoversTheme>();
       currentMetrics = &Lyra3CoversMetrics::values;
       break;
+    case CrossPointSettings::UI_THEME::FORMOSA_PRO:
+    default:  // v184：範圍外一律 Pro（Classic 已退役，BaseTheme 只當父類）
+      LOG_DBG("UI", "Using Formosa Pro theme");
+      currentTheme = std::make_unique<FormosaProTheme>();
+      currentMetrics = &FormosaProMetrics::values;
+      break;
   }
+  metricsValid = false;
+}
+
+const ThemeMetrics& UITheme::getMetrics() const {
+  // hasTouch() can flip once touch init completes after static construction, so the
+  // cached copy is refreshed when the flag differs instead of copying the struct per call.
+  const bool touch = gpio.hasTouch();
+  if (!metricsValid || touch != metricsForTouch) {
+    adjustedMetrics = *currentMetrics;
+    if (touch) {
+      adjustedMetrics.buttonHintsHeight = 0;
+    }
+    metricsForTouch = touch;
+    metricsValid = true;
+  }
+  return adjustedMetrics;
 }
 
 int UITheme::getNumberOfItemsPerPage(const GfxRenderer& renderer, bool hasHeader, bool hasTabBar, bool hasButtonHints,
                                      bool hasSubtitle, int extraReservedHeight) {
-  const ThemeMetrics& metrics = UITheme::getInstance().getMetrics();
+  const ThemeMetrics metrics = UITheme::getInstance().getMetrics();
   auto orientation = renderer.getOrientation();
   int reservedHeight = metrics.topPadding;
   if (hasHeader) {
@@ -61,8 +80,7 @@ int UITheme::getNumberOfItemsPerPage(const GfxRenderer& renderer, bool hasHeader
     reservedHeight += metrics.verticalSpacing + metrics.buttonHintsHeight;
   }
   const int availableHeight = renderer.getScreenHeight() - reservedHeight - extraReservedHeight;
-  int rowHeight = hasSubtitle ? metrics.listWithSubtitleRowHeight : metrics.listRowHeight;
-  return availableHeight / rowHeight;
+  return UITheme::getInstance().getTheme().getListPageItems(availableHeight, hasSubtitle);
 }
 
 // Screen area excluding the button hints
@@ -71,27 +89,28 @@ Rect UITheme::getScreenSafeArea(const GfxRenderer& renderer, bool hasFrontButton
   const int screenWidth = renderer.getScreenWidth();
   const int screenHeight = renderer.getScreenHeight();
   Rect safeArea = Rect{0, 0, screenWidth, screenHeight};
+  const ThemeMetrics metrics = getMetrics();
   switch (orientation) {
     case GfxRenderer::Orientation::Portrait:
       if (hasFrontButtonHints) {
-        safeArea.height -= currentMetrics->buttonHintsHeight;
+        safeArea.height -= metrics.buttonHintsHeight;
       }
       break;
     case GfxRenderer::Orientation::LandscapeClockwise:
       if (hasFrontButtonHints) {
-        safeArea.x += currentMetrics->buttonHintsHeight;
-        safeArea.width -= currentMetrics->buttonHintsHeight;
+        safeArea.x += metrics.buttonHintsHeight;
+        safeArea.width -= metrics.buttonHintsHeight;
       }
       break;
     case GfxRenderer::Orientation::PortraitInverted:
       if (hasFrontButtonHints) {
-        safeArea.y += currentMetrics->buttonHintsHeight;
-        safeArea.height -= currentMetrics->buttonHintsHeight;
+        safeArea.y += metrics.buttonHintsHeight;
+        safeArea.height -= metrics.buttonHintsHeight;
       }
       break;
     case GfxRenderer::Orientation::LandscapeCounterClockwise:
       if (hasFrontButtonHints) {
-        safeArea.width -= currentMetrics->buttonHintsHeight;
+        safeArea.width -= metrics.buttonHintsHeight;
       }
       break;
   }
@@ -110,7 +129,7 @@ UIIcon UITheme::getFileIcon(const std::string& filename) {
   if (filename.back() == '/') {
     return Folder;
   }
-  if (FsHelpers::hasEpubExtension(filename)) {
+  if (FsHelpers::hasEpubExtension(filename) || FsHelpers::hasXtcExtension(filename)) {
     return Book;
   }
   if (FsHelpers::hasTxtExtension(filename) || FsHelpers::hasMarkdownExtension(filename)) {
@@ -123,24 +142,19 @@ UIIcon UITheme::getFileIcon(const std::string& filename) {
 }
 
 int UITheme::getStatusBarHeight() {
-  const ThemeMetrics& metrics = UITheme::getInstance().getMetrics();
+  const ThemeMetrics metrics = UITheme::getInstance().getMetrics();
+  const auto sb = SETTINGS.statusBarSpec();
 
-  // Add status bar margin
-  const bool showStatusBar =
-      SETTINGS.statusBarChapterPageCount || SETTINGS.statusBarBookProgressPercentage ||
-      SETTINGS.statusBarTitle != CrossPointSettings::STATUS_BAR_TITLE::HIDE_TITLE || SETTINGS.statusBarBattery ||
-      SETTINGS.statusBarClock != CrossPointSettings::STATUS_BAR_CLOCK_MODE::STATUS_BAR_CLOCK_HIDE;
-  const bool showProgressBar =
-      SETTINGS.statusBarProgressBar != CrossPointSettings::STATUS_BAR_PROGRESS_BAR::HIDE_PROGRESS;
-  return (showStatusBar ? (metrics.statusBarVerticalMargin) : 0) +
-         (showProgressBar ? (((SETTINGS.statusBarProgressBarThickness + 1) * 2) + metrics.progressBarMarginTop) : 0);
+  // Layout reservation is hardware-agnostic: pass clockAvailable=true so the
+  // reserved height does not depend on whether an RTC is present.
+  return (sb.textLaneVisible(true) ? (metrics.statusBarVerticalMargin) : 0) +
+         (sb.showsProgressBar() ? (sb.progressBarHeightPx + metrics.progressBarMarginTop) : 0);
 }
 
 int UITheme::getProgressBarHeight() {
-  const ThemeMetrics& metrics = UITheme::getInstance().getMetrics();
-  const bool showProgressBar =
-      SETTINGS.statusBarProgressBar != CrossPointSettings::STATUS_BAR_PROGRESS_BAR::HIDE_PROGRESS;
-  return (showProgressBar ? (((SETTINGS.statusBarProgressBarThickness + 1) * 2) + metrics.progressBarMarginTop) : 0);
+  const ThemeMetrics metrics = UITheme::getInstance().getMetrics();
+  const auto sb = SETTINGS.statusBarSpec();
+  return sb.showsProgressBar() ? (sb.progressBarHeightPx + metrics.progressBarMarginTop) : 0;
 }
 
 // Centered text implementation that takes the safe area into account
@@ -148,6 +162,42 @@ void UITheme::drawCenteredText(const GfxRenderer& renderer, Rect screen, int fon
                                bool black, EpdFontFamily::Style style) {
   const int x = screen.x + (screen.width - renderer.getTextWidth(fontId, text, style)) / 2;
   renderer.drawText(fontId, x, y, text, black, style);
+}
+
+void UITheme::drawCenteredWrappedText(const GfxRenderer& renderer, Rect bounds, int fontId, const char* text,
+                                      int maxLines, bool black, EpdFontFamily::Style style,
+                                      TextVerticalAlignment verticalAlignment) {
+  if (!text || *text == '\0' || bounds.width <= 0 || bounds.height <= 0 || maxLines <= 0) return;
+
+  const int lineHeight = renderer.getLineHeight(fontId);
+  if (lineHeight <= 0) return;
+
+  const int lineLimit = std::min(maxLines, bounds.height / lineHeight);
+  if (lineLimit <= 0) return;
+
+  const auto alignedTop = [&](const int textHeight) {
+    switch (verticalAlignment) {
+      case TextVerticalAlignment::CENTER:
+        return bounds.y + (bounds.height - textHeight) / 2;
+      case TextVerticalAlignment::BOTTOM:
+        return bounds.y + bounds.height - textHeight;
+      case TextVerticalAlignment::TOP:
+      default:
+        return bounds.y;
+    }
+  };
+
+  if (renderer.getTextWidth(fontId, text, style) <= bounds.width) {
+    drawCenteredText(renderer, bounds, fontId, alignedTop(lineHeight), text, black, style);
+    return;
+  }
+
+  const auto lines = renderer.wrappedText(fontId, text, bounds.width, lineLimit, style);
+  int y = alignedTop(static_cast<int>(lines.size()) * lineHeight);
+  for (const auto& line : lines) {
+    drawCenteredText(renderer, bounds, fontId, y, line.c_str(), black, style);
+    y += lineHeight;
+  }
 }
 
 std::string UITheme::pageIndicatorText(const int selectedIndex, const int itemCount, const int pageItems) {

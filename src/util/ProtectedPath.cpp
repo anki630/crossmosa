@@ -7,8 +7,9 @@ namespace ProtectedPath {
 
 namespace {
 // Same list WebDAVHandler.cpp originally hardcoded as HIDDEN_ITEMS -- kept
-// here now as the single copy. ".crossmosa" (the data directory) is covered
-// by the leading-dot check below, not by name, so it doesn't need an entry.
+// here now as the single copy. The data directory (".crossmosa", or a legacy
+// ".crosspoint") is covered by the leading-dot check below, not by name, so it
+// doesn't need an entry.
 constexpr const char* kHiddenItems[] = {"System Volume Information", "XTCache"};
 
 // v77: does this segment have the shape of a FAT-generated 8.3 alias?
@@ -17,7 +18,7 @@ constexpr const char* kHiddenItems[] = {"System Volume Information", "XTCache"};
 // USER sees, but FAT gives each of them a second, machine-generated name and
 // SdFat will open either. Traced in the vendored SdFat: makeSFN() strips
 // leading dots and marks the name "not 8.3" (FatFileLFN.cpp:156-159), so
-// `.crossmosa` lands on the card with a short name like `CROSSM~1`; and the
+// `.crosspoint` lands on the card with a short name like `CROSSM~1`; and the
 // open path compares a requested name's computed SFN against the directory
 // entry byte-for-byte and opens on a match (FatFileLFN.cpp:352-357). So a
 // client asking for `/CROSSM~1` reached the data directory -- Wi-Fi
@@ -102,7 +103,7 @@ bool isSystemNameView(const char* start, size_t len) {
 // trim trailing dots spaces") before any name is compared. Our guard saw the
 // raw string the client sent. So
 //
-//     "/ .crossmosa/wifi.json"   <- one leading space
+//     "/ .crosspoint/wifi.json"   <- one leading space
 //     "/CROSSM~1./wifi.json"     <- one trailing dot
 //     "/XTCache /x"              <- one trailing space
 //

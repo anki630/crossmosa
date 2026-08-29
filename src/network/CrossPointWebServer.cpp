@@ -1,4 +1,7 @@
+#include "util/DiagLog.h"
 #include "CrossPointWebServer.h"
+
+#include "util/ProtectedPath.h"
 
 #include <ArduinoJson.h>
 #include <FsHelpers.h>
@@ -8,7 +11,6 @@
 #include <WiFi.h>
 #include <esp_efuse.h>
 #include <esp_efuse_table.h>
-#include <esp_task_wdt.h>
 
 #include <algorithm>
 #include <cctype>
@@ -22,19 +24,20 @@
 #include "WifiCredentialStore.h"
 #include "html/FilesPageHtml.generated.h"
 #include "html/FontsPageHtml.generated.h"
-#include "html/js/jszip_minJs.generated.h"
 #include "html/HomePageHtml.generated.h"
 #include "html/SettingsPageHtml.generated.h"
+#include "html/js/jszip_minJs.generated.h"
 #include "util/BookCacheUtils.h"
-#include <esp_heap_caps.h>
-
-#include "util/DiagLog.h"
-#include "util/ProtectedPath.h"
+#include "util/TaskWatchdog.h"
 
 namespace {
 // Folders/files to hide from the web interface file browser
 // Note: Items starting with "." are automatically hidden
-constexpr const char* HIDDEN_ITEMS[] = {"System Volume Information", "XTCache"};
+// v77/v78：規則已抽到 util/ProtectedPath —— 網頁與 WebDAV 共用【單一副本】。
+// 上游原本的守衛只檢查【最後一段檔名】，而 WiFi 憑證在 /.crosspoint/wifi.json
+// -> itemName 是 "wifi.json"，不以 . 開頭也不在名單裡，兩道守衛都穿得過去。
+// ⚠️ 存取控制一律用 isProtectedItemPath()（逐段）；只有【列表】可以用 isSystemName()。
+bool isProtectedItemPath(const String& path) { return ProtectedPath::isProtected(path.c_str()); }
 constexpr uint16_t UDP_PORTS[] = {54982, 48123, 39001, 44044, 59678};
 constexpr uint16_t LOCAL_UDP_PORT = 8134;
 
@@ -73,22 +76,14 @@ String normalizeWebPath(const String& inputPath) {
   return result;
 }
 
-// v77: routed through the shared predicate instead of re-implementing it.
-//
-// This file used to carry its OWN copy of the rule -- `name.equals(item)`,
-// case-SENSITIVE, with no knowledge of FAT's generated 8.3 aliases and no
-// trimming of the leading spaces and trailing dots FAT itself ignores. It
-// therefore had neither the v76 case fix nor any of the v77 hardening, while
-// ProtectedPath.h claimed to be the single copy for "every network-facing
-// filesystem surface". It was not. Two implementations of one security rule is
-// one implementation and one hole.
-bool isProtectedItemName(const String& name) { return ProtectedPath::isProtectedName(name.c_str()); }
-
-// v77: and the version that matters for anything taking a PATH. The basename
-// is not enough: /download checked only the last component and then opened the
-// full path, so `?path=/.crossmosa/wifi.json` presented the basename
-// `wifi.json`, passed, and streamed the Wi-Fi credentials over plain HTTP.
-bool isProtectedItemPath(const String& path) { return ProtectedPath::isProtected(path.c_str()); }
+bool isProtectedItemName(const String& name) {
+  // v76/v77：不能只比字面。FAT 是大小寫不敏感的（xtcache == XTCache），
+  // 而且每個名字都有一個機器產生的 8.3 短名別名（.crosspoint -> CROSSM~1 或 CRO~1A2F），
+  // SdFat 兩者都開得起來；parsePathName 還會先去掉開頭空白與結尾的點與空白
+  // （"/ .crosspoint/x"、"/CROSSM~1./x"、"/XTCache /x" 全都走得過只比字面的守衛）。
+  // 四層規則的單一副本在 util/ProtectedPath。
+  return ProtectedPath::isProtectedName(name.c_str());
+}
 }  // namespace
 
 // File listing page template - now using generated headers:
@@ -150,6 +145,7 @@ void CrossPointWebServer::begin() {
   LOG_DBG("WEB", "Setting up routes...");
   server->on("/", HTTP_GET, [this] { handleRoot(); });
   server->on("/files", HTTP_GET, [this] { handleFileList(); });
+  server->on("/js/jszip.min.js", HTTP_GET, [this] { handleJszip(); });
 
   server->on("/api/status", HTTP_GET, [this] { handleStatus(); });
   server->on("/api/files", HTTP_GET, [this] { handleFileListData(); });
@@ -177,7 +173,6 @@ void CrossPointWebServer::begin() {
 
   // Font management endpoints
   server->on("/fonts", HTTP_GET, [this] { handleFontsPage(); });
-  server->on("/js/jszip.min.js", HTTP_GET, [this] { handleJszip(); });
   server->on("/api/fonts", HTTP_GET, [this] { handleFontList(); });
   server->on("/api/fonts/upload", HTTP_POST, [this] { handleFontUpload(); }, [this] { handleFontUploadData(); });
   server->on("/api/fonts/delete", HTTP_POST, [this] { handleFontDelete(); });
@@ -214,6 +209,14 @@ void CrossPointWebServer::begin() {
   udpActive = udp.begin(LOCAL_UDP_PORT);
   LOG_DBG("WEB", "Discovery UDP %s on port %d", udpActive ? "enabled" : "failed", LOCAL_UDP_PORT);
 
+  // All request handlers run on the task that calls handleClient(). Register
+  // that task before any handler can call esp_task_wdt_reset().
+  const esp_err_t watchdogResult = esp_task_wdt_add(nullptr);
+  watchdogTaskRegistered = watchdogResult == ESP_OK;
+  if (!watchdogTaskRegistered) {
+    LOG_ERR("WEB", "Failed to register web server task with watchdog: %s", esp_err_to_name(watchdogResult));
+  }
+
   running = true;
 
   LOG_DBG("WEB", "Web server started on port %d", port);
@@ -227,6 +230,7 @@ void CrossPointWebServer::begin() {
 void CrossPointWebServer::abortWsUpload(const char* tag) {
   // Explicit close() required: file-scope global persists beyond function scope
   wsUploadFile.close();
+  DiagLog::line("WEBUP ws-end %s bytes=%u", wsUploadFileName.c_str(), static_cast<unsigned>(wsUploadReceived));
   String filePath = wsUploadPath;
   if (!filePath.endsWith("/")) filePath += "/";
   filePath += wsUploadFileName;
@@ -243,6 +247,10 @@ void CrossPointWebServer::abortWsUpload(const char* tag) {
 void CrossPointWebServer::stop() {
   if (!running || !server) {
     LOG_DBG("WEB", "stop() called but already stopped (running=%d, server=%p)", running, server.get());
+    if (watchdogTaskRegistered) {
+      esp_task_wdt_delete(nullptr);
+      watchdogTaskRegistered = false;
+    }
     return;
   }
 
@@ -282,6 +290,11 @@ void CrossPointWebServer::stop() {
   server.reset();
   LOG_DBG("WEB", "Web server stopped and deleted");
   LOG_DBG("WEB", "[MEM] Free heap after delete server: %d bytes", ESP.getFreeHeap());
+
+  if (watchdogTaskRegistered) {
+    esp_task_wdt_delete(nullptr);
+    watchdogTaskRegistered = false;
+  }
 
   // Note: Static upload variables (uploadFileName, uploadPath, uploadError) are declared
   // later in the file and will be cleared when they go out of scope or on next upload
@@ -326,11 +339,8 @@ void CrossPointWebServer::handleClient() {
         if (strcmp(buffer, "hello") == 0) {
           String hostname = WiFi.getHostname();
           if (hostname.isEmpty()) {
-            hostname = "crossmosa";
+            hostname = "crosspoint";
           }
-          // "crosspoint" is a wire-protocol token: the official Calibre plugin's
-          // discover_device() filters replies with startswith('crosspoint').
-          // Only the parenthesized hostname is display text — keep the token.
           String message = "crosspoint (on " + hostname + ");" + String(wsPort);
           udp.beginPacket(udp.remoteIP(), udp.remotePort());
           udp.write(reinterpret_cast<const uint8_t*>(message.c_str()), message.length());
@@ -406,6 +416,8 @@ void CrossPointWebServer::handleStatus() const {
 
   char snBuf[33] = {0};
   bool valid = false;
+#if !CONFIG_IDF_TARGET_ESP32
+  // Classic ESP32's efuse table has no USER_DATA block (C3/S3 only)
   if (esp_efuse_read_field_blob(ESP_EFUSE_USER_DATA, snBuf, 256) == ESP_OK) {
     valid = snBuf[0] != '\0' && snBuf[0] != (char)0xFF;
     for (int i = 0; i < 32 && snBuf[i] != '\0'; i++) {
@@ -415,6 +427,7 @@ void CrossPointWebServer::handleStatus() const {
       }
     }
   }
+#endif
 
   if (valid) {
     doc["serial"] = snBuf;
@@ -448,19 +461,16 @@ void CrossPointWebServer::scanFiles(const char* path, const std::function<void(F
     file.getName(name, sizeof(name));
     auto fileName = String(name);
 
-    // v78 REGRESSION FIX. v77 pointed this at isProtectedItemName(), which
-    // carries ProtectedPath's leading-dot rule -- so EVERY dotfile became
-    // permanently invisible here and Settings > "show hidden files" silently
-    // stopped doing anything. Reported from the device.
-    //
-    // The two questions are genuinely different and now have different
-    // functions. "Hidden" is a user PREFERENCE about dotfiles. "System" is the
-    // device's own reserved names, which the preference has never revealed.
-    // Access control is a third thing again and still goes through
-    // isProtectedItemPath() -- a listing showing an entry has never meant it
-    // may be read, and /.crossmosa was listable-but-unreadable long before v77.
+    // Skip hidden items (starting with ".")
     bool shouldHide = !SETTINGS.showHiddenFiles && fileName.startsWith(".");
-    if (!shouldHide) shouldHide = ProtectedPath::isSystemName(fileName.c_str());
+
+    // v78：列表用 isSystemName（不含點規則）—— 存取控制才用 isProtectedName。
+    // v77 曾把這裡指向 isProtectedName()，它的點規則讓【每一個】點檔案永久隱形，
+    // 使用者的「顯示隱藏檔」偏好就靜默失效了。
+    // ⚠️ 列表選擇「顯示」某個東西，從來不代表它可以被讀取。
+    if (!shouldHide) {
+      shouldHide = ProtectedPath::isSystemName(fileName.c_str());
+    }
 
     if (!shouldHide) {
       FileInfo info;
@@ -479,8 +489,8 @@ void CrossPointWebServer::scanFiles(const char* path, const std::function<void(F
     }
 
     file.close();
-    yield();               // Yield to allow WiFi and other tasks to process during long scans
-    esp_task_wdt_reset();  // Reset watchdog to prevent timeout on large directories
+    yield();                          // Yield to allow WiFi and other tasks to process during long scans
+    resetTaskWatchdogIfSubscribed();  // Reset watchdog to prevent timeout on large directories
     file = root.openNextFile();
   }
   root.close();
@@ -557,20 +567,15 @@ void CrossPointWebServer::handleDownload() const {
     itemPath = "/" + itemPath;
   }
 
-  // v79: the two diagnostic logs are the one exception, and they are checked
-  // FIRST so the exception can only ever be an exact whole-path match.
+  // v79：兩份診斷 log 是【唯一】的例外，而且先檢查，所以這個例外只可能是整條路徑的精確相符。
   //
-  // This device has no serial port; diag.log is the only telemetry, and it
-  // lives inside the protected data directory. v77's fix below (correctly)
-  // stopped serving anything under /.crossmosa -- and took the log with it,
-  // which is how every problem in this project's SMB work has been diagnosed.
-  // Neither file contains a credential. See DiagLog::isDiagnosticPath().
+  // 這台裝置沒有序列埠，diag.log 是唯一的遙測管道 —— 而它就住在受保護的資料目錄裡。
+  // v135 的逐段守衛（正確地）擋掉了 /.crosspoint 底下的一切，也順手把 log 一起擋掉了。
+  // 兩個檔都不含任何憑證。設計上 fail-closed：它只可能放行這兩個特定檔名，
+  // 8.3 別名、前導空白、資料目錄裡的任何其他檔都走不過去。見 DiagLog::isDiagnosticPath()。
   const bool isDiagnostics = DiagLog::isDiagnosticPath(itemPath.c_str());
 
-  // v77: the WHOLE path. This used to test only the last component and then
-  // open itemPath in full, so `?path=/.crossmosa/wifi.json` passed on the
-  // basename `wifi.json` and streamed the credentials. There is no
-  // authentication on this server.
+  // ⚠️ 逐段，不是只看最後一段 —— /.crosspoint/wifi.json 的最後一段是 wifi.json。
   if (!isDiagnostics && isProtectedItemPath(itemPath)) {
     server->send(403, "text/plain", "Cannot access protected items");
     return;
@@ -618,7 +623,7 @@ void CrossPointWebServer::handleDownload() const {
     size_t bytesRead = static_cast<size_t>(result);
     size_t totalWritten = 0;
     while (totalWritten < bytesRead) {
-      esp_task_wdt_reset();
+      resetTaskWatchdogIfSubscribed();
       size_t wrote = client.write(buffer + totalWritten, bytesRead - totalWritten);
       if (wrote == 0) {
         downloadOk = false;
@@ -638,12 +643,12 @@ static size_t writeCount = 0;
 
 static bool flushUploadBuffer(CrossPointWebServer::UploadState& state) {
   if (state.bufferPos > 0 && state.file) {
-    esp_task_wdt_reset();  // Reset watchdog before potentially slow SD write
+    resetTaskWatchdogIfSubscribed();  // Reset watchdog before potentially slow SD write
     const unsigned long writeStart = millis();
     const size_t written = state.file.write(state.buffer.data(), state.bufferPos);
     totalWriteTime += millis() - writeStart;
     writeCount++;
-    esp_task_wdt_reset();  // Reset watchdog after SD write
+    resetTaskWatchdogIfSubscribed();  // Reset watchdog after SD write
 
     if (written != state.bufferPos) {
       LOG_DBG("WEB", "[UPLOAD] Buffer flush failed: expected %d, wrote %d", state.bufferPos, written);
@@ -659,7 +664,7 @@ void CrossPointWebServer::handleUpload(UploadState& state) const {
   static size_t lastLoggedSize = 0;
 
   // Reset watchdog at start of every upload callback - HTTP parsing can be slow
-  esp_task_wdt_reset();
+  resetTaskWatchdogIfSubscribed();
 
   // Safety check: ensure server is still valid
   if (!running || !server) {
@@ -671,7 +676,7 @@ void CrossPointWebServer::handleUpload(UploadState& state) const {
 
   if (upload.status == UPLOAD_FILE_START) {
     // Reset watchdog - this is the critical 1% crash point
-    esp_task_wdt_reset();
+    resetTaskWatchdogIfSubscribed();
 
     state.fileName = upload.filename;
     state.size = 0;
@@ -682,6 +687,7 @@ void CrossPointWebServer::handleUpload(UploadState& state) const {
     state.bufferPos = 0;
     totalWriteTime = 0;
     writeCount = 0;
+    DiagLog::line("WEBUP start %s", upload.filename.c_str());  // v178：上傳當機的麵包屑
 
     // Get upload path from query parameter (defaults to root if not specified)
     // Note: We use query parameter instead of form data because multipart form
@@ -707,16 +713,8 @@ void CrossPointWebServer::handleUpload(UploadState& state) const {
     if (!filePath.endsWith("/")) filePath += "/";
     filePath += state.fileName;
 
-    // v77: upload had no protected check either. Writing INTO /.crossmosa --
-    // over settings.json, or over a Wi-Fi credential file -- was a plain POST
-    // away on a server with no authentication.
-    if (isProtectedItemPath(filePath)) {
-      state.error = "Cannot write to a protected location";
-      LOG_DBG("WEB", "[UPLOAD] REFUSED protected path: %s", filePath.c_str());
-      return;
-    }
-
-    esp_task_wdt_reset();
+    // Check if file already exists - SD operations can be slow
+    resetTaskWatchdogIfSubscribed();
     if (Storage.exists(filePath.c_str())) {
       state.error = "File already exists: " + state.fileName;
       LOG_DBG("WEB", "[UPLOAD] Collision: %s", filePath.c_str());
@@ -724,13 +722,22 @@ void CrossPointWebServer::handleUpload(UploadState& state) const {
     }
 
     // Open file for writing - this can be slow due to FAT cluster allocation
-    esp_task_wdt_reset();
-    if (!Storage.openFileForWrite("WEB", filePath, state.file)) {
+    resetTaskWatchdogIfSubscribed();
+        // v77：上傳完全沒有守衛 —— 同網段任何人都能往 /.crosspoint/ 寫檔，
+    // 覆蓋 settings.json、wifi.json、或塞一個假的 book.bin。
+    // 逐段檢查【完整目標路徑】（不是只看檔名，也不是只看目錄）。
+    if (isProtectedItemPath(filePath)) {
+      state.error = "Cannot write to protected location";
+      LOG_ERR("WEB", "[UPLOAD] refused protected path: %s", filePath.c_str());
+      return;
+    }
+
+if (!Storage.openFileForWrite("WEB", filePath, state.file)) {
       state.error = "Failed to create file on SD card";
       LOG_DBG("WEB", "[UPLOAD] FAILED to create file: %s", filePath.c_str());
       return;
     }
-    esp_task_wdt_reset();
+    resetTaskWatchdogIfSubscribed();
 
     LOG_DBG("WEB", "[UPLOAD] File created successfully: %s", filePath.c_str());
   } else if (upload.status == UPLOAD_FILE_WRITE) {
@@ -777,6 +784,7 @@ void CrossPointWebServer::handleUpload(UploadState& state) const {
         state.error = "Failed to write final data to SD card";
       }
       state.file.close();
+      DiagLog::line("WEBUP end bytes=%u err=%s", static_cast<unsigned>(state.size), state.error.c_str());
 
       if (state.error.isEmpty()) {
         state.success = true;
@@ -827,6 +835,11 @@ void CrossPointWebServer::handleCreateFolder() const {
   }
 
   const String folderName = server->arg("name");
+  // v77：不得建立受保護的名字（否則可以造一個 .crosspoint 出來蓋掉真的）
+  if (isProtectedItemName(folderName)) {
+    server->send(403, "text/plain", "Cannot create protected items");
+    return;
+  }
 
   // Validate folder name
   if (folderName.isEmpty()) {
@@ -850,14 +863,6 @@ void CrossPointWebServer::handleCreateFolder() const {
   String folderPath = parentPath;
   if (!folderPath.endsWith("/")) folderPath += "/";
   folderPath += folderName;
-
-  // v77: this endpoint had no protected check either. Creating INTO a protected
-  // directory, or creating one whose name shadows a protected shape, both go
-  // through the same predicate now.
-  if (isProtectedItemPath(folderPath)) {
-    server->send(403, "text/plain", "Cannot create protected item");
-    return;
-  }
 
   LOG_DBG("WEB", "Creating folder: %s", folderPath.c_str());
 
@@ -885,6 +890,11 @@ void CrossPointWebServer::handleRename() const {
 
   String itemPath = normalizeWebPath(server->arg("path"));
   String newName = server->arg("name");
+  // v77：來源路徑與新名稱都要守（改名可以【變成】受保護的名字，也可以從受保護的路徑改出來）
+  if (isProtectedItemPath(itemPath) || isProtectedItemName(newName)) {
+    server->send(403, "text/plain", "Cannot rename protected items");
+    return;
+  }
   newName.trim();
 
   if (itemPath.isEmpty() || itemPath == "/") {
@@ -904,13 +914,11 @@ void CrossPointWebServer::handleRename() const {
     return;
   }
 
-  // v77: whole path, not the basename -- /.crossmosa/settings.json presents an
-  // innocent last component.
-  if (isProtectedItemPath(itemPath)) {
+  const String itemName = itemPath.substring(itemPath.lastIndexOf('/') + 1);
+  if (isProtectedItemName(itemName)) {
     server->send(403, "text/plain", "Cannot rename protected item");
     return;
   }
-  const String itemName = itemPath.substring(itemPath.lastIndexOf('/') + 1);
   if (newName == itemName) {
     server->send(200, "text/plain", "Name unchanged");
     return;
@@ -969,6 +977,11 @@ void CrossPointWebServer::handleMove() const {
 
   String itemPath = normalizeWebPath(server->arg("path"));
   String destPath = normalizeWebPath(server->arg("dest"));
+  // v77：來源與目的地都要守 —— 搬進 /.crosspoint 與搬出來一樣危險。
+  if (isProtectedItemPath(itemPath) || isProtectedItemPath(destPath)) {
+    server->send(403, "text/plain", "Cannot move protected items");
+    return;
+  }
 
   if (itemPath.isEmpty() || itemPath == "/") {
     server->send(400, "text/plain", "Invalid path");
@@ -979,14 +992,14 @@ void CrossPointWebServer::handleMove() const {
     return;
   }
 
-  // v77: whole paths, both ends.
-  if (isProtectedItemPath(itemPath)) {
+  const String itemName = itemPath.substring(itemPath.lastIndexOf('/') + 1);
+  if (isProtectedItemName(itemName)) {
     server->send(403, "text/plain", "Cannot move protected item");
     return;
   }
-  const String itemName = itemPath.substring(itemPath.lastIndexOf('/') + 1);
   if (destPath != "/") {
-    if (isProtectedItemPath(destPath)) {
+    const String destName = destPath.substring(destPath.lastIndexOf('/') + 1);
+    if (isProtectedItemName(destName)) {
       server->send(403, "text/plain", "Cannot move into protected folder");
       return;
     }
@@ -1110,34 +1123,11 @@ void CrossPointWebServer::handleDelete() const {
       itemPath = "/" + itemPath;
     }
 
-    // v77: this endpoint had NO protected check at all -- a POST could delete
-    // /.crossmosa and take the Wi-Fi credentials, reading progress and settings
-    // with it, on a server with no authentication.
-    if (isProtectedItemPath(itemPath)) {
-      failedItems += itemPath + " (protected); ";
-      allSuccess = false;
-      continue;
-    }
-
     // Security check: prevent deletion of protected items
     const String itemName = itemPath.substring(itemPath.lastIndexOf('/') + 1);
 
-    // Hidden/system files are protected
-    if (itemName.startsWith(".")) {
-      failedItems += itemPath + " (hidden/system file); ";
-      allSuccess = false;
-      continue;
-    }
-
-    // Check against explicitly protected items
-    bool isProtected = false;
-    for (const auto* item : HIDDEN_ITEMS) {
-      if (itemName.equals(item)) {
-        isProtected = true;
-        break;
-      }
-    }
-    if (isProtected) {
+    // v77：逐段比對整條路徑，不是只看最後一段。
+    if (isProtectedItemPath(itemPath)) {
       failedItems += itemPath + " (protected file); ";
       allSuccess = false;
       continue;
@@ -1191,65 +1181,19 @@ void CrossPointWebServer::handleSettingsPage() const {
 }
 
 void CrossPointWebServer::handleGetSettings() const {
-  // v96: the settings page has spun forever since ~v88 with nothing in the log to say why.
-  // This handler streams chunked (CONTENT_LENGTH_UNKNOWN), so any death part-way through
-  // leaves the browser waiting instead of showing an error -- exactly the reported symptom.
-  // These three lines say whether it is even entered, whether the settings vector (a heap
-  // copy, the same allocation that aborted the device in v90) survives, and whether the
-  // stream completes. Instrument, then fix; guessing has cost enough rounds already.
-  DiagLog::line("WEB settings API enter (largest free block %u)",
-                static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)));
+  // Pass the SD font registry so the fontFamily setting's enumStringValues
+  // includes SD-resident families — otherwise the web API only exposes the
+  // three built-in fonts.
   const auto& settings = getSettingsList(&sdFontSystem.registry());
-  DiagLog::line("WEB settings list built: %u entries", static_cast<unsigned>(settings.size()));
 
   server->setContentLength(CONTENT_LENGTH_UNKNOWN);
   server->send(200, "application/json", "");
-  DiagLog::line("WEB settings headers sent");  // v100: does it even get past the header write?
   server->sendContent("[");
-  DiagLog::line("WEB settings first chunk sent");
 
   char output[512];
   constexpr size_t outputSize = sizeof(output);
   bool seenFirst = false;
-  unsigned sentCount = 0;
   JsonDocument doc;
-
-  // v99: batch the chunked writes. This handler used to call sendContent() once per setting
-  // (plus once per comma) -- ~87 tiny HTTP chunks, each its own TCP segment. diag98 caught it
-  // stalling 20,846 ms and 30,049 ms mid-stream, at DIFFERENT settings each time, which rules
-  // out a bad entry and points at the transport: those are TCP timeout durations, and the
-  // browser's spinner is the connection dying, not the device hanging.
-  //
-  // One 1,536-byte staging buffer turns ~87 sends into ~7. Sized well under the ~18-21 KB
-  // largest free block observed at this point, and it is a plain stack... no: 1.5 KB is too
-  // much for this device's 256-byte stack budget, so it lives here as a static -- this handler
-  // is only ever entered from the single web-server task.
-  static char batch[1536];
-  size_t batchLen = 0;
-  // v100: coarse progress probes. v98's per-entry probe located the stall but cost ~30ms of SD
-  // write each; v99 removed it entirely and the resulting log could not distinguish "hung on
-  // entry 1" from "hung on entry 43" -- which is exactly what we needed to know. These are
-  // cheap enough to keep: one line per ~1.5KB flush, not one per setting.
-  unsigned flushCount = 0;
-  const auto flushBatch = [&]() {
-    if (batchLen == 0) return;
-    batch[batchLen] = '\0';
-    const size_t len = batchLen;
-    batchLen = 0;
-    server->sendContent(batch);
-    DiagLog::line("WEB settings flush #%u: %u bytes, %u entries so far", ++flushCount,
-                  static_cast<unsigned>(len), sentCount);
-  };
-  const auto appendBatch = [&](const char* text, size_t len) {
-    if (len >= sizeof(batch) - 1) {  // never fits: send it on its own rather than truncating
-      flushBatch();
-      server->sendContent(text);
-      return;
-    }
-    if (batchLen + len >= sizeof(batch) - 1) flushBatch();
-    memcpy(batch + batchLen, text, len);
-    batchLen += len;
-  };
 
   for (const auto& s : settings) {
     if (!s.key) continue;  // Skip ACTION-only entries
@@ -1316,18 +1260,17 @@ void CrossPointWebServer::handleGetSettings() const {
     }
 
     if (seenFirst) {
-      appendBatch(",", 1);
+      server->sendContent(",");
     } else {
       seenFirst = true;
     }
-    appendBatch(output, written);
-    sentCount++;
+    server->sendContent(output);
+    yield();                          // Yield to allow WiFi and other tasks to process during a slow send
+    resetTaskWatchdogIfSubscribed();  // Reset watchdog: each sendContent() is a blocking network write
   }
 
-  appendBatch("]", 1);
-  flushBatch();
-  server->sendContent("");  // terminating zero-length chunk
-  DiagLog::line("WEB settings API done: %u sent", static_cast<unsigned>(sentCount));
+  server->sendContent("]");
+  server->sendContent("");
   LOG_DBG("WEB", "Served settings API");
 }
 
@@ -1416,9 +1359,7 @@ void CrossPointWebServer::handleGetOpdsServers() const {
   // Stream JSON array incrementally to avoid allocating the full response in memory
   server->setContentLength(CONTENT_LENGTH_UNKNOWN);
   server->send(200, "application/json", "");
-  DiagLog::line("WEB settings headers sent");  // v100: does it even get past the header write?
   server->sendContent("[");
-  DiagLog::line("WEB settings first chunk sent");
 
   char output[512];
   constexpr size_t outputSize = sizeof(output);
@@ -1438,6 +1379,8 @@ void CrossPointWebServer::handleGetOpdsServers() const {
 
     if (i > 0) server->sendContent(",");
     server->sendContent(output);
+    yield();                          // Yield to allow WiFi and other tasks to process during a slow send
+    resetTaskWatchdogIfSubscribed();  // Reset watchdog: each sendContent() is a blocking network write
   }
 
   server->sendContent("]");
@@ -1529,8 +1472,7 @@ void CrossPointWebServer::handleDeleteOpdsServer() {
 // ---- Wi-Fi Credentials API ----
 
 void CrossPointWebServer::handleGetWifiNetworks() const {
-  const auto& credentials = WIFI_STORE.getCredentials();
-  const std::string& lastConnectedSsid = WIFI_STORE.getLastConnectedSsid();
+  const auto credentials = WIFI_STORE.getCredentialSummaries();
 
   // Stream JSON array incrementally to avoid allocating the full response in memory
   server->setContentLength(CONTENT_LENGTH_UNKNOWN);
@@ -1546,14 +1488,16 @@ void CrossPointWebServer::handleGetWifiNetworks() const {
     doc["index"] = i;
     doc["ssid"] = credentials[i].ssid;
     // Never expose Wi-Fi passwords over the API — only indicate whether one is set
-    doc["hasPassword"] = !credentials[i].password.empty();
-    doc["isLastConnected"] = credentials[i].ssid == lastConnectedSsid;
+    doc["hasPassword"] = credentials[i].hasPassword;
+    doc["isLastConnected"] = credentials[i].isLastConnected;
 
     const size_t written = serializeJson(doc, output, outputSize);
     if (written >= outputSize) continue;
 
     if (i > 0) server->sendContent(",");
     server->sendContent(output);
+    yield();                          // Yield to allow WiFi and other tasks to process during a slow send
+    resetTaskWatchdogIfSubscribed();  // Reset watchdog: each sendContent() is a blocking network write
   }
 
   server->sendContent("]");
@@ -1588,15 +1532,19 @@ void CrossPointWebServer::handlePostWifiNetwork() {
 
   if (doc["index"].is<int>()) {
     int idx = doc["index"].as<int>();
-    const auto& credentials = WIFI_STORE.getCredentials();
-    if (idx < 0 || idx >= static_cast<int>(credentials.size())) {
+    if (idx < 0) {
+      server->send(400, "text/plain", "Invalid network index");
+      return;
+    }
+    const auto credential = WIFI_STORE.getCredentialAt(static_cast<size_t>(idx));
+    if (!credential) {
       server->send(400, "text/plain", "Invalid network index");
       return;
     }
 
-    const std::string oldSsid = credentials[static_cast<size_t>(idx)].ssid;
+    const std::string oldSsid = credential->ssid;
     if (!hasPasswordField) {
-      password = credentials[static_cast<size_t>(idx)].password;
+      password = credential->password;
     }
 
     bool ok = true;
@@ -1644,19 +1592,22 @@ void CrossPointWebServer::handleDeleteWifiNetwork() {
   }
 
   int idx = doc["index"].as<int>();
-  const auto& credentials = WIFI_STORE.getCredentials();
-  if (idx < 0 || idx >= static_cast<int>(credentials.size())) {
+  if (idx < 0) {
+    server->send(400, "text/plain", "Invalid network index");
+    return;
+  }
+  const auto ssid = WIFI_STORE.getSsidAt(static_cast<size_t>(idx));
+  if (!ssid) {
     server->send(400, "text/plain", "Invalid network index");
     return;
   }
 
-  const std::string ssid = credentials[static_cast<size_t>(idx)].ssid;
-  if (!WIFI_STORE.removeCredential(ssid)) {
+  if (!WIFI_STORE.removeCredential(*ssid)) {
     server->send(400, "text/plain", "Failed to delete Wi-Fi network");
     return;
   }
 
-  LOG_DBG("WEB", "Deleted Wi-Fi network at index %d (SSID: %s)", idx, ssid.c_str());
+  LOG_DBG("WEB", "Deleted Wi-Fi network at index %d (SSID: %s)", idx, ssid->c_str());
   server->send(200, "text/plain", "OK");
 }
 
@@ -1737,7 +1688,15 @@ void CrossPointWebServer::onWebSocketEvent(uint8_t num, WStype_t type, uint8_t* 
           if (!filePath.endsWith("/")) filePath += "/";
           filePath += wsUploadFileName;
 
-          esp_task_wdt_reset();
+          // v77：WebSocket 上傳是第七個呼叫點，也是最容易被漏掉的一個
+          // （它不是 handleXxx，不在 route 表上，掃 handler 掃不到）。
+          if (isProtectedItemPath(filePath)) {
+            LOG_ERR("WS", "START rejected: protected path %s", filePath.c_str());
+            wsServer->sendTXT(num, "ERROR:Cannot write to protected location");
+            return;
+          }
+
+          resetTaskWatchdogIfSubscribed();
           if (Storage.exists(filePath.c_str())) {
             LOG_DBG("WS", "Upload collision: %s", filePath.c_str());
             wsServer->sendTXT(num, "ERROR:File already exists: " + wsUploadFileName);
@@ -1748,14 +1707,14 @@ void CrossPointWebServer::onWebSocketEvent(uint8_t num, WStype_t type, uint8_t* 
                   filePath.c_str());
 
           // Open file for writing
-          esp_task_wdt_reset();
+          resetTaskWatchdogIfSubscribed();
           if (!Storage.openFileForWrite("WS", filePath, wsUploadFile)) {
             wsServer->sendTXT(num, "ERROR:Failed to create file");
             wsUploadInProgress = false;
             wsUploadClientNum = 255;
             return;
           }
-          esp_task_wdt_reset();
+          resetTaskWatchdogIfSubscribed();
 
           // Zero-byte upload: complete immediately without waiting for BIN frames
           if (wsUploadSize == 0) {
@@ -1773,6 +1732,7 @@ void CrossPointWebServer::onWebSocketEvent(uint8_t num, WStype_t type, uint8_t* 
 
           wsUploadClientNum = num;
           wsUploadInProgress = true;
+          DiagLog::line("WEBUP ws-start %s bytes=%u", wsUploadFileName.c_str(), static_cast<unsigned>(wsUploadSize));
           wsServer->sendTXT(num, "READY");
         } else {
           wsServer->sendTXT(num, "ERROR:Invalid START format");
@@ -1794,9 +1754,9 @@ void CrossPointWebServer::onWebSocketEvent(uint8_t num, WStype_t type, uint8_t* 
         wsServer->sendTXT(num, "ERROR:Upload overflow");
         return;
       }
-      esp_task_wdt_reset();
+      resetTaskWatchdogIfSubscribed();
       size_t written = wsUploadFile.write(payload, length);
-      esp_task_wdt_reset();
+      resetTaskWatchdogIfSubscribed();
 
       if (written != length) {
         abortWsUpload("WS");
@@ -1900,7 +1860,7 @@ void CrossPointWebServer::handleFontUploadData() {
 
   switch (upload.status) {
     case UPLOAD_FILE_START: {
-      esp_task_wdt_reset();
+      resetTaskWatchdogIfSubscribed();
       String family = server->arg("family");
       fontUpload.file = HalFile();
       fontUpload.familyName.clear();
@@ -1919,7 +1879,7 @@ void CrossPointWebServer::handleFontUploadData() {
       filename.replace(' ', '_');
       // Validate filename: rejects path traversal (../, /, \) and enforces
       // a .cpfont basename of alphanumeric + hyphen + underscore. Without
-      // this an attacker could supply "../../.crossmosa/settings.json" as
+      // this an attacker could supply "../../.crosspoint/settings.json" as
       // a "filename" and have it written outside the fonts directory.
       if (!FontInstaller::isValidCpfontFilename(filename.c_str())) {
         LOG_ERR("WEB", "Invalid font filename: %s", filename.c_str());
@@ -1951,7 +1911,7 @@ void CrossPointWebServer::handleFontUploadData() {
 
     case UPLOAD_FILE_WRITE: {
       if (!fontUpload.valid) break;
-      esp_task_wdt_reset();
+      resetTaskWatchdogIfSubscribed();
 
       // Validate magic bytes on first chunk only
       if (!fontUpload.magicChecked && upload.currentSize >= 8) {
@@ -1978,7 +1938,7 @@ void CrossPointWebServer::handleFontUploadData() {
           fontUpload.file.write(fontUpload.buffer.data(), fontUpload.bufferPos);
           fontUpload.bytesWritten += fontUpload.bufferPos;
           fontUpload.bufferPos = 0;
-          esp_task_wdt_reset();
+          resetTaskWatchdogIfSubscribed();
         }
       }
       break;

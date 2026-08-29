@@ -10,7 +10,7 @@
 #include "fontIds.h"
 
 int XtcReaderChapterSelectionActivity::getPageItems() const {
-  constexpr int lineHeight = 38;  // 14px 章節名放大:列距 30→38(與下方渲染一致)
+  constexpr int lineHeight = 38;  // v11：14px 章節名放大，列距 30→38（觸控列高與渲染共用此值）
 
   const int screenHeight = renderer.getScreenHeight();
   const auto orientation = renderer.getOrientation();
@@ -56,17 +56,63 @@ void XtcReaderChapterSelectionActivity::loop() {
   const int pageItems = getPageItems();
   const int totalItems = static_cast<int>(xtc->getChapters().size());
 
-  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+  if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
+    ActivityResult result;
+    result.isCancelled = true;
+    setResult(std::move(result));
+    finish();
+    return;
+  }
+
+  auto selectChapter = [this] {
     const auto& chapters = xtc->getChapters();
     if (!chapters.empty() && selectorIndex >= 0 && selectorIndex < static_cast<int>(chapters.size())) {
       setResult(PageResult{chapters[selectorIndex].startPage});
       finish();
     }
-  } else if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
-    ActivityResult result;
-    result.isCancelled = true;
-    setResult(std::move(result));
-    finish();
+  };
+
+  const auto orientation = renderer.getOrientation();
+  const bool isLandscapeCw = orientation == GfxRenderer::Orientation::LandscapeClockwise;
+  const bool isLandscapeCcw = orientation == GfxRenderer::Orientation::LandscapeCounterClockwise;
+  const bool isPortraitInverted = orientation == GfxRenderer::Orientation::PortraitInverted;
+  const int hintGutterWidth = (isLandscapeCw || isLandscapeCcw) ? 30 : 0;
+  const int contentX = isLandscapeCw ? hintGutterWidth : 0;
+  const int contentWidth = renderer.getScreenWidth() - hintGutterWidth;
+  const int contentY = isPortraitInverted ? 50 : 0;
+  const int listTop = 60 + contentY;
+  int row = -1;
+  const auto touch = mappedInput.rowTouch(row, listTop, 38, pageItems, contentX, contentX + contentWidth);  // 與渲染列高一致（v156 tab 教訓）
+  if (touch != MappedInputManager::RowTouch::None) {
+    const int touched = selectorIndex / pageItems * pageItems + row;
+    if (touched >= 0 && touched < totalItems) {
+      if (touch == MappedInputManager::RowTouch::Down) {
+        if (selectorIndex != touched) {
+          selectorIndex = touched;
+          requestUpdate();
+        }
+      } else {
+        selectorIndex = touched;
+        selectChapter();
+      }
+      return;
+    }
+  }
+
+  const auto swipe = mappedInput.wasSwipe();
+  if (swipe == MappedInputManager::SwipeDir::Up) {
+    selectorIndex = ButtonNavigator::nextPageIndexClamped(selectorIndex, totalItems, pageItems);
+    requestUpdate();
+    return;
+  }
+  if (swipe == MappedInputManager::SwipeDir::Down) {
+    selectorIndex = ButtonNavigator::previousPageIndexClamped(selectorIndex, totalItems, pageItems);
+    requestUpdate();
+    return;
+  }
+
+  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+    selectChapter();
   }
 
   buttonNavigator.onNextRelease([this, totalItems] {
@@ -127,7 +173,7 @@ void XtcReaderChapterSelectionActivity::render(RenderLock&&) {
   for (int i = pageStartIndex; i < static_cast<int>(chapters.size()) && i < pageStartIndex + pageItems; i++) {
     const auto& chapter = chapters[i];
     const char* title = chapter.name.empty() ? tr(STR_UNNAMED) : chapter.name.c_str();
-    // 章節名主文字放大到 14px（UI_12 現承載 14px）
+    // v11：章節名主文字放大到 14px（UI_12 現承載 14px）
     renderer.drawText(UI_12_FONT_ID, contentX + 20, 60 + contentY + (i % pageItems) * 38, title, i != selectorIndex);
   }
 

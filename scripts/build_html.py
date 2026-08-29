@@ -7,10 +7,12 @@ SRC_DIR = "src"
 
 # Reproducible builds: the gzip container carries an MTIME field, and gzip.compress()
 # fills it with the wall clock. That single field made every build of an unchanged tree
-# produce a different firmware.bin (5 assets x 4 bytes, which then perturbs the ELF hash
-# and the image checksum). Stamp a fixed value instead, honouring SOURCE_DATE_EPOCH so
-# a packager can pin it to their own release timestamp.
+# produce a different firmware.bin (the assets perturb the ELF hash and the image checksum).
+# Stamp a fixed value instead, honouring SOURCE_DATE_EPOCH so a packager can pin it to
+# their own release timestamp.
 # Reference: https://reproducible-builds.org/docs/source-date-epoch/
+# ⚠️ 2026-08-30：這段原本【只存在於公開庫】，開發庫從來沒有 —— 2.0 的全樹同步把它蓋掉，
+#    發佈建置的雙建雜湊檢查當場擋下。修正一律要進開發庫，否則下一次同步又會死一次。
 GZIP_MTIME = int(os.environ.get("SOURCE_DATE_EPOCH", "0"))
 
 
@@ -24,6 +26,8 @@ def gzip_compress_deterministic(data: bytes, compresslevel: int = 9) -> bytes:
     ) as gz:
         gz.write(data)
     return buf.getvalue()
+
+
 
 def minify_html(html: str) -> str:
     # Tags where whitespace should be preserved

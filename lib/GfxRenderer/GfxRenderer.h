@@ -15,6 +15,7 @@ class FontCacheManager;
 class SdCardFont;
 
 #include <cstring>
+#include <deque>
 #include <map>
 #include <string>
 #include <vector>
@@ -27,13 +28,10 @@ enum Color : uint8_t { Clear = 0x00, White = 0x01, LightGray = 0x05, DarkGray = 
 
 class GfxRenderer {
  public:
-  // GRAYSCALE_BOTH (v60) renders the LSB and MSB planes in a SINGLE traversal
-  // instead of two. Both plane bits come from the same sampled glyph/image
-  // value, so the second traversal was pure duplication: same layout walk, same
-  // getGlyph lookups, same bitmap decode. Only valid with a two-buffer strip
-  // target (beginStripTarget's 4-arg overload) — the non-strip fallback would
-  // need a second full framebuffer, which SINGLE_BUFFER_MODE does not have.
-  enum RenderMode { BW, GRAYSCALE_LSB, GRAYSCALE_MSB, GRAYSCALE_BOTH };
+  // GRAYSCALE_ABS_LO/HI（v185 bench）：絕對四階平面——LO 標 {黑, 深灰}、HI 標 {黑, 淺灰}，
+  // 對 UC8279 XTH4 的 (DTM1,DTM2) 階碼 (1,1)=黑 (1,0)=深灰 (0,1)=淺灰 (0,0)=白。只有
+  // drawBitmap 認得這兩個模式（壁紙用）；文字／圖示在這兩個模式下不畫任何東西。
+  enum RenderMode { BW, GRAYSCALE_LSB, GRAYSCALE_MSB, GRAYSCALE_ABS_LO, GRAYSCALE_ABS_HI };
 
   // Logical screen orientation from the perspective of callers
   enum Orientation {
@@ -50,6 +48,7 @@ class GfxRenderer {
   RenderMode renderMode;
   Orientation orientation;
   bool fadingFix;
+  bool textAaDarkOnly_ = false;
   uint8_t* frameBuffer = nullptr;
   uint16_t panelWidth = HalDisplay::DISPLAY_WIDTH;
   uint16_t panelHeight = HalDisplay::DISPLAY_HEIGHT;
@@ -62,6 +61,7 @@ class GfxRenderer {
   // allocation inside the SdCardFont objects. Same pragmatic compromise as
   // fontCacheManager_ below.
   mutable std::map<int, SdCardFont*> sdCardFonts_;
+  mutable std::map<int, uint16_t> sdCardFontScales_;  // fontId -> 8.8 fixed point scale (256=1.0x)
 
   // Mutable because drawText() is const but needs to delegate scan-mode
   // recording to the (non-const) FontCacheManager. Same pragmatic compromise
@@ -76,17 +76,23 @@ class GfxRenderer {
   // the BW framebuffer (no storeBwBuffer). Mutable because the render path is
   // const. See beginStripTarget()/endStripTarget().
   mutable uint8_t* _stripBuf = nullptr;
-  // Second plane for GRAYSCALE_BOTH. INVARIANT: non-null ONLY while _stripActive
-  // is true and _stripBuf points at the matching LSB scratch of identical
-  // geometry. drawPixel() relies on this to mirror mode-blind writes with a
-  // single null check instead of re-testing _stripActive on the hot path — a
-  // stale non-null here would index a band-local offset into a freed or
-  // wrong-sized buffer. Set only by the 4-arg beginStripTarget, cleared by
-  // endStripTarget.
-  mutable uint8_t* _stripBufMsb = nullptr;
   mutable int _stripY0 = 0;
   mutable int _stripRows = 0;
   mutable bool _stripActive = false;
+
+  // CJK UI font fallback map: primary (built-in, Latin-only) UI font id -> a
+  // size-matched SD-card font id that carries CJK glyphs. When a string drawn
+  // or measured with a mapped primary font contains a CJK codepoint the primary
+  // cannot render, the whole string is routed to the mapped fallback so it
+  // appears at the same point size as the surrounding UI text. Populated by the
+  // app-level SD font setup when an SD family is loaded. See resolveTextFontId().
+  std::map<int, int> fallbackFontMap_;
+
+  // If `text` contains a CJK codepoint that `fontId` cannot render and `fontId`
+  // has a registered fallback, returns the fallback id; otherwise returns
+  // fontId unchanged. The whole string is routed as a unit so each draw/measure
+  // call stays single-font (consistent bit depth, metrics, wrapping).
+  int resolveTextFontId(int fontId, const char* text, EpdFontFamily::Style style) const;
 
   void renderChar(const EpdFontFamily& fontFamily, uint32_t cp, int* x, int* y, bool pixelState,
                   EpdFontFamily::Style style) const;
@@ -121,6 +127,7 @@ class GfxRenderer {
   void removeFont(int fontId) {
     fontMap.erase(fontId);
     sdCardFonts_.erase(fontId);
+    sdCardFontScales_.erase(fontId);
   }
   void setFontCacheManager(FontCacheManager* m) { fontCacheManager_ = m; }
   FontCacheManager* getFontCacheManager() const { return fontCacheManager_; }
@@ -128,14 +135,27 @@ class GfxRenderer {
   const std::map<int, EpdFontFamily>& getFontMap() const { return fontMap; }
   void registerSdCardFont(int fontId, SdCardFont* font) { sdCardFonts_[fontId] = font; }
   void unregisterSdCardFont(int fontId) { removeFont(fontId); }
-  void clearSdCardFonts() { sdCardFonts_.clear(); }
+  void clearSdCardFonts() {
+    sdCardFonts_.clear();
+    sdCardFontScales_.clear();
+  }
+  void registerSdCardFontScale(int fontId, uint16_t scale) { sdCardFontScales_[fontId] = scale; }
+  void clearSdCardFontScales() { sdCardFontScales_.clear(); }
+  uint16_t getSdCardFontScale(int fontId) const {
+    auto it = sdCardFontScales_.find(fontId);
+    return (it != sdCardFontScales_.end()) ? it->second : 256;
+  }
   const std::map<int, SdCardFont*>& getSdCardFonts() const { return sdCardFonts_; }
   bool isSdCardFont(int fontId) const { return sdCardFonts_.count(fontId) > 0; }
+  // Register/clear size-matched CJK UI fallbacks (see fallbackFontMap_).
+  // setFallbackFont maps a primary UI font id to an SD font id of the same size.
+  void setFallbackFont(int primaryFontId, int fallbackFontId) { fallbackFontMap_[primaryFontId] = fallbackFontId; }
+  void clearFallbackFonts() { fallbackFontMap_.clear(); }
   // Ensure SD card font glyph data is loaded for the given text. Called from layout code
   // (which holds a const GfxRenderer&) before measuring word widths. Safe to call on non-SD fonts (no-op).
   // styleMask: bitmask of styles to prepare (bit 0=regular, 1=bold, 2=italic, 3=bold-italic).
   void ensureSdCardFontReady(int fontId, const char* utf8Text, uint8_t styleMask = 0x0F) const;
-  void ensureSdCardFontReady(int fontId, const std::vector<std::string>& words, bool includeHyphen,
+  void ensureSdCardFontReady(int fontId, const std::deque<std::string>& words, bool includeHyphen,
                              uint8_t styleMask = 0x0F) const;
 
   // Orientation control (affects logical width/height and coordinate transforms)
@@ -148,7 +168,19 @@ class GfxRenderer {
   // Screen ops
   int getScreenWidth() const;
   int getScreenHeight() const;
+  void tapToLogical(float nx, float ny, int& outX, int& outY) const;
   void displayBuffer(HalDisplay::RefreshMode refreshMode = HalDisplay::FAST_REFRESH) const;
+  // Non-blocking refresh: starts the waveform and returns so CPU work (e.g.
+  // grayscale strip rendering) can overlap the panel's refresh time. The
+  // framebuffer must stay untouched until waitRefreshComplete(). Falls back to
+  // a blocking refresh when fadingFix is enabled or the panel lacks deferral
+  // support. See HalDisplay::displayBufferAsync for the baseline contract.
+  void displayBufferAsync(HalDisplay::RefreshMode refreshMode = HalDisplay::FAST_REFRESH) const;
+  void waitRefreshComplete() const;
+  // True when displayBufferAsync() genuinely overlaps: panel defers and
+  // fadingFix isn't forcing the blocking path. Callers can skip overlap
+  // scaffolding (e.g. whole-plane grayscale buffers) when false.
+  bool supportsAsyncRefresh() const;
   // EXPERIMENTAL: Windowed update - display only a rectangular region
   // void displayWindow(int x, int y, int width, int height) const;
   void invertScreen() const;
@@ -162,12 +194,6 @@ class GfxRenderer {
   // after the orientation rotate, so it is orientation-agnostic. Used to render
   // grayscale planes band-by-band without a full second buffer.
   void beginStripTarget(uint8_t* scratch, int stripY0, int stripRows) const;
-  // Two-plane form for GRAYSCALE_BOTH: `scratchLsb` and `scratchMsb` must each
-  // be panelWidthBytes * stripRows bytes and cover the same band. Mode-blind
-  // drawing (fillRect/drawLine/drawRect — anything not going through
-  // markGrayPixel) is mirrored into both planes, reproducing what the two
-  // separate LSB and MSB traversals used to write.
-  void beginStripTarget(uint8_t* scratchLsb, uint8_t* scratchMsb, int stripY0, int stripRows) const;
   void endStripTarget() const;
 
   // Band culling for tiled grayscale. Takes a glyph bounding box in logical
@@ -183,21 +209,11 @@ class GfxRenderer {
   // framebuffer ([0, panelHeight)). Writers subtract the origin and clip to the
   // extent, so they honor tiled-grayscale banding without per-pixel method calls.
   uint8_t* getWriteTarget() const { return _stripActive ? _stripBuf : frameBuffer; }
-  // MSB plane target for GRAYSCALE_BOTH; nullptr in every other mode. Raw
-  // writers must treat a null here as "single-plane" and fall back to the
-  // per-mode selection they used before.
-  uint8_t* getWriteTargetMsb() const { return _stripBufMsb; }
   int getWriteOriginY() const { return _stripActive ? _stripY0 : 0; }
   int getWriteRows() const { return _stripActive ? _stripRows : panelHeight; }
 
   // Drawing
   void drawPixel(int x, int y, bool state = true) const;
-  // Grayscale plane marking. `setLsb`/`setMsb` say which planes this pixel
-  // belongs in (dark gray = both, light gray = MSB only), letting one traversal
-  // feed both. In GRAYSCALE_LSB/GRAYSCALE_MSB it degrades to exactly the single
-  // drawPixel(x, y, false) those modes issued before, so the legacy two-pass
-  // path is bit-for-bit unchanged. A no-op in BW.
-  void markGrayPixel(int x, int y, bool setLsb, bool setMsb) const;
   void drawLine(int x1, int y1, int x2, int y2, bool state = true) const;
   void drawLine(int x1, int y1, int x2, int y2, int lineWidth, bool state) const;
   void drawArc(int maxRadius, int cx, int cy, int xDir, int yDir, int lineWidth, bool state) const;
@@ -207,18 +223,25 @@ class GfxRenderer {
   void drawRoundedRect(int x, int y, int width, int height, int lineWidth, int cornerRadius, bool roundTopLeft,
                        bool roundTopRight, bool roundBottomLeft, bool roundBottomRight, bool state) const;
   void maskRoundedRectOutsideCorners(int x, int y, int width, int height, int radius, Color color = Color::White) const;
+  // v179/v180（Formosa Pro）：蘋果／Figma 的連續圓角（corner smoothing）。smoothing 是百分比：
+  // 0 = 純圓弧、60 = iOS。曲線佔邊長 (1+s)·r：兩段切線貝茲夾一段圓弧，曲率連續。
+  // smoothCornerInset：給主題組合形狀用（例如只圓上兩角的按鍵提示）—— 從圓角那一邊算起第 row 列的內縮。
+  int smoothCornerInset(int rowFromEdge, int cornerRadius, int smoothing, int maxP) const;
+  void drawSmoothRoundedRect(int x, int y, int width, int height, int lineWidth, int cornerRadius, int smoothing,
+                             bool state) const;
+  void fillSmoothRoundedRect(int x, int y, int width, int height, int cornerRadius, int smoothing, Color color) const;
+  void maskSmoothRoundedRectOutsideCorners(int x, int y, int width, int height, int cornerRadius, int smoothing,
+                                           Color color = Color::White) const;
   void fillRect(int x, int y, int width, int height, bool state = true) const;
   void fillRectDither(int x, int y, int width, int height, Color color) const;
   void fillRoundedRect(int x, int y, int width, int height, int cornerRadius, Color color) const;
   void fillRoundedRect(int x, int y, int width, int height, int cornerRadius, bool roundTopLeft, bool roundTopRight,
                        bool roundBottomLeft, bool roundBottomRight, Color color) const;
   void drawImage(const uint8_t bitmap[], int x, int y, int width, int height) const;
-  // Flash-resident 2bpp grayscale image (4 px/byte, MSB-first pairs, row
-  // stride (width+3)/4; values 0=black..3=white — same encoding
-  // Bitmap::readNextRow produces). Honors the active render mode with the
-  // same per-mode pixel selection as drawBitmap, so the BW base +
-  // GRAYSCALE_LSB/MSB passes compose identically to the BMP pipeline.
+  // v34/v155：2-bit 灰階圖繪製（開機/待機 logo 用）。BW 模式把所有非白像素畫黑；
+  // 灰階平面趟只標灰階級。逐像素走 drawPixel（吃方向變換）。
   void drawImageGray(const uint8_t data[], int x, int y, int width, int height) const;
+
   void drawIcon(const uint8_t bitmap[], int x, int y, int size) const;
   void drawBitmap(const Bitmap& bitmap, int x, int y, int maxWidth, int maxHeight, float cropX = 0,
                   float cropY = 0) const;
@@ -250,21 +273,21 @@ class GfxRenderer {
   int getSpaceAdvance(int fontId, uint32_t leftCp, uint32_t rightCp, EpdFontFamily::Style style) const;
   /// Returns the kerning adjustment between two adjacent codepoints.
   int getKerning(int fontId, uint32_t leftCp, uint32_t rightCp, EpdFontFamily::Style style) const;
-  int getTextAdvanceX(int fontId, const char* text, EpdFontFamily::Style style) const;
-
-  // v118:單一碼位的 advance,12.4 定點(1/16 像素)。
+  // v118：單一碼位的 advance，12.4 定點（1/16 像素）。
   //
-  // 存在的理由:純文字閱讀器的斷行原本是「每退一個候選就整條重量一次」,對中文是平方級
-  // (實測每頁 406,342 次字寬查詢)。單趟前向掃描需要「逐字取寬、自己累加」,而累加必須在
+  // 存在的理由：純文字閱讀器的斷行原本是「每退一個候選就整條重量一次」，對中文是平方級
+  // （實測每頁 406,342 次字寬查詢）。單趟前向掃描需要「逐字取寬、自己累加」，而累加必須在
   // 定點域進行、最後才捨入一次 —— 這樣才與 getTextAdvanceX 的結果逐位元組相同。
   //
-  // ⚠️ 只在「SD 字型且 advance 表已建立」時有效,其餘一律回傳 kAdvanceUnavailable。
-  // 內建字型有字距對與連字,寬度【不是】逐字可加的(相鄰字對會互相影響),所以那條路徑
-  // 沒有正確的逐碼位答案,呼叫端必須退回整條量寬的舊做法。
+  // ⚠️ 只在「SD 字型且 advance 表已建立」時有效，其餘一律回傳 kAdvanceUnavailable。
+  // 內建字型有字距對與連字，寬度【不是】逐字可加的（相鄰字對會互相影響），所以那條路徑
+  // 沒有正確的逐碼位答案，呼叫端必須退回整條量寬的舊做法。
   static constexpr int32_t kAdvanceUnavailable = -1;
   int32_t getCodepointAdvanceFP(int fontId, uint32_t cp, EpdFontFamily::Style style) const;
+  int getTextAdvanceX(int fontId, const char* text, EpdFontFamily::Style style) const;
   int getFontAscenderSize(int fontId) const;
   int getLineHeight(int fontId) const;
+  int getLineHeight(int fontId, float compression) const;
   std::string truncatedText(int fontId, const char* text, int maxWidth,
                             EpdFontFamily::Style style = EpdFontFamily::REGULAR) const;
   /// Word-wrap \p text into at most \p maxLines lines, each no wider than
@@ -294,6 +317,15 @@ class GfxRenderer {
   void copyGrayscaleLsbBuffers() const;
   void copyGrayscaleMsbBuffers() const;
   void displayGrayBuffer() const;
+  // v185 bench（/wall4.on）：絕對四階通道，平面由 GRAYSCALE_ABS_LO/HI 模式編碼（見 drawBitmap）。
+  void displayGrayBufferAbsolute() const;
+  // v185 bench（/aadark.on）：文字 AA 的淺灰像素降為深灰——字不隨淺灰推白而變淡。
+  void setTextAaDarkOnly(const bool on) { textAaDarkOnly_ = on; }
+  bool textAaDarkOnly() const { return textAaDarkOnly_; }
+  // v185 bench 證人：最近一次 B/W 刷新選到的 bank（見 HalDisplay::lastRefreshBank）。
+  uint8_t lastRefreshBank() const { return display.lastRefreshBank(); }
+  bool supportsAbsoluteGrayscale() const { return display.supportsAbsoluteGrayscale(); }
+  bool prefersScrubClean() const { return display.prefersScrubClean(); }
 
   // Tiled grayscale (X4): stream one band of a plane straight to controller RAM
   // from `scratch` (panelWidthBytes * numRows, physical rows [yStart, yStart+

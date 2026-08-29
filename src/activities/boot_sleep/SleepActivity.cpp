@@ -4,9 +4,11 @@
 #include <Epub.h>
 #include <FsHelpers.h>
 #include <GfxRenderer.h>
+#include <HalGPIO.h>
 #include <HalStorage.h>
 #include <I18n.h>
 #include <Txt.h>
+#include <Xtc.h>
 
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
@@ -15,6 +17,7 @@
 #include "fontIds.h"
 #include "images/LogoBear240.h"
 #include "images/MoonIcon.h"
+#include "util/BenchFlags.h"
 
 void SleepActivity::onEnter() {
   Activity::onEnter();
@@ -157,18 +160,17 @@ void SleepActivity::renderDefaultSleepScreen() const {
   const auto pageWidth = renderer.getScreenWidth();
   const auto pageHeight = renderer.getScreenHeight();
 
-  const int logoX = (pageWidth - LOGO_BEAR_240_SIZE) / 2;
-  const int logoY = (pageHeight - LOGO_BEAR_240_SIZE) / 2;
-  const int textY = logoY + LOGO_BEAR_240_SIZE + 10;
-
   renderer.clearScreen();
-  renderer.drawImageGray(LogoBearGray240, logoX, logoY, LOGO_BEAR_240_SIZE, LOGO_BEAR_240_SIZE);
-  renderer.drawCenteredText(UI_10_FONT_ID, textY, tr(STR_CROSSPOINT), true, EpdFontFamily::BOLD);
-  renderer.drawCenteredText(UI_10_FONT_ID, textY + 25, tr(STR_SLEEPING));
+  {
+    // v34/v155 品牌：熊 logo（1-bit 畫法，灰階像素退成黑 —— 待機畫面接受）
+    const int logoX = (pageWidth - LOGO_BEAR_240_SIZE) / 2;
+    const int logoY = (pageHeight - LOGO_BEAR_240_SIZE) / 2;
+    renderer.drawImageGray(LogoBearGray240, logoX, logoY, LOGO_BEAR_240_SIZE, LOGO_BEAR_240_SIZE);
+  }
+  renderer.drawCenteredText(UI_10_FONT_ID, pageHeight / 2 + 70, tr(STR_CROSSPOINT), true, EpdFontFamily::BOLD);
+  renderer.drawCenteredText(UI_10_FONT_ID, pageHeight / 2 + 95, tr(STR_SLEEPING));
 
-  // v36: back to the single-pass 1-bit render (grayscale added visible boot
-  // flashes; drawImageGray in BW mode renders the grey design elements as
-  // solid black). Make sleep screen dark unless light is selected.
+  // Make sleep screen dark unless light is selected in settings
   if (SETTINGS.sleepScreen != CrossPointSettings::SLEEP_SCREEN_MODE::LIGHT) {
     renderer.invertScreen();
   }
@@ -222,6 +224,28 @@ void SleepActivity::renderBitmapSleepScreen(const Bitmap& bitmap) const {
   const bool hasGreyscale = bitmap.hasGreyscale() &&
                             SETTINGS.sleepScreenCoverFilter == CrossPointSettings::SLEEP_SCREEN_COVER_FILTER::NO_FILTER;
 
+  // v185 bench（/wall4.on）：UC8279 的絕對四階（原廠 XTH4 表）。不畫 B/W 底——那張表自己
+  // 從白／黑重置後把每個像素推到階；兩張平面直接編碼階碼（GRAYSCALE_ABS_LO/HI）。
+  // 只在【未反相濾鏡】且圖有灰階時走這條；其他情況沿用下面的原路。
+  if (hasGreyscale && BenchFlags::wall4 && renderer.supportsAbsoluteGrayscale() &&
+      SETTINGS.sleepScreenCoverFilter != CrossPointSettings::SLEEP_SCREEN_COVER_FILTER::INVERTED_BLACK_AND_WHITE) {
+    bitmap.rewindToData();
+    renderer.clearScreen(0x00);
+    renderer.setRenderMode(GfxRenderer::GRAYSCALE_ABS_LO);
+    renderer.drawBitmap(bitmap, x, y, pageWidth, pageHeight, cropX, cropY);
+    renderer.copyGrayscaleLsbBuffers();
+
+    bitmap.rewindToData();
+    renderer.clearScreen(0x00);
+    renderer.setRenderMode(GfxRenderer::GRAYSCALE_ABS_HI);
+    renderer.drawBitmap(bitmap, x, y, pageWidth, pageHeight, cropX, cropY);
+    renderer.copyGrayscaleMsbBuffers();
+
+    renderer.displayGrayBufferAbsolute();
+    renderer.setRenderMode(GfxRenderer::BW);
+    return;
+  }
+
   renderer.drawBitmap(bitmap, x, y, pageWidth, pageHeight, cropX, cropY);
 
   if (SETTINGS.sleepScreenCoverFilter == CrossPointSettings::SLEEP_SCREEN_COVER_FILTER::INVERTED_BLACK_AND_WHITE) {
@@ -274,8 +298,22 @@ void SleepActivity::renderCoverSleepScreen() const {
   std::string coverBmpPath;
   bool cropped = SETTINGS.sleepScreenCoverMode == CrossPointSettings::SLEEP_SCREEN_COVER_MODE::CROP;
 
-  // Check if the current book is TXT or EPUB
-  if (FsHelpers::hasTxtExtension(APP_STATE.openEpubPath)) {
+  // Check if the current book is XTC, TXT, or EPUB
+  if (FsHelpers::hasXtcExtension(APP_STATE.openEpubPath)) {
+    // Handle XTC file
+    Xtc lastXtc(APP_STATE.openEpubPath, DataDir::path());
+    if (!lastXtc.load()) {
+      LOG_ERR("SLP", "Failed to load last XTC");
+      return (this->*renderNoCoverSleepScreen)();
+    }
+
+    if (!lastXtc.generateCoverBmp()) {
+      LOG_ERR("SLP", "Failed to generate XTC cover bmp");
+      return (this->*renderNoCoverSleepScreen)();
+    }
+
+    coverBmpPath = lastXtc.getCoverBmpPath();
+  } else if (FsHelpers::hasTxtExtension(APP_STATE.openEpubPath)) {
     // Handle TXT file - looks for cover image in the same folder
     Txt lastTxt(APP_STATE.openEpubPath, DataDir::path());
     if (!lastTxt.load()) {
@@ -283,15 +321,7 @@ void SleepActivity::renderCoverSleepScreen() const {
       return (this->*renderNoCoverSleepScreen)();
     }
 
-    bool coverOk;
-    {
-      // Lend the framebuffer as decode scratch so the cover JPEG/PNG inflate
-      // (~40 KB) reuses it instead of the heap. generateCoverBmp only writes to
-      // SD; nothing draws until the loan is restored at this scope's end.
-      GfxRenderer::FrameBufferLoan loan(renderer);
-      coverOk = lastTxt.generateCoverBmp();
-    }
-    if (!coverOk) {
+    if (!lastTxt.generateCoverBmp()) {
       LOG_ERR("SLP", "No cover image found for TXT file");
       return (this->*renderNoCoverSleepScreen)();
     }
@@ -306,13 +336,7 @@ void SleepActivity::renderCoverSleepScreen() const {
       return (this->*renderNoCoverSleepScreen)();
     }
 
-    bool coverOk;
-    {
-      // Lend the framebuffer as decode scratch (see TXT branch above).
-      GfxRenderer::FrameBufferLoan loan(renderer);
-      coverOk = lastEpub.generateCoverBmp(cropped);
-    }
-    if (!coverOk) {
+    if (!lastEpub.generateCoverBmp(cropped)) {
       LOG_ERR("SLP", "Failed to generate cover bmp");
       return (this->*renderNoCoverSleepScreen)();
     }
@@ -338,7 +362,13 @@ void SleepActivity::renderCoverSleepScreen() const {
 void SleepActivity::renderLastScreenSleepScreen() const {
   const auto pageHeight = renderer.getScreenHeight();
   renderer.drawImage(MoonIcon, 0, pageHeight - MOONICON_HEIGHT, MOONICON_WIDTH, MOONICON_HEIGHT);
-  renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+  if (gpio.deviceIsX3()) {
+    // The controller still holds the displayed page, so its differential base
+    // waveform can add the moon without a full-screen flash.
+    renderer.displayGrayscaleBase(HalDisplay::FAST_REFRESH);
+  } else {
+    renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+  }
 }
 
 void SleepActivity::renderBlankSleepScreen() const {

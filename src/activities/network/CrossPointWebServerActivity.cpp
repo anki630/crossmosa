@@ -1,32 +1,30 @@
+#include "SdCardFontSystem.h"
+#include "util/DiagLog.h"
 #include "CrossPointWebServerActivity.h"
 
-#include <ESPmDNS.h>
 #include <DNSServer.h>
+#include <ESPmDNS.h>
 #include <GfxRenderer.h>
 #include <I18n.h>
-#include <Memory.h>
 #include <WiFi.h>
-#include <esp_task_wdt.h>
 
 #include <cstddef>
 
-#include "ble/BleRemoteManager.h"
 #include "MappedInputManager.h"
 #include "NetworkModeSelectionActivity.h"
-#include "SdCardFontSystem.h"
 #include "SilentRestart.h"
 #include "WifiSelectionActivity.h"
 #include "activities/network/CalibreConnectActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
-#include "util/DiagLog.h"
 #include "util/QrUtils.h"
+#include "util/TaskWatchdog.h"
 
 namespace {
 // AP Mode configuration
-constexpr const char* AP_SSID = "CrossMosa-Reader";
+constexpr const char* AP_SSID = "CrossMosa-Reader";  // v34/v155 品牌
 constexpr const char* AP_PASSWORD = nullptr;  // Open network for ease of use
-constexpr const char* AP_HOSTNAME = "crossmosa";
+constexpr const char* AP_HOSTNAME = "crossmosa";  // v34/v155：mDNS = crossmosa.local
 constexpr uint8_t AP_CHANNEL = 1;
 constexpr uint8_t AP_MAX_CONNECTIONS = 4;
 constexpr int QR_CODE_WIDTH = 198;
@@ -45,14 +43,19 @@ void stopDnsServer() {
 }
 
 void restartMdns(const char* hostname, const char* tag) {
+  // v195：crash_report194 是 rst=6（task watchdog），最後一行 log 停在 `WEB wifi-stage`，
+  // 而那之後只有 mDNS 與 web server 兩件事——兩者的成功／失敗訊息都是 LOG_DBG（發佈版編掉了），
+  // 所以看不出是哪一個卡住。這兩行讓下次一眼看得出來。當時 rssi=-94、連線耗時 11,507ms（平常 5,050ms）。
+  DiagLog::line("WEB mdns-begin");
   MDNS.end();
-  if (MDNS.begin(hostname)) {
+  const bool mdnsOk = MDNS.begin(hostname);
+  DiagLog::line("WEB mdns-done ok=%d", static_cast<int>(mdnsOk));
+  if (mdnsOk) {
     LOG_DBG(tag, "mDNS started: http://%s.local/", hostname);
   } else {
     LOG_DBG(tag, "WARNING: mDNS failed to start");
   }
 }
-
 
 // 0..4 bars from RSSI (dBm), with 3 dBm hysteresis on currentBars to suppress flicker.
 int barsForRssi(int rssi, int currentBars) {
@@ -70,15 +73,22 @@ void CrossPointWebServerActivity::onEnter() {
 
   LOG_DBG("WEBACT", "Free heap at onEnter: %d bytes", ESP.getFreeHeap());
 
-  // Force DiagLog on for this activity's lifetime, sentinel file or not.
-  // The SMB2 server's headline failure case is FIRST CONTACT -- an iPhone
-  // that will not connect, on a card that of course has no /diag.on -- and
-  // without this every diagnostic line the SMB handlers carry (each refused
-  // command, each unsupported info class, each rejection reason) is discarded
-  // on exactly the run that matters. Turned off again in onExit(). See
-  // DiagLog.h's setForced() comment for the cost argument.
-  DiagLog::setForced(true, "filetransfer");
-  DiagLog::mem("filetransfer-enter");
+  // v141 量測：v140 那次崩潰時使用者【同時在用網路傳檔】，而 panic reason 是空的
+  // （看門狗／硬重置，不是 abort）。第二個假說是 WiFi：它要的是特定 caps 的記憶體，
+  // 而 p3 當時只剩約 12KB —— 若 WiFi 拿不到它要的形狀，驅動層的重置不會留下 panic 訊息。
+  // 這個點不是熱路徑（連線建立本來就要幾百毫秒），dumpPools 的兩趟 walk 在這裡是安全的。
+  //
+  // ⚠️ 這也是評估「把 framebuffer 搬進 p2」的關鍵數據：CLAUDE.md 否決那條的理由是
+  //    「p2 是 OPDS/WiFi 唯一能供應大連續塊的池」，而那個門檻是 RSA 時代量的。
+  //    要翻案就得先量到 WiFi 連上之後 p2 實際被吃掉多少。
+  DiagLog::mem("wifi-enter");
+  // v143：門檻從 2048 降到 64。
+  // v142 之後 p2 的兩塊大常駐物已經穩定（43,008 mini bitmap ＋ 6,400 advance table），
+  // 但 `used=52408 / maxfree=26912 / big=2` 這組數字自相矛盾 —— 63,156 可用卻拼不出
+  // 超過 26,912 的一塊，代表【中間有小於 2048 的長壽小塊把它切開】，而 2048 的門檻
+  // 剛好把兇手濾掉了。CLAUDE.md 記過這個形狀（圖片頁 render 會留一顆約 200 B 的長壽塊）。
+  // 上限是 16 筆/池，所以降到 64 不會把 log 灌爆。
+  DiagLog::dumpPools(64, "wifi-enter");
 
   // Reset state
   state = WebServerActivityState::MODE_SELECTION;
@@ -108,14 +118,18 @@ void CrossPointWebServerActivity::onExit() {
 
   state = WebServerActivityState::SHUTTING_DOWN;
   stopDnsServer();
-  // Before MDNS.end(): closes the listening socket and every accepted
-  // connection while the network stack is still up. No-op when SMB never
-  // started (smbServer is null).
-  smbServer.reset();
   MDNS.end();
-  // Before the reboot branch below, which does not return.
-  DiagLog::mem("filetransfer-exit");
 
+  // v148 backstop：字型卸載了、卻走到「不重啟」的分支（例如 Calibre 子活動早退而
+  // WiFi 從未啟動）—— 這裡不是 render 中途，用完整的 ensureLoaded 回載（含 UI 備援），
+  // 否則主畫面的中文書名會豆腐到下次進閱讀器為止。
+  if (didUnloadFonts_ && WiFi.getMode() == WIFI_MODE_NULL) {
+    extern SdCardFontSystem sdFontSystem;
+    sdFontSystem.ensureLoaded(renderer);
+    didUnloadFonts_ = false;
+  }
+
+  DiagLog::line("WEB exit ap=%d mode=%d", static_cast<int>(isApMode), static_cast<int>(WiFi.getMode()));
   // Skip reboot if WiFi was never activated (e.g. user backed out of mode selection).
   if (WiFi.getMode() != WIFI_MODE_NULL) {
     if (isApMode) {
@@ -128,12 +142,6 @@ void CrossPointWebServerActivity::onExit() {
   }
 
   LOG_DBG("WEBACT", "Free heap at onExit end: %d bytes", ESP.getFreeHeap());
-
-  // Matches the setForced(true) in onEnter(). Only reachable when WiFi was
-  // never brought up (the user backed out of mode selection) -- the branch
-  // above reboots -- but that path must not leave diagnostics silently on for
-  // the rest of the session.
-  DiagLog::setForced(false);
 }
 
 void CrossPointWebServerActivity::onNetworkModeSelected(const NetworkMode mode) {
@@ -148,10 +156,18 @@ void CrossPointWebServerActivity::onNetworkModeSelected(const NetworkMode mode) 
   networkMode = mode;
   isApMode = (mode == NetworkMode::CREATE_HOTSPOT);
 
+  // v5/v148：連 WiFi 前卸載常駐的 SD 內文字型，騰出大連續塊給 WiFi 啟動。
+  // 實機兩次「進檔案傳輸就重開機、panic reason 為空」（v140/v147）都發生在
+  // p3 只剩 4–12KB、字型仍常駐的狀態 —— v5 當年修的原始症狀。
+  // ⚠️ 放在【這裡】而不是 onEnter（codex 複查抓到）：使用者在模式選擇畫面直接取消時
+  //    WiFi 從未啟動、onExit 不會 silentRestart —— 在 onEnter 卸載會讓字型停留在
+  //    卸載狀態，主畫面的中文書名變豆腐。這裡是三條路徑（STA/AP/Calibre）的匯流點，
+  //    走到這裡就代表確定要開 WiFi。
+  extern SdCardFontSystem sdFontSystem;
+  sdFontSystem.unloadForLowMemory(renderer);
+  didUnloadFonts_ = true;
+
   if (mode == NetworkMode::CONNECT_CALIBRE) {
-    // Free the SD reader font before CalibreConnectActivity brings WiFi up;
-    // reloads automatically on the next reader entry / after the onExit reboot.
-    sdFontSystem.unloadForLowMemory(renderer);
     startActivityForResult(
         std::make_unique<CalibreConnectActivity>(renderer, mappedInput), [this](const ActivityResult& result) {
           state = WebServerActivityState::MODE_SELECTION;
@@ -171,10 +187,6 @@ void CrossPointWebServerActivity::onNetworkModeSelected(const NetworkMode mode) 
   if (mode == NetworkMode::JOIN_NETWORK) {
     // STA mode - launch WiFi selection
     LOG_DBG("WEBACT", "Turning on WiFi (STA mode)...");
-    // Free the SD reader font (tens of KB) before WiFi claims the heap; it
-    // reloads automatically on the next reader entry / after the onExit reboot.
-    sdFontSystem.unloadForLowMemory(renderer);
-    BLE_REMOTE.stopForWifi();  // BLE/WiFi 互斥:讓出無線電與 heap,直到重開機
     WiFi.mode(WIFI_STA);
 
     state = WebServerActivityState::WIFI_SELECTION;
@@ -198,6 +210,7 @@ void CrossPointWebServerActivity::onNetworkModeSelected(const NetworkMode mode) 
 
 void CrossPointWebServerActivity::onWifiSelectionComplete(const bool connected) {
   LOG_DBG("WEBACT", "WifiSelectionActivity completed, connected=%d", connected);
+  DiagLog::line("WEB wifi-stage connected=%d", static_cast<int>(connected));
 
   if (connected) {
     // Get connection info before exiting subactivity
@@ -208,6 +221,7 @@ void CrossPointWebServerActivity::onWifiSelectionComplete(const bool connected) 
 
     // Start the web server
     startWebServer();
+    DiagLog::line("WEB server-started");  // v195：與 mdns-done 一起框出卡住的區間
   } else {
     // User cancelled - go back to mode selection
     state = WebServerActivityState::MODE_SELECTION;
@@ -227,12 +241,7 @@ void CrossPointWebServerActivity::startAccessPoint() {
   LOG_DBG("WEBACT", "Starting Access Point mode...");
   LOG_DBG("WEBACT", "Free heap before AP start: %d bytes", ESP.getFreeHeap());
 
-  // Free the SD reader font before WiFi.mode() so the AP + web server get
-  // contiguous heap; it reloads on the next reader entry / after the reboot.
-  sdFontSystem.unloadForLowMemory(renderer);
-
   // Configure and start the AP
-  BLE_REMOTE.stopForWifi();  // BLE/WiFi 互斥:讓出無線電與 heap,直到重開機
   WiFi.mode(WIFI_AP);
   delay(100);
 
@@ -292,31 +301,6 @@ void CrossPointWebServerActivity::startWebServer() {
     state = WebServerActivityState::SERVER_RUNNING;
     LOG_DBG("WEBACT", "Web server started successfully");
     lastWifiBars = isApMode ? 0 : barsForRssi(WiFi.RSSI(), 0);
-
-    // v88: SMB2 entry point removed (files untouched — v27/v33/v36 手法, so
-    // --gc-sections reclaims the whole SmbServer/libsmb2 chain and a revert is
-    // one commit). Rationale, from measurements on the device: linking NimBLE
-    // costs 28,256 B, which pushes the 52,272-byte framebuffer out of the
-    // prio-0 pool and into the pool WiFi/HTTP/SMB draw their large contiguous
-    // blocks from. Largest free block once the servers are up: 38,900-40,948
-    // without BLE vs 12,788 with it — and the web file manager became unusably
-    // slow at the latter. SMB's tables are 12,672 of that and are allocated
-    // after the web server, so dropping SMB is what hands HTTP its headroom
-    // back. Deliberate trade, the user's call: SMB was the SLOW path (CLAUDE.md
-    // v81: "large files: use the web upload"); its unique value was the iPhone
-    // Files app, spent to keep ONE firmware that also has the BLE page-turner.
-    //
-    // `smbServer` simply stays null, which is already a fully supported state:
-    // loop(), onExit() and renderSmbDetails() all handle it.
-    //
-    // v88: this sample replaces the measurement the removal just deleted. The
-    // "SMB tables allocated ... largest free block now N" line was how every
-    // previous version reported the headroom the transfer path actually runs
-    // with (38,900-40,948 without BLE, 12,788 with it) — dropping SMB without
-    // replacing it would have removed the only way to tell whether dropping
-    // SMB helped.
-    DiagLog::mem("webserver-started");
-
 
     // Force an immediate render since we're transitioning from a subactivity
     // that had its own rendering task. We need to make sure our display is shown.
@@ -382,13 +366,6 @@ void CrossPointWebServerActivity::loop() {
       }
     }
 
-    // Drive the SMB2 server. Unconditional and outside the web-server block
-    // below: the two are independent services. tick() polls its clients with a
-    // zero-timeout select(), but a PENDING CONNECTION costs up to 10 ms in
-    // smb2_serve_port_async(to_msecs=10) -- so "returns immediately" is true of
-    // the service path and "<= 10 ms" is true of the accept path.
-    if (smbServer) smbServer->tick();
-
     // Handle web server requests - maximize throughput with watchdog safety
     if (webServer && webServer->isRunning()) {
       const unsigned long timeSinceLastHandleClient = millis() - lastHandleClientTime;
@@ -399,7 +376,7 @@ void CrossPointWebServerActivity::loop() {
       }
 
       // Reset watchdog BEFORE processing - HTTP header parsing can be slow
-      esp_task_wdt_reset();
+      resetTaskWatchdogIfSubscribed();
 
       // Process HTTP requests in tight loop for maximum throughput
       // More iterations = more data processed per main loop cycle
@@ -408,18 +385,11 @@ void CrossPointWebServerActivity::loop() {
         webServer->handleClient();
         // Reset watchdog every 32 iterations
         if ((i & 0x1F) == 0x1F) {
-          esp_task_wdt_reset();
+          resetTaskWatchdogIfSubscribed();
         }
         // Yield and check for exit button every 64 iterations
         if ((i & 0x3F) == 0x3F) {
           yield();
-          // Tick SMB here too, not just once per activity-loop iteration. This
-          // burst runs up to 500 HTTP iterations before returning, and an SMB
-          // transfer that only got one tick per burst would stall for the
-          // length of it. Every 64 rather than every iteration: tick() is a
-          // select() syscall, and 500 of them per burst is real cost for a
-          // service that is usually idle.
-          if (smbServer) smbServer->tick();
           // Force trigger an update of which buttons are being pressed so be have accurate state
           // for back button checking
           mappedInput.update();
@@ -516,12 +486,6 @@ void CrossPointWebServerActivity::renderServerRunning() const {
                       hostnameUrl.c_str());
     renderer.drawText(UI_10_FONT_ID, metrics.contentSidePadding + QR_CODE_WIDTH + metrics.verticalSpacing, startY + 100,
                       ipUrl.c_str());
-
-    // SMB, continuing the same right-hand column the two http addresses use.
-    // (The +80/+100 offsets are pre-existing; this one is derived from them
-    // plus a line height rather than adding a third magic number.)
-    renderSmbDetails(metrics.contentSidePadding + QR_CODE_WIDTH + metrics.verticalSpacing, startY + 100 + height10,
-                     /*centered=*/false);
   } else {
     startY += metrics.verticalSpacing * 2;
 
@@ -545,62 +509,10 @@ void CrossPointWebServerActivity::renderServerRunning() const {
     // Also show hostname URL
     std::string hostnameUrl = std::string(tr(STR_OR_HTTP_PREFIX)) + AP_HOSTNAME + ".local/";
     renderer.drawCenteredText(UI_10_FONT_ID, startY, hostnameUrl.c_str(), true);
-    startY += height10 + metrics.verticalSpacing;
-
-    // SMB, directly under the http addresses it is an alternative to.
-    renderSmbDetails(0, startY, /*centered=*/true);
   }
 
   const auto labels = mappedInput.mapLabels(tr(STR_EXIT), "", "", "");
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
-}
-
-// Task 8: the SMB2 connection details -- the label, both addresses and the
-// credentials -- as one block, so the AP and STA layouts above share one copy
-// and cannot drift apart.
-//
-// Draws NOTHING in two cases, both deliberate:
-//   * SMB is not running. An address that would refuse the connection is
-//     strictly worse than no address: the user cannot tell "wrong address"
-//     from "server down", and would go looking in the wrong place.
-//   * The block would not fit above the button hints. The screens around it
-//     are portrait-designed and already tight (the AP layout's two QR codes
-//     alone overflow a landscape screen, which predates this); silently
-//     omitting an optional block beats drawing over the button hints.
-int CrossPointWebServerActivity::renderSmbDetails(int x, int y, bool centered) const {
-  if (!smbServer || !smbServer->isRunning()) return y;
-
-  const auto& metrics = UITheme::getInstance().getMetrics();
-  const int lineHeight = renderer.getLineHeight(UI_10_FONT_ID);
-
-  // Label, hostname address, IP address, credentials.
-  constexpr int SMB_DETAIL_LINES = 4;
-  if (y + SMB_DETAIL_LINES * lineHeight > renderer.getScreenHeight() - metrics.buttonHintsHeight) {
-    return y;
-  }
-
-  // .local is the address worth leading with: in AP mode the IP is whatever
-  // the soft-AP hands out, and in STA mode it is whatever the router hands
-  // out, but the mDNS name is the same every time -- so it is the one a user
-  // can write down once. The IP stays as the fallback for a client whose
-  // mDNS resolution does not work.
-  const std::string hostUrl = std::string("smb://") + AP_HOSTNAME + ".local/" + kSmbShareName;
-  const std::string ipUrl = std::string("smb://") + connectedIP + "/" + kSmbShareName;
-  const std::string login = std::string(tr(STR_SMB_LOGIN)) + " " + kSmbUser + " / " + kSmbPassword;
-
-  const char* lines[SMB_DETAIL_LINES] = {tr(STR_SMB_HINT), hostUrl.c_str(), ipUrl.c_str(), login.c_str()};
-
-  for (int i = 0; i < SMB_DETAIL_LINES; i++) {
-    // The label is bold, matching the "Open this URL" heading above it.
-    const auto style = (i == 0) ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR;
-    if (centered) {
-      renderer.drawCenteredText(UI_10_FONT_ID, y, lines[i], true, style);
-    } else {
-      renderer.drawText(UI_10_FONT_ID, x, y, lines[i], true, style);
-    }
-    y += lineHeight;
-  }
-  return y;
 }
 
 void CrossPointWebServerActivity::renderWifiIndicator(int subHeaderTop) const {

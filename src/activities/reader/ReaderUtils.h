@@ -2,19 +2,28 @@
 
 #include <CrossPointSettings.h>
 #include <GfxRenderer.h>
+#include <HalGPIO.h>
 #include <HalTiltSensor.h>
 #include <Logging.h>
+#include <components/bars/tap-zones.h>
 
 #include "MappedInputManager.h"
 #include "activities/ActivityManager.h"
+#include "util/BenchFlags.h"
+#include "util/DiagLog.h"
 
 namespace ReaderUtils {
 
 constexpr unsigned long GO_HOME_MS = 1000;
 constexpr unsigned long GO_BACK_OR_HOME_MS = GO_HOME_MS;
 constexpr unsigned long SKIP_HOLD_MS = 700;
-constexpr unsigned long BOOKMARK_HOLD_MS = 500;  // v38:對齊全機「500=輔助動作」檔(原 400,五種閾值收斂成 500/1000 兩檔)
+constexpr unsigned long BOOKMARK_HOLD_MS = 400;
 constexpr unsigned long BOOKMARK_MESSAGE_DURATION_MS = 2500;
+
+enum ReaderTouchAction : freeink::ui::ActionId {
+  READER_TOUCH_PREV = 1,
+  READER_TOUCH_NEXT = 3,
+};
 
 inline void applyOrientation(GfxRenderer& renderer, const uint8_t orientation) {
   switch (orientation) {
@@ -61,16 +70,80 @@ inline PageTurnResult detectPageTurn(const MappedInputManager& input) {
   return {prev, next, tiltPrev || tiltNext};
 }
 
-inline void displayWithRefreshCycle(const GfxRenderer& renderer, int& pagesUntilFullRefresh) {
+struct TouchPageTurn {
+  bool prev;
+  bool next;
+  unsigned long heldMs;
+};
+
+inline TouchPageTurn detectTouchPageTurn(GfxRenderer& renderer, const MappedInputManager& input) {
+  TouchPageTurn result{false, false, 0};
+  if (!SETTINGS.touchReaderControls || !input.hasTouch()) {
+    return result;
+  }
+
+  int x = 0;
+  int y = 0;
+  if (!input.wasScreenTapped(x, y)) {
+    return result;
+  }
+
+  const int16_t width = static_cast<int16_t>(renderer.getScreenWidth());
+  const int16_t height = static_cast<int16_t>(renderer.getScreenHeight());
+  const int16_t previousZoneWidth = width / 3;
+  const freeink::ui::TapZone zones[] = {
+      {freeink::ui::Rect{0, 0, previousZoneWidth, height}, READER_TOUCH_PREV},
+      {freeink::ui::Rect{previousZoneWidth, 0, static_cast<int16_t>(width - previousZoneWidth), height},
+       READER_TOUCH_NEXT},
+  };
+
+  for (const auto& zone : zones) {
+    if (!zone.enabled || !zone.rect.contains(static_cast<int16_t>(x), static_cast<int16_t>(y))) continue;
+    result.prev = zone.action == READER_TOUCH_PREV;
+    result.next = zone.action == READER_TOUCH_NEXT;
+    break;
+  }
+  result.heldMs = gpio.lastTouchHeldMs();
+  return result;
+}
+
+// Reader menu opens on a downward swipe from the top edge (replaces the old center tap-and-hold).
+inline bool isTouchMenuGesture(const MappedInputManager& input) {
+  return SETTINGS.touchReaderControls && input.hasTouch() && input.wasMenuGesture();
+}
+
+// v186：週期清殘影是否走 scrub（bench 哨兵，或面板驅動擔保的實證 bank）。EpubReader 的圖片頁
+// 證人與 displayWithRefreshCycle 用同一個判準，log 才對得起來。
+inline bool scrubCleanActive(const GfxRenderer& renderer) {
+  return BenchFlags::scrub || renderer.prefersScrubClean();
+}
+
+// One helper, blocking or deferred: the async form starts the refresh and
+// returns so the caller can overlap CPU work with the panel's refresh time.
+// Async callers must not touch the framebuffer until
+// renderer.waitRefreshComplete() and must rebuild the differential baseline
+// before the next page turn (the tiled grayscale cleanup does).
+inline void displayWithRefreshCycle(const GfxRenderer& renderer, int& pagesUntilFullRefresh, bool async = false) {
+  // v55/v185：週期性清殘影在 X3 原本被 HALF 升級成 GC 全同步（閃黑）；/scrub.on 時改送
+  // HALF_REFRESH_SCRUB（不 requestResync → 驅動走狀態驅動 scrub bank）。bench 候選，見 BenchFlags.h。
+  // v186：UC8253 的 _half 是 v55–v130 實證過的週期清殘影 → 該面板預設就走 SCRUB（回到 v130 體驗：
+  // 不閃黑、不走 3 秒全同步鏈）；UC8279 的 bank 未驗證 → 仍靠 /scrub.on 選用。
+  const bool useScrub = scrubCleanActive(renderer);
+  const auto clean = useScrub ? HalDisplay::HALF_REFRESH_SCRUB : HalDisplay::HALF_REFRESH;
+  const auto mode = (pagesUntilFullRefresh <= 1) ? clean : HalDisplay::FAST_REFRESH;
+  if (async) {
+    renderer.displayBufferAsync(mode);
+  } else {
+    renderer.displayBuffer(mode);
+  }
+  // bench 證人：scrub 開著時仍會有幾種狀態落回 GC（開機前兩屏、灰階後未 cleanup、前一次 HALF
+  // 留下的 resync 旗標）。不記下來，bench 會把一次 GC 閃黑誤歸因給 scrub bank。
+  if (pagesUntilFullRefresh <= 1 && useScrub) {
+    DiagLog::line("CLEAN bank=%u", static_cast<unsigned>(renderer.lastRefreshBank()));  // 1=GC 2=DU 3=scrub
+  }
   if (pagesUntilFullRefresh <= 1) {
-    // v55:週期性清殘影改用 HALF_REFRESH_SCRUB(不要求控制器重新同步)。
-    // 原本的 HALF_REFRESH 在 X3 被升級成全同步鏈,實測 3,192ms;一般翻頁只要 441ms。
-    // 這支函式由 EPUB/TXT/XTC 三個 reader 共用,三者一併受惠。
-    // 觀察點(實機實測):殘影是否仍被清乾淨——不夠乾淨就改回 HALF_REFRESH。
-    renderer.displayBuffer(HalDisplay::HALF_REFRESH_SCRUB);
     pagesUntilFullRefresh = SETTINGS.getRefreshFrequency();
   } else {
-    renderer.displayBuffer();
     pagesUntilFullRefresh--;
   }
 }

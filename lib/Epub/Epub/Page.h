@@ -78,15 +78,21 @@ class Page {
   std::vector<FootnoteEntry> footnotes;
   static constexpr uint16_t MAX_FOOTNOTES_PER_PAGE = 16;
 
-  void addFootnote(const char* number, const char* href) {
-    if (footnotes.size() >= MAX_FOOTNOTES_PER_PAGE) return;  // Cap per-page footnotes
-    FootnoteEntry entry;
-    strncpy(entry.number, number, sizeof(entry.number) - 1);
-    entry.number[sizeof(entry.number) - 1] = '\0';
-    strncpy(entry.href, href, sizeof(entry.href) - 1);
-    entry.href[sizeof(entry.href) - 1] = '\0';
-    footnotes.push_back(entry);
-  }
+  // Zero-based visible-codepoint offset where this page starts. Not part of the serialized page
+  // body (it lives in the section's visible-offset LUT); Section::loadPage* fills it in from the
+  // build LUT or the on-disk LUT while the page file is already open, so the reader can persist
+  // progress without a second section-file open per page turn.
+  uint32_t visibleTextOffset = 0;
+
+  // v187：項目 288 B；vector 倍增 8→16 在建置視窗要 4,608 B 連續（throwing）——成長前先看連續塊。
+  void addFootnote(const char* number, const char* href);
+  // v187 證人：建置時（addFootnote／parser pendingFootnotes）或載入時（deserialize）因記憶體丟掉的註腳數。
+  // lib 不能碰 DiagLog，由閱讀器讀走後歸零、寫成 FNDROP。
+  static uint16_t footnoteDrops;
+
+  // v194：nothrow 配不到 Page／PageImage 時的證人（先到先得）。src 讀走寫成 ALLOCFAIL。
+  static char lastAllocFail[96];
+  static void noteAllocFail(const char* where, size_t bytes);
 
   void render(GfxRenderer& renderer, int fontId, int xOffset, int yOffset) const;
   void renderImages(GfxRenderer& renderer, int fontId, int xOffset, int yOffset) const;

@@ -4,7 +4,6 @@
 #include <iostream>
 
 namespace serialization {
-
 // v53:字串長度守衛。長度欄位直接來自 SD 卡,壞掉一個位元就會讓 s.resize(len) 要求上百 MB;
 // -fno-exceptions 下配置失敗 = abort() → 那本書/那個快取檔變成「開一次當一次」且永久。
 // 任何合法字串(書名/作者/章節名/路徑/URL)都遠小於此值。
@@ -37,9 +36,6 @@ inline void writeString(std::ostream& os, const std::string& s) {
 }
 
 inline void writeString(HalFile& file, const std::string& s) {
-  // 不 clamp:呼叫端(如 BookMetadataCache)會先用未截斷長度預算檔案位移並寫進檔頭,
-  // 這裡截斷會讓檔頭記的位移大於真實位移,之後每次 seek 都落在記錄中間(靜默壞檔)。
-  // 超長字串由讀側「跳過 payload」處理,串流不會失去同步。
   const uint32_t len = s.size();
   writePod(file, len);
   file.write(reinterpret_cast<const uint8_t*>(s.data()), len);

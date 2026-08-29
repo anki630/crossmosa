@@ -13,20 +13,27 @@ class UITheme {
   static UITheme instance;
 
  public:
+  enum class TextVerticalAlignment { TOP, CENTER, BOTTOM };
+
   UITheme();
   static UITheme& getInstance() { return instance; }
 
-  const ThemeMetrics& getMetrics() const { return *currentMetrics; }
+  const ThemeMetrics& getMetrics() const;
   const BaseTheme& getTheme() const { return *currentTheme; }
   Rect getScreenSafeArea(const GfxRenderer& renderer, bool hasFrontButtonHints = false,
                          bool hasSideButtonHints = false);
   static void drawCenteredText(const GfxRenderer& renderer, Rect screen, int fontId, int y, const char* text,
                                bool black = true, EpdFontFamily::Style style = EpdFontFamily::REGULAR);
+  // Wraps only overflowing text, then aligns the complete line block within bounds.
+  static void drawCenteredWrappedText(const GfxRenderer& renderer, Rect bounds, int fontId, const char* text,
+                                      int maxLines, bool black = true,
+                                      EpdFontFamily::Style style = EpdFontFamily::REGULAR,
+                                      TextVerticalAlignment verticalAlignment = TextVerticalAlignment::CENTER);
   void reload();
   void setTheme(CrossPointSettings::UI_THEME type);
   static int getNumberOfItemsPerPage(const GfxRenderer& renderer, bool hasHeader, bool hasTabBar, bool hasButtonHints,
                                      bool hasSubtitle, int extraReservedHeight = 0);
-  // 多頁清單的頁碼指示「3/12」;單頁回空字串(呼叫端傳 nullptr 副標 = 畫面零變化)
+  // v38：標頭右側的「頁/總頁」副標；單頁以內回空字串（不顯示）
   static std::string pageIndicatorText(int selectedIndex, int itemCount, int pageItems);
   static std::string getCoverThumbPath(std::string coverBmpPath, int coverHeight);
   static UIIcon getFileIcon(const std::string& filename);
@@ -36,6 +43,9 @@ class UITheme {
  private:
   const ThemeMetrics* currentMetrics;
   std::unique_ptr<BaseTheme> currentTheme;
+  mutable ThemeMetrics adjustedMetrics;
+  mutable bool metricsValid = false;
+  mutable bool metricsForTouch = false;
 };
 
 // Helper macro to access current theme

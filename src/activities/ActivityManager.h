@@ -66,31 +66,11 @@ class ActivityManager {
   // This variable must only be set by the main loop, to avoid race conditions
   std::atomic<bool> requestedUpdate{false};
 
-  // v110: "a render has been requested but has not started yet". Set on every path that
-  // notifies (or will notify) the render task; cleared by the render task itself before it
-  // calls render(). A request arriving DURING a render therefore leaves it true, which is
-  // exactly the signal the reader's glyph prefetch polls to abandon its work early.
-  // This is a LATENCY HINT, not a correctness gate: the correctness gate is the per-field
-  // WarmIdentity comparison at the next render, so missing the flag once only costs a few
-  // extra milliseconds of prefetch. Single-core chip, one writer per direction (main task
-  // sets, render task clears), no read-modify-write -- volatile bool is sufficient.
-  volatile bool renderPending_ = false;
-
-  // v110: raise renderPending_ unless the caller IS the render task. Called from RenderLock's
-  // constructors BEFORE they block on the semaphore, which is the one chokepoint every
-  // state-mutating / teardown path funnels through: pageTurn()'s spine cross, chapter skip,
-  // footnote navigation, applyOrientation, activity push/pop/replace, the screenshot and
-  // force-refresh paths in main.cpp. All of those take the lock FIRST and only call
-  // requestUpdate() afterwards, so without this the hint would still be false while they sit
-  // blocked behind an in-flight prefetch -- a ~250-330 ms input freeze exactly when the user
-  // pressed a key. The render task must be excluded: its own acquisition in renderTaskLoop()
-  // happens right after the unconditional clear, so raising it there would permanently disable
-  // prefetching. A spurious raise (e.g. loop()'s build pump winning the lock during a render)
-  // is harmless: the flag is cleared before every render, so it costs at most one skipped
-  // speculative prefetch.
-  void raiseRenderPendingIfNotRenderTask();
-
  public:
+  // v110/v161：投機工作（字型預取）的中止提示，不是正確性閘門。新樹以 requestedUpdate
+  // 映射舊樹的 renderPending_：主任務 requestUpdate() 設起、render task 取件時清掉 ——
+  // 預取跑在 render 尾端，期間有新請求進來即為 true。
+  bool isRenderPending() const { return requestedUpdate.load(); }
   explicit ActivityManager(GfxRenderer& renderer, MappedInputManager& mappedInput)
       : renderer(renderer), mappedInput(mappedInput), renderingMutex(xSemaphoreCreateMutex()) {
     assert(renderingMutex != nullptr && "Failed to create rendering mutex");
@@ -110,7 +90,7 @@ class ActivityManager {
   void goToFileBrowser(std::string path = {});
   void goToRecentBooks();
   void goToBrowser();
-  void goToReader(std::string path);
+  void goToReader(std::string path, bool allowFastInitialRefresh = false);
   void goToSleep(bool fromTimeout = false);
   void goToBoot();
   void goToFullScreenMessage(std::string message, EpdFontFamily::Style style = EpdFontFamily::REGULAR);
@@ -126,16 +106,13 @@ class ActivityManager {
 
   bool preventAutoSleep() const;
   bool isReaderActivity() const;
+  bool handleForcedRefresh();
   bool skipLoopDelay() const;
   ScreenshotInfo getScreenshotInfo() const;
 
   // If immediate is true, the update will be triggered immediately.
   // Otherwise, it will be deferred until the end of the current loop iteration.
   void requestUpdate(bool immediate = false);
-
-  // v110: true between "a render was requested" and "the render task picked it up".
-  // See renderPending_ above -- a hint for aborting speculative work, never a correctness gate.
-  bool isRenderPending() const { return renderPending_; }
 
   // Trigger a render and block until it completes.
   // Must NOT be called from the render task or while holding a RenderLock.

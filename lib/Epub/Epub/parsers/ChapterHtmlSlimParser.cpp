@@ -1,6 +1,7 @@
 #include "ChapterHtmlSlimParser.h"
 
-#include <Epub/BuildDiag.h>
+#include <esp_heap_caps.h>
+
 #include <FsHelpers.h>
 #include <GfxRenderer.h>
 #include <HalStorage.h>
@@ -10,13 +11,15 @@
 #include <expat.h>
 
 #include <algorithm>
-#include <cstdio>
 #include <iterator>
 #include <new>
 
+#include "../../../../src/fontIds.h"
 #include "Epub.h"
 #include "Epub/Page.h"
+#include "Epub/VisibleTextUtils.h"
 #include "Epub/converters/ImageDecoderFactory.h"
+#include "Epub/converters/ImageDimsProbe.h"
 #include "Epub/converters/ImageToFramebufferDecoder.h"
 #include "Epub/htmlEntities.h"
 
@@ -24,16 +27,16 @@
 constexpr size_t MIN_SIZE_FOR_POPUP = 10 * 1024;  // 10KB
 constexpr size_t PARSE_BUFFER_SIZE = 1024;
 
-// If we have this many words buffered, lay out and consume all but the last line to free RAM.
-// Lowered from the historical 750 (PR #73): a large CJK block holds a words vector of ~24 bytes/word
-// (each CJK char is its own token) plus O(N) layout DP tables, whose coincident contiguous need can
-// refuse/abort the build on the ~200KB ESP32-C3 heap while the big SD reader font is resident. 256
-// keeps a block's words vector to ~6KB so it fits a modestly-fragmented heap; still builds ~1 page.
-// ParsedText's heap guards are the hard backstop; this bound keeps the peak small so they rarely trip.
-constexpr size_t TEXT_BLOCK_SOFT_FLUSH_WORDS = 256;
+// This number comes from PR #73
+// If we have > 750 words buffered up, perform the layout and consume out all but the last line
+// There should be enough here to build out 1-2 full pages and doing this will free up a lot of
+// memory.
+// Spotted when reading Intermezzo, there are some really long text blocks in there.
+constexpr size_t TEXT_BLOCK_SOFT_FLUSH_WORDS = 750;
 
-// CSS-heavy spans fragment text into more tokens, so flush at the same small bound.
-constexpr size_t TEXT_BLOCK_SOFT_FLUSH_WORDS_WITH_CSS = 256;
+// When CSS is enabled, flush earlier to save RAM. 320 is still more than enough to build a CJK
+// page at font size 14
+constexpr size_t TEXT_BLOCK_SOFT_FLUSH_WORDS_WITH_CSS = 320;
 
 // Hard cap on the number of anchor IDs recorded per chapter. Legitimate navigation
 // anchors (TOC entries, footnotes, cross-references) rarely exceed a few hundred per
@@ -49,17 +52,56 @@ constexpr const char* ITALIC_TAGS[] = {"i", "em"};
 constexpr const char* UNDERLINE_TAGS[] = {"u", "ins"};
 constexpr const char* LINETHROUGH_TAGS[] = {"del", "s", "strike"};
 constexpr const char* IMAGE_TAGS[] = {"img", "image"};
-constexpr const char* SKIP_TAGS[] = {"head"};
-
 bool isWhitespace(const char c) { return c == ' ' || c == '\r' || c == '\n' || c == '\t'; }
 
-bool matches(const char* tag_name, const char* const* possible_tags, size_t count) {
+std::string trimAndNormalize(const std::string& str) {
+  if (str.empty()) return "";
+  size_t start = 0;
+  while (start < str.size() && isWhitespace(str[start])) {
+    start++;
+  }
+  if (start == str.size()) return "";
+  size_t end = str.size() - 1;
+  while (end > start && isWhitespace(str[end])) {
+    end--;
+  }
+  std::string result;
+  result.reserve(end - start + 1);
+  bool inSpace = false;
+  for (size_t i = start; i <= end; i++) {
+    if (isWhitespace(str[i])) {
+      if (!inSpace) {
+        result.push_back(' ');
+        inSpace = true;
+      }
+    } else {
+      result.push_back(str[i]);
+      inSpace = false;
+    }
+  }
+  return result;
+}
+
+// ⚠️ 自己去前綴，不要依賴呼叫端。
+// v128 當初只把【部分】呼叫端從 name 換成 element，而 2026-08-24 的換基底又只轉了
+// strcmp/strcasecmp/matches(name, ... 三種字面樣式 —— 把 name 傳給 helper 的呼叫
+// （isHeaderOrBlock(name) 之類）從來不在那個 pattern 裡。當時的自檢是
+// 「grep 'strcmp(name,' 殘留 0 處」：【字面為真、實質失明】。
+// 判準要寫成語意（所有以元素名為參數的比對），而做法是讓共用的原語自己正規化。
+// xmlLocalName 是冪等的，所以已經去過前綴的 element 傳進來也完全等價。
+bool matches(const char* rawTagName, const char* const* possible_tags, size_t count) {
+  const char* const tag_name = xmlLocalName(rawTagName);
   for (size_t i = 0; i < count; i++) {
     if (strcmp(tag_name, possible_tags[i]) == 0) {
       return true;
     }
   }
   return false;
+}
+
+// 同 matches()：自己去前綴。不動 VisibleTextUtils.h —— 那是與 ProgressMapper 共用的。
+bool isNonVisibleTextTag(const char* rawName) {
+  return VisibleTextUtils::isNonVisibleElement(xmlLocalName(rawName));
 }
 
 const char* getAttribute(const XML_Char** atts, const char* attrName) {
@@ -200,6 +242,22 @@ void ChapterHtmlSlimParser::updateEffectiveInlineStyle() {
   }
 }
 
+bool ChapterHtmlSlimParser::ensureCurrentPage(const char* where) {
+  // v194：latch 不等於離開 callback。舊頁還在時也必須拒絕，否則 HR／圖會繼續配 vector。
+  if (buildAborted_) return false;
+  if (currentPage) return true;
+  // v194：排版中配不到 Page → latch，finishParse／suspendBuild 不提交半成品。
+  currentPage.reset(new (std::nothrow) Page());
+  if (!currentPage) {
+    Page::noteAllocFail(where, sizeof(Page));
+    latchBuildAborted();
+    return false;
+  }
+  currentPageNextY = 0;
+  currentPageVisibleOffsetSet = false;
+  return true;
+}
+
 void ChapterHtmlSlimParser::flushPendingAnchor() {
   if (pendingAnchorId.empty()) return;
 
@@ -207,14 +265,9 @@ void ChapterHtmlSlimParser::flushPendingAnchor() {
   // block is flushed so the chapter starts on a fresh page.
   if (std::find(tocAnchors.begin(), tocAnchors.end(), pendingAnchorId) != tocAnchors.end()) {
     if (currentPage && !currentPage->elements.empty()) {
-      completePageFn(std::move(currentPage), xpathParagraphIndex, xpathListItemIndex);
+      completePageFn(std::move(currentPage), xpathParagraphIndex, xpathListItemIndex, currentPageVisibleOffset);
       completedPageCount++;
-      currentPage.reset(new (std::nothrow) Page());
-      if (!currentPage) {
-        latchBuildAborted();
-        return;
-      }
-      currentPageNextY = 0;
+      if (!ensureCurrentPage("Page:flushPendingAnchor")) return;
     }
   }
 
@@ -223,9 +276,18 @@ void ChapterHtmlSlimParser::flushPendingAnchor() {
   pendingAnchorId.clear();
 }
 
+void ChapterHtmlSlimParser::setCurrentPageVisibleOffset(const uint32_t offset) {
+  if (currentPageVisibleOffsetSet) return;
+  // The first page always begins at the start of the body, even when the XHTML
+  // contains leading formatting whitespace before its first rendered word.
+  currentPageVisibleOffset = completedPageCount == 0 ? 0 : offset;
+  currentPageVisibleOffsetSet = true;
+}
+
 // flush the contents of partWordBuffer to currentTextBlock
 void ChapterHtmlSlimParser::flushPartWordBuffer() {
-  if (!currentTextBlock) return;  // block allocation was refused under low heap; nothing to flush to
+  // v194：ParsedText 配不到之後 currentTextBlock 是空的，不能解參考。
+  if (!currentTextBlock || buildAborted_) return;
   // Determine font style from depth-based tracking and CSS effective style
   const bool isBold = boldUntilDepth < depth || effectiveBold;
   const bool isItalic = italicUntilDepth < depth || effectiveItalic;
@@ -247,15 +309,14 @@ void ChapterHtmlSlimParser::flushPartWordBuffer() {
 
   // flush the buffer
   partWordBuffer[partWordBufferIndex] = '\0';
-  currentTextBlock->addWord(partWordBuffer, fontStyle, false, nextWordContinues);
-  if (currentTextBlock->hasOom()) latchBuildAborted();
+  currentTextBlock->addWord(partWordBuffer, fontStyle, false, nextWordContinues, partWordVisibleOffset);
   partWordBufferIndex = 0;
   nextWordContinues = false;
   listItemBulletOnly = false;
 }
 
 // start a new text block if needed
-void ChapterHtmlSlimParser::startNewTextBlock(const BlockStyle& blockStyle) {
+bool ChapterHtmlSlimParser::startNewTextBlock(const BlockStyle& blockStyle) {
   nextWordContinues = false;  // New block = new paragraph, no continuation
   if (currentTextBlock) {
     // already have a text block running and it is empty - just reuse it
@@ -271,14 +332,14 @@ void ChapterHtmlSlimParser::startNewTextBlock(const BlockStyle& blockStyle) {
         // The empty block was created by a <br> section separator. Inject a full line of
         // blank space before the following paragraph so the scene/section break is visible.
         // This only fires when the <br> block stayed empty (i.e. no inline text was added).
-        const int16_t lineHeight = static_cast<int16_t>(renderer.getLineHeight(fontId) * lineCompression + 0.5f);
+        const int16_t lineHeight = static_cast<int16_t>(renderer.getLineHeight(fontId, lineCompression));
         incoming.marginTop = static_cast<int16_t>(incoming.marginTop + lineHeight);
       }
 
       currentTextBlock->setBlockStyle(style.getCombinedBlockStyle(incoming, BlockStyle::CombineAxis::Vertical));
 
       flushPendingAnchor();
-      return;
+      return !buildAborted_;
     }
 
     // <li> added a bullet as the first word, making the block non-empty. When a nested
@@ -289,22 +350,31 @@ void ChapterHtmlSlimParser::startNewTextBlock(const BlockStyle& blockStyle) {
       currentTextBlock->setBlockStyle(style.getCombinedBlockStyle(blockStyle, BlockStyle::CombineAxis::Vertical));
       listItemBulletOnly = false;
       flushPendingAnchor();
-      return;
+      return !buildAborted_;
     }
 
     makePages();
   }
+  // v150（codex 抓到的提交縫）：makePages 期間 latch 之後，這裡的 flushPendingAnchor
+  // 若帶著 TOC anchor 會把【掉了行的當前頁】強制完成並送進 LUT。XML_StopParser 不會
+  // 中斷目前的 callback，只能靠這道 return。（Section 端的 aborted 檢查是第二道防線，
+  // 但深度防禦：不讓殘頁進 LUT 比事後丟掉整個 tmp 更乾淨。）
+  if (buildAborted_) return false;
   // If the pending anchor is a TOC chapter boundary, force a page break after the previous
   // block is flushed so the chapter starts on a fresh page.
   flushPendingAnchor();
+  if (buildAborted_) return false;
+  // v194：nothrow；失敗 latch，呼叫點必須立刻 return，不能再配 string／vector／shared_ptr。
   currentTextBlock.reset(
       new (std::nothrow) ParsedText(extraParagraphSpacing, hyphenationEnabled, focusReadingEnabled, blockStyle));
   if (!currentTextBlock) {
+    Page::noteAllocFail("ParsedText:startNewTextBlock", sizeof(ParsedText));
     latchBuildAborted();
-    return;
+    return false;
   }
   wordsExtractedInBlock = 0;
   listItemBulletOnly = false;
+  return true;
 }
 
 void ChapterHtmlSlimParser::emitHorizontalRule(const BlockStyle& blockStyle) {
@@ -314,19 +384,12 @@ void ChapterHtmlSlimParser::emitHorizontalRule(const BlockStyle& blockStyle) {
 
   if (currentTextBlock) {
     const BlockStyle parentBlockStyle = currentTextBlock->getBlockStyle();
-    startNewTextBlock(parentBlockStyle);
+    if (!startNewTextBlock(parentBlockStyle)) return;
   }
 
-  if (!currentPage) {
-    currentPage.reset(new (std::nothrow) Page());
-    if (!currentPage) {
-      LOG_ERR("EHP", "Failed to create page for horizontal rule");
-      return;
-    }
-    currentPageNextY = 0;
-  }
+  if (!ensureCurrentPage("Page:hr:first")) return;
 
-  const int16_t lineHeight = static_cast<int16_t>(renderer.getLineHeight(fontId) * lineCompression + 0.5f);
+  const int16_t lineHeight = static_cast<int16_t>(renderer.getLineHeight(fontId, lineCompression));
   const int16_t defaultVerticalSpacing = static_cast<int16_t>(lineHeight / 2);
   const int16_t topSpacing =
       static_cast<int16_t>((blockStyle.marginTop > 0 ? blockStyle.marginTop : defaultVerticalSpacing) +
@@ -342,14 +405,10 @@ void ChapterHtmlSlimParser::emitHorizontalRule(const BlockStyle& blockStyle) {
   const int16_t totalHeight = static_cast<int16_t>(topSpacing + ruleThickness + bottomSpacing);
 
   if (!currentPage->elements.empty() && currentPageNextY + totalHeight > viewportHeight) {
-    completePageFn(std::move(currentPage), xpathParagraphIndex, xpathListItemIndex);
+    setCurrentPageVisibleOffset(visibleTextOffset);
+    completePageFn(std::move(currentPage), xpathParagraphIndex, xpathListItemIndex, currentPageVisibleOffset);
     completedPageCount++;
-    currentPage.reset(new (std::nothrow) Page());
-    if (!currentPage) {
-      LOG_ERR("EHP", "Failed to create page after horizontal-rule page break");
-      return;
-    }
-    currentPageNextY = 0;
+    if (!ensureCurrentPage("Page:hr:break")) return;
   }
 
   currentPageNextY += topSpacing;
@@ -357,10 +416,16 @@ void ChapterHtmlSlimParser::emitHorizontalRule(const BlockStyle& blockStyle) {
   auto pageRule = std::shared_ptr<PageHorizontalRule>(
       new (std::nothrow) PageHorizontalRule(width, ruleThickness, xPos, currentPageNextY));
   if (!pageRule) {
+    // v194：LOG_ERR 在這台等於丟掉。與 Page 其他 nothrow 出口同一套 noteAllocFail。
+    Page::noteAllocFail("PageHorizontalRule:hr", sizeof(PageHorizontalRule));
     LOG_ERR("EHP", "Failed to create PageHorizontalRule");
+    // v194（複查）：**必須 latch**。只 return 會讓解析照常跑完 → 這一條線被靜默吞掉，
+    // 而 buildAborted_ 為 false 代表 Section 會把殘缺頁當成功、寫進 SD 快取（重刷韌體也清不掉）。
+    latchBuildAborted();
     return;
   }
   currentPage->elements.push_back(pageRule);
+  setCurrentPageVisibleOffset(visibleTextOffset);
   currentPageNextY = static_cast<int16_t>(currentPageNextY + ruleThickness + bottomSpacing);
 
   if (!pendingAnchorId.empty()) {
@@ -370,8 +435,24 @@ void ChapterHtmlSlimParser::emitHorizontalRule(const BlockStyle& blockStyle) {
 }
 
 void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char* name, const XML_Char** atts) {
+  // v150：latch 之後整個 callback 直接跳過 —— XML_StopParser 只擋【下一個】callback，
+  // 目前佇列中的照樣進來，而這裡面還有 push style stack / pendingFootnotes 等 throwing 配置。
+  if (static_cast<ChapterHtmlSlimParser*>(userData)->buildAborted_) return;
+
   auto* self = static_cast<ChapterHtmlSlimParser*>(userData);
+  // 先取 local name：命名空間處理是關閉的，元素名帶前綴原樣進來（Python ElementTree
+  // 重新序列化的書會是 <ns0:body>）。下面【所有】元素名比對都要用 element 而非 name。
   const char* const element = xmlLocalName(name);
+
+  if (strcasecmp(element, "body") == 0) {
+    // Case-insensitive to match ParagraphStreamer's tag matching (ProgressMapper). A case
+    // mismatch here would leave visibleTextOffset at 0 for the whole section, so every page
+    // would record offset 0 while the sync resolver still counts a non-zero offset.
+    self->insideBody = true;
+  }
+  if (self->insideBody && (self->nonVisibleTextDepth > 0 || isNonVisibleTextTag(element))) {
+    self->nonVisibleTextDepth++;
+  }
 
   // Middle of skip
   if (self->skipUntilDepth < self->depth) {
@@ -501,7 +582,7 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                            ? CssTextAlign::Justify
                            : static_cast<CssTextAlign>(self->paragraphAlignment);
     tableCellBlockStyle.alignment = align;
-    self->startNewTextBlock(tableCellBlockStyle);
+    if (!self->startNewTextBlock(tableCellBlockStyle)) return;
 
     const std::string headerText =
         "Tab Row " + std::to_string(self->tableRowIndex) + ", Cell " + std::to_string(self->tableColIndex) + ":";
@@ -515,7 +596,9 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
     self->updateEffectiveInlineStyle();
     const CssTextDecoration savedTextDecoration = self->effectiveTextDecoration;
     self->effectiveTextDecoration = CssTextDecoration::None;
+    self->syntheticCharacterData = true;
     self->characterData(userData, headerText.c_str(), static_cast<int>(headerText.length()));
+    self->syntheticCharacterData = false;
     if (self->partWordBufferIndex > 0) {
       self->flushPartWordBuffer();
     }
@@ -533,7 +616,7 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
     return;
   }
 
-  if (matches(name, IMAGE_TAGS, std::size(IMAGE_TAGS))) {
+  if (matches(element, IMAGE_TAGS, std::size(IMAGE_TAGS))) {
     std::string src;
     std::string alt;
     if (atts != nullptr) {
@@ -575,28 +658,77 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
             }
             std::string cachedImagePath = self->imageBasePath + std::to_string(self->imageCounter++) + ext;
 
-            // Extract image to cache file
-            HalFile cachedImageFile;
-            bool extractSuccess = false;
-            if (Storage.openFileForWrite("EHP", cachedImagePath, cachedImageFile)) {
-              extractSuccess = self->epub->readItemContentsToStream(resolvedPath, cachedImageFile, 4096);
-              cachedImageFile.flush();
-              cachedImageFile.close();
-            }
+            {
+              // v147（= v6 的回歸）：整段探測／抽取包進 FrameBufferLoan。
+              //
+              // 為什麼：DEFLATE 的解壓要 InflateStream::init(true) = state 約 11KB ＋
+              // LZ77 window 32KB【連續】。實機（v146 儀器）量到失敗當下 p2 最大 25,848、
+              // p3 最大 1,780 —— 32KB 配不出 → openFileForWrite 已建檔但一個位元組都沒寫
+              // → 留下 0 byte 檔（IMGFAIL layout-drop exists=1 size=0）→ 讀不到檔頭
+              // → 版面階段丟圖 → 使用者看到 "[Image: alt]"。
+              //
+              // 借了之後 InflateStream::init 會從 buildscratch 認領（它的註解寫明
+              // state+window 塞得進那 48KB），整段抽取對堆積的成本歸零。
+              //
+              // 安全性依據（動這段之前先重讀）：
+              //  ① 本函式只在【建置】期間執行，而建置持有 RenderLock
+              //     （EpubReaderActivity.cpp 背景建置那段）—— 不可能撞上繪製中。
+              //  ② startBuild 的外層借用已存在時，內層借用因 nesting guard 而 inert，
+              //     但 buildscratch 已經是借出狀態，init 照樣認領得到 —— 兩種情況都對。
+              //  ③ 下面 fallback 分支裡的 popupFn()（= showBuildPopup）自帶
+              //     `!renderer.hasFrameBuffer()` 守衛：借用期間它安靜跳過，不會畫。
+              //     ⚠️ 對抗式複查（codex）修正：deadline 重試【不保證】發生 ——
+              //     若該次 buildSomeMore 已滿足目標，while 直接退出。後果只是
+              //     「長時間抽取期間沒有 INDEXING popup」，純外觀，不碰 framebuffer。
+              //  ④ 借用結束後 framebuffer 內容未定義。真正的安全依據（codex 修正）是
+              //     【EPUB 下一次畫頁前無條件 renderer.clearScreen()】且背景建置不呼叫
+              //     display —— 不是 pagesUntilFullRefresh（那只在 popup 真的畫出時才設）。
+              //  ⑤ 殘餘降級（codex 指出）：buildscratch 只允許單一 claimant，若被先占
+              //     （現行程式碼無此路徑，防未來），init 落回 malloc 而 32KB 可能仍配不到
+              //     → 該張圖照樣被丟。ZipFile 會留下 "Failed to init inflate stream" 一行。
+              GfxRenderer::FrameBufferLoan imageProbeLoan(self->renderer);
 
-            if (extractSuccess) {
-              // Get image dimensions, retrying to absorb SD-card sync latency on slow
-              // cards. Replaces a blanket delay(50) that cost ~50ms on every image, and
-              // closes the silent-drop bug where a single getDimensions failure was fatal.
+              // Probe the dimensions from the entry's first bytes (early-aborted
+              // inflate, a few KB) instead of extracting the whole image now —
+              // extraction is deferred to the first render of the page (see
+              // ImageBlock's lazy extractor). This is what keeps first-open of an
+              // image-heavy chapter from stalling for seconds per image.
               ImageDimensions dims = {0, 0};
-              ImageToFramebufferDecoder* decoder = ImageDecoderFactory::getDecoder(cachedImagePath);
-              bool gotDimensions = false;
-              for (int attempt = 0; attempt < 3 && !gotDimensions; attempt++) {
-                if (attempt > 0) {
-                  delay(50);  // Give a slow SD card time to finish syncing before retrying
+              ImageDimsProbe headerProbe;
+              self->epub->readItemContentsToStream(resolvedPath, headerProbe, 1024, /*allowEarlyStop=*/true);
+              bool gotDimensions = headerProbe.getDimensions(dims);
+
+              if (!gotDimensions) {
+                // No header within the stream (rare) — fall back to extracting the
+                // whole image and probing the file. That can take seconds, so
+                // surface the indexing popup first (single-shot per parser).
+                if (self->popupFn && !self->imagePopupFired) {
+                  self->imagePopupFired = true;
+                  self->popupFn();
                 }
-                gotDimensions = decoder && decoder->getDimensions(cachedImagePath, dims);
+                HalFile cachedImageFile;
+                bool extractSuccess = false;
+                if (Storage.openFileForWrite("EHP", cachedImagePath, cachedImageFile)) {
+                  extractSuccess = self->epub->readItemContentsToStream(resolvedPath, cachedImageFile, 4096);
+                  cachedImageFile.flush();
+                  cachedImageFile.close();
+                }
+                if (extractSuccess) {
+                  // Retry to absorb SD-card sync latency on slow cards, and to close
+                  // the silent-drop bug where a single getDimensions failure was fatal.
+                  ImageToFramebufferDecoder* decoder = ImageDecoderFactory::getDecoder(cachedImagePath);
+                  for (int attempt = 0; attempt < 3 && !gotDimensions; attempt++) {
+                    if (attempt > 0) {
+                      delay(50);  // Give a slow SD card time to finish syncing before retrying
+                    }
+                    gotDimensions = decoder && decoder->getDimensions(cachedImagePath, dims);
+                  }
+                } else {
+                  LOG_ERR("EHP", "Failed to extract image");
+                }
               }
+              ParsedText::noteBuildProbe(4);  // v190：圖檔頭探測（含 fallback 抽取）可能整步不回
+
               if (gotDimensions) {
                 LOG_DBG("EHP", "Image dimensions: %dx%d", dims.width, dims.height);
 
@@ -700,7 +832,7 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                 }
                 if (self->currentTextBlock && !self->currentTextBlock->isEmpty()) {
                   const BlockStyle parentBlockStyle = self->currentTextBlock->getBlockStyle();
-                  self->startNewTextBlock(parentBlockStyle);
+                  if (!self->startNewTextBlock(parentBlockStyle)) return;
                 }
 
                 // Apply vertical margins from the container to the image.
@@ -722,47 +854,46 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                     (self->currentPageNextY + imageMarginTop + displayHeight + imageMarginBottom >
                      self->viewportHeight)) {
                   self->completePageFn(std::move(self->currentPage), self->xpathParagraphIndex,
-                                       self->xpathListItemIndex);
+                                       self->xpathListItemIndex, self->currentPageVisibleOffset);
                   self->completedPageCount++;
-                  self->currentPage.reset(new (std::nothrow) Page());
-                  if (!self->currentPage) {
-                    LOG_ERR("EHP", "Failed to create new page");
-                    self->latchBuildAborted();
-                    return;
-                  }
-                  self->currentPageNextY = 0;
-                } else if (!self->currentPage) {
-                  self->currentPage.reset(new (std::nothrow) Page());
-                  if (!self->currentPage) {
-                    LOG_ERR("EHP", "Failed to create initial page");
-                    self->latchBuildAborted();
-                    return;
-                  }
-                  self->currentPageNextY = 0;
+                  if (!self->ensureCurrentPage("Page:img:break")) return;
+                } else if (!self->ensureCurrentPage("Page:img:first")) {
+                  return;
                 }
 
-                // Apply top margin from container block
+                // Apply top margin from container block.
+                // 上游 #2959：先把上邊界夾到「這頁還放得下」的量——整頁高的圖沒有邊界的餘地，
+                // 而上面的換頁條件只在非空頁觸發，新頁上的圖會被邊界推出頁底 marginTop 像素；
+                // 大的底部保留區會默默吸收，薄的就越過實體邊緣、被 ImageBlock::render 的範圍
+                // 檢查整張丟掉。（下面 v123 的縮圖段在這條夾限之後理論上不再觸發，留作防線。）
+                if (self->currentPageNextY + imageMarginTop + displayHeight > self->viewportHeight) {
+                  const int room = self->viewportHeight - displayHeight - self->currentPageNextY;
+                  imageMarginTop = static_cast<int16_t>(room > 0 ? room : 0);
+                }
                 self->currentPageNextY += imageMarginTop;
 
-                // v123:把圖縮到「這一頁真正剩下的高度」。
+                // v123：把圖縮到「這一頁真正剩下的高度」。
                 //
-                // 上面的縮放是拿【整頁高度】(viewportHeight)當上限算的,但圖會被放在
+                // 上面的縮放是拿【整頁高度】（viewportHeight）當上限算的，但圖會被放在
                 // currentPageNextY —— 一個已經被上緣邊距推下來的位置。而換頁條件帶著
-                // `!currentPage->elements.empty()` 這道守衛(否則放不下的圖會換到新頁還是
-                // 放不下,無限換頁),所以在【空頁】上放不下時:不換頁、也不縮圖,就這樣
+                // `!currentPage->elements.empty()` 這道守衛（否則放不下的圖會換到新頁還是
+                // 放不下，無限換頁），所以在【空頁】上放不下時：不換頁、也不縮圖，就這樣
                 // 以溢出的座標排下去。
                 //
-                // 後果不是「圖被切掉」而是「整張圖消失」:ImageBlock::render 開頭的邊界檢查
-                // 會靜默 return(實測 512x712@8,93 對上 528x792,超出 13 px),
-                // 而 renderPlaceholder 沒有那道檢查、照畫不誤 —— 使用者看到的是一個整頁的
-                // 空白框,而 diag.log 在 v122 加上儀器之前一個字都沒有。
+                // 後果不是「圖被切掉」而是「整張圖消失」：ImageBlock::render 開頭的邊界檢查
+                // 會靜默 return，而 renderPlaceholder 沒有那道檢查、照畫不誤 ——
+                // 使用者看到的是一個整頁的空白框。
                 //
-                // 縮完之後 y+height 必定落在螢幕內:displayHeight ≤ viewportHeight −
-                // currentPageNextY,而畫面座標 y = orientedMarginTop + currentPageNextY,
+                // ⚠️ 2026-08-26 實機在【換基底後的新樹】重現，數字與 v123 當初逐位元組相同：
+                //   [IMG] Invalid render position: (8,93) size (512x712) screen (528x792)
+                //   93 + 712 = 805 > 792，超出底部 13 px。（實機實測的一張章首圖。）
+                //
+                // 縮完之後 y+height 必定落在螢幕內：displayHeight ≤ viewportHeight −
+                // currentPageNextY，而畫面座標 y = orientedMarginTop + currentPageNextY，
                 // 故 y + displayHeight ≤ orientedMarginTop + viewportHeight
-                // = screenHeight − orientedMarginBottom ≤ screenHeight。
+                // = screenHeight − orientedMarginBottom ≤ screenHeight。**這是算術不是調校。**
                 //
-                // 放得下的圖完全不受影響(條件不成立 = no-op),所以這不會動到任何目前
+                // 放得下的圖完全不受影響（條件不成立 = no-op），所以這不會動到任何目前
                 // 畫得出來的版面。
                 const int availableHeight = static_cast<int>(self->viewportHeight) - self->currentPageNextY;
                 if (availableHeight > 0 && displayHeight > availableHeight) {
@@ -773,22 +904,33 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                 }
 
                 // Create ImageBlock and add to page
-                std::shared_ptr<ImageBlock> imageBlock(
-                    new (std::nothrow) ImageBlock(cachedImagePath, displayWidth, displayHeight));
+                // nothrow: make_shared uses bare new, which aborts on OOM under
+                // -fno-exceptions; images arrive mid-parse when the heap is at its
+                // most loaded, so this must fail soft into the null-check below.
+                auto imageBlock = std::shared_ptr<ImageBlock>(
+                    new (std::nothrow) ImageBlock(cachedImagePath, resolvedPath, displayWidth, displayHeight));
                 if (!imageBlock) {
+                  // v194：LOG_ERR 在這台等於丟掉。走 ImageBlock 既有 noteFailure，閱讀器每圈倒進 diag.log。
+                  ImageBlock::noteFailure("layout-alloc-imageblock max=%u",
+                                          static_cast<unsigned>(ESP.getMaxAllocHeap()));
                   LOG_ERR("EHP", "Failed to create ImageBlock");
+                  // v194（複查）：**必須 latch**——否則這張圖被靜默吞掉，而且殘缺頁會被寫成合法快取。
                   self->latchBuildAborted();
                   return;
                 }
                 int xPos = (self->viewportWidth - displayWidth) / 2;
-                std::shared_ptr<PageImage> pageImage(
-                    new (std::nothrow) PageImage(imageBlock, xPos, self->currentPageNextY));
+                auto pageImage =
+                    std::shared_ptr<PageImage>(new (std::nothrow) PageImage(imageBlock, xPos, self->currentPageNextY));
                 if (!pageImage) {
+                  // v194：LOG_ERR 在這台等於丟掉。與 PageImage::deserialize 同一套 noteAllocFail。
+                  Page::noteAllocFail("PageImage:layout", sizeof(PageImage));
                   LOG_ERR("EHP", "Failed to create PageImage");
+                  // v194（複查）：同上，必須 latch。
                   self->latchBuildAborted();
                   return;
                 }
                 self->currentPage->elements.push_back(pageImage);
+                self->setCurrentPageVisibleOffset(self->visibleTextOffset);
                 self->currentPageNextY += displayHeight + imageMarginBottom;
 
                 // The image consumed the empty block's accumulated vertical spacing.
@@ -805,20 +947,23 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                 self->depth += 1;
                 return;
               } else {
-                LOG_ERR("EHP", "Failed to get image dimensions");
-                // v126:這條路是在【版面階段】把整張圖從頁面移除(v24 記錄過的失敗形狀:
-                // 「連框都沒有、圖整個從排版消失」),而它此前只有 LOG_ERR —— 在這台沒有
-                // 序列埠的機器上等於丟掉,所以「圖不見了」在 diag.log 上完全查不到。
-                // 只掛路徑、【不覆寫階段碼】:解碼器自己回報的階段更精確(例如尺寸超限是
-                // FAIL_BAD_DIM,並把寬度放進 code)。由閱讀器那一層讀走寫進 diag.log。
-                if (ImageBlock::lastFailPath[0] == '\0') {
-                  snprintf(ImageBlock::lastFailPath, sizeof(ImageBlock::lastFailPath), "layout-drop %s",
-                           cachedImagePath.c_str());
+                // v146 儀器：這條路【在版面階段丟掉整張圖】並刪掉抽出來的檔案，
+                // 而它原本只寫 LOG_ERR = 這台沒有序列埠的機器上等於什麼都沒留下。
+                // 使用者看到的是 "[Image: alt]" 替代文字，而 diag.log 一個字都沒有。
+                // 記下【檔案實際狀態】才分得出是哪一種失敗：不存在／0 byte／格式不認得／
+                // 檔頭壞掉／尺寸超限。
+                size_t sz = 0;
+                const bool exists = Storage.exists(cachedImagePath.c_str());
+                if (exists) {
+                  HalFile probe;
+                  if (Storage.openFileForRead("EHP", cachedImagePath, probe)) sz = probe.size();
                 }
+                ImageBlock::noteFailure("layout-drop exists=%d size=%u %s", exists ? 1 : 0,
+                                        static_cast<unsigned>(sz), cachedImagePath.c_str());
+                LOG_ERR("EHP", "Failed to get image dimensions (exists=%d size=%u)", exists ? 1 : 0,
+                        static_cast<unsigned>(sz));
                 Storage.remove(cachedImagePath.c_str());
               }
-            } else {
-              LOG_ERR("EHP", "Failed to extract image");
             }
           }  // isFormatSupported
         }
@@ -827,12 +972,16 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
       // Fallback to alt text if image processing fails
       if (!alt.empty()) {
         alt = "[Image: " + alt + "]";
-        self->startNewTextBlock(self->blockStyleStack.back()
-                                    .getCombinedBlockStyle(centeredBlockStyle, BlockStyle::CombineAxis::Horizontal)
-                                    .withoutBottom());
+        if (!self->startNewTextBlock(self->blockStyleStack.back()
+                                         .getCombinedBlockStyle(centeredBlockStyle, BlockStyle::CombineAxis::Horizontal)
+                                         .withoutBottom())) {
+          return;
+        }
         self->italicUntilDepth = std::min(self->italicUntilDepth, self->depth);
         self->depth += 1;
+        self->syntheticCharacterData = true;
         self->characterData(userData, alt.c_str(), alt.length());
+        self->syntheticCharacterData = false;
         // Skip any child content (skip until parent as we pre-advanced depth above)
         self->skipUntilDepth = self->depth - 1;
         return;
@@ -845,7 +994,33 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
     }
   }
 
-  if (matches(name, SKIP_TAGS, std::size(SKIP_TAGS))) {
+  // Ruby tag handling
+  if (strcmp(element, "ruby") == 0) {
+    // <ruby> is an inline element: a base that follows text with no whitespace between them
+    // continues the same visual word, exactly like <b>/<i> handling in endElement().
+    if (self->partWordBufferIndex > 0) {
+      self->flushPartWordBuffer();
+      self->nextWordContinues = true;
+    }
+    self->inRuby = true;
+    self->rubyStartWordIndex = self->currentTextBlock ? static_cast<int>(self->currentTextBlock->size()) : 0;
+    if (self->currentTextBlock) {
+      self->currentTextBlock->ensureRubyCapacity();
+    }
+    self->rubyTextBuffer.clear();
+    self->depth += 1;
+    return;
+  }
+  if (strcmp(element, "rt") == 0) {
+    if (self->partWordBufferIndex > 0) {
+      self->flushPartWordBuffer();
+    }
+    self->collectingRubyText = true;
+    self->depth += 1;
+    return;
+  }
+
+  if (isNonVisibleTextTag(name)) {  // 走會去前綴的包裝，不要直接呼叫 VisibleTextUtils
     // start skip
     self->skipUntilDepth = self->depth;
     self->depth += 1;
@@ -931,7 +1106,7 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
     return;
   }
 
-  if (matches(name, HEADER_TAGS, std::size(HEADER_TAGS))) {
+  if (matches(element, HEADER_TAGS, std::size(HEADER_TAGS))) {
     self->currentCssStyle = cssStyle;
     auto headerBlockStyle = BlockStyle::fromCssStyle(cssStyle, emSize, CssTextAlign::Center, self->viewportWidth);
     headerBlockStyle.textAlignDefined = true;
@@ -941,52 +1116,60 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
     const auto accumulated =
         self->blockStyleStack.back().getCombinedBlockStyle(headerBlockStyle, BlockStyle::CombineAxis::Horizontal);
     self->blockStyleStack.push_back(accumulated);
-    self->startNewTextBlock(accumulated.withoutBottom());
+    if (!self->startNewTextBlock(accumulated.withoutBottom())) return;
     self->boldUntilDepth = std::min(self->boldUntilDepth, self->depth);
     self->updateEffectiveInlineStyle();
-  } else if (matches(name, BLOCK_TAGS, std::size(BLOCK_TAGS))) {
+  } else if (matches(element, BLOCK_TAGS, std::size(BLOCK_TAGS))) {
     if (strcmp(element, "br") == 0) {
       if (self->partWordBufferIndex > 0) {
         // flush word preceding <br/> to currentTextBlock before calling startNewTextBlock
         self->flushPartWordBuffer();
       }
-      // Tag the new block so startNewTextBlock can inject a full line-height gap if
-      // the block remains empty (i.e. <br> is a section separator between paragraphs).
-      // If the block gets text added before the next block opens it becomes non-empty,
-      // goes through makePages() normally, and the flag has no effect (inline <br> case).
-      BlockStyle brStyle =
-          self->currentTextBlock ? self->currentTextBlock->getBlockStyle() : self->blockStyleStack.back();
+      // A <br> after text is a line break: start the next block with the container's
+      // vertical margins stripped, matching browsers, which never apply paragraph
+      // margins at a <br>. This is what keeps <br>-per-paragraph books (common CJK
+      // web-novel formatting) from re-adding container spacing at every paragraph
+      // and collapsing page capacity.
+      // A <br> on an empty block (consecutive <br>s, or a standalone <br> between
+      // blocks) is a scene-break separator: keep the container margins so deposited
+      // vertical spacing survives. Either way the block is tagged so that if it
+      // stays empty, startNewTextBlock injects a full line-height gap when the next
+      // block opens; once text follows the tag is inert.
+      // Style comes from the block style stack, not the current block, so a closed
+      // element's style can't leak through (#2679).
+      BlockStyle brStyle = self->blockStyleStack.back();
+      if (self->currentTextBlock && !self->currentTextBlock->isEmpty()) {
+        brStyle = brStyle.withoutTop().withoutBottom();
+      }
       brStyle.fromBrElement = true;
-      self->startNewTextBlock(brStyle);
+      if (!self->startNewTextBlock(brStyle)) return;
     } else {
       self->currentCssStyle = cssStyle;
       const auto accumulated = self->blockStyleStack.back().getCombinedBlockStyle(userAlignmentBlockStyle,
                                                                                   BlockStyle::CombineAxis::Horizontal);
       self->blockStyleStack.push_back(accumulated);
-      self->startNewTextBlock(accumulated.withoutBottom());
+      if (!self->startNewTextBlock(accumulated.withoutBottom())) return;
       self->updateEffectiveInlineStyle();
-
-      if (!self->currentTextBlock) return;  // block alloc refused under low heap; don't deref null
       if (strcmp(element, "li") == 0) {
-        self->currentTextBlock->addWord("\xe2\x80\xa2", EpdFontFamily::REGULAR);
+        self->currentTextBlock->addWord("\xe2\x80\xa2", EpdFontFamily::REGULAR, false, false, self->visibleTextOffset);
         self->listItemBulletOnly = true;
       }
     }
-  } else if (matches(name, UNDERLINE_TAGS, std::size(UNDERLINE_TAGS))) {
+  } else if (matches(element, UNDERLINE_TAGS, std::size(UNDERLINE_TAGS))) {
     // Flush buffer before style change so preceding text gets current style
     if (self->partWordBufferIndex > 0) {
       self->flushPartWordBuffer();
       self->nextWordContinues = true;
     }
     self->pushDecorationStyleEntry(CssTextDecoration::Underline, cssStyle);
-  } else if (matches(name, LINETHROUGH_TAGS, std::size(LINETHROUGH_TAGS))) {
+  } else if (matches(element, LINETHROUGH_TAGS, std::size(LINETHROUGH_TAGS))) {
     // Flush buffer before style change so preceding text gets current style
     if (self->partWordBufferIndex > 0) {
       self->flushPartWordBuffer();
       self->nextWordContinues = true;
     }
     self->pushDecorationStyleEntry(CssTextDecoration::LineThrough, cssStyle);
-  } else if (matches(name, BOLD_TAGS, std::size(BOLD_TAGS))) {
+  } else if (matches(element, BOLD_TAGS, std::size(BOLD_TAGS))) {
     // Flush buffer before style change so preceding text gets current style
     if (self->partWordBufferIndex > 0) {
       self->flushPartWordBuffer();
@@ -1006,7 +1189,7 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
     applyDirectionToEntry(entry, cssStyle);
     self->inlineStyleStack.push_back(entry);
     self->updateEffectiveInlineStyle();
-  } else if (matches(name, ITALIC_TAGS, std::size(ITALIC_TAGS))) {
+  } else if (matches(element, ITALIC_TAGS, std::size(ITALIC_TAGS))) {
     // Flush buffer before style change so preceding text gets current style
     if (self->partWordBufferIndex > 0) {
       self->flushPartWordBuffer();
@@ -1082,11 +1265,29 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
 }
 
 void XMLCALL ChapterHtmlSlimParser::characterData(void* userData, const XML_Char* s, const int len) {
-  auto* self = static_cast<ChapterHtmlSlimParser*>(userData);
+  // v149：latch 之後（或 addWord 剛拒絕過）就別再進 token 了 —— XML_StopParser 不會中斷
+  // 【目前】的 callback 堆疊，而 soft-flush 尾端的檢查要等 block 結束才輪到。這一行讓
+  // 拒絕與停止之間的空轉縮到最短。成本：每個 callback 一次 bool 比較。
+  {
+    auto* self0 = static_cast<ChapterHtmlSlimParser*>(userData);
+    if (self0->buildAborted_) return;
+    if (self0->currentTextBlock && self0->currentTextBlock->hasOom()) {
+      self0->latchBuildAborted();
+      return;
+    }
+  }
 
-  // A block allocation was refused under low heap: no block to accumulate into, and the build is
-  // already latched for abandon. Stop before dereferencing a null currentTextBlock below.
-  if (!self->currentTextBlock) return;
+  auto* self = static_cast<ChapterHtmlSlimParser*>(userData);
+  const bool countVisibleOffsets = self->insideBody && self->nonVisibleTextDepth == 0 && !self->syntheticCharacterData;
+  const uint32_t callbackVisibleOffset = self->visibleTextOffset;
+  if (countVisibleOffsets) {
+    const unsigned char* ptr = reinterpret_cast<const unsigned char*>(s);
+    const unsigned char* end = ptr + len;
+    while (ptr < end) {
+      utf8NextCodepoint(&ptr);
+      self->visibleTextOffset++;
+    }
+  }
 
   // Skip content of nested table
   if (self->tableDepth > 1) {
@@ -1095,6 +1296,12 @@ void XMLCALL ChapterHtmlSlimParser::characterData(void* userData, const XML_Char
 
   // Middle of skip
   if (self->skipUntilDepth < self->depth) {
+    return;
+  }
+
+  // Collect ruby text instead of normal word processing
+  if (self->collectingRubyText) {
+    self->rubyTextBuffer.append(s, len);
     return;
   }
 
@@ -1126,7 +1333,13 @@ void XMLCALL ChapterHtmlSlimParser::characterData(void* userData, const XML_Char
     self->currentFootnote.number[self->currentFootnoteLinkTextLen] = '\0';
   }
 
+  uint32_t nextCodepointOffset = callbackVisibleOffset;
   for (int i = 0; i < len; i++) {
+    const uint32_t codepointOffset = nextCodepointOffset;
+    if (countVisibleOffsets && (static_cast<uint8_t>(s[i]) & 0xC0) != 0x80) {
+      nextCodepointOffset++;
+    }
+
     if (isWhitespace(s[i])) {
       // Currently looking at whitespace, if there's anything in the partWordBuffer, flush it
       if (self->partWordBufferIndex > 0) {
@@ -1164,6 +1377,7 @@ void XMLCALL ChapterHtmlSlimParser::characterData(void* userData, const XML_Char
       self->partWordBuffer[0] = ' ';
       self->partWordBuffer[1] = '\0';
       self->partWordBufferIndex = 1;
+      self->partWordVisibleOffset = codepointOffset;
       self->nextWordContinues = true;  // Attach space to previous word (no break).
       self->flushPartWordBuffer();
 
@@ -1183,6 +1397,7 @@ void XMLCALL ChapterHtmlSlimParser::characterData(void* userData, const XML_Char
       self->partWordBuffer[0] = ' ';
       self->partWordBuffer[1] = '\0';
       self->partWordBufferIndex = 1;
+      self->partWordVisibleOffset = codepointOffset;
       self->nextWordContinues = true;
       self->flushPartWordBuffer();
 
@@ -1217,6 +1432,13 @@ void XMLCALL ChapterHtmlSlimParser::characterData(void* userData, const XML_Char
       if (safeLen < self->partWordBufferIndex && safeLen > 0) {
         // Incomplete UTF-8 sequence at the end — save it before flushing
         int overflow = self->partWordBufferIndex - safeLen;
+        uint32_t overflowVisibleOffset = self->partWordVisibleOffset;
+        const unsigned char* offsetPtr = reinterpret_cast<const unsigned char*>(self->partWordBuffer);
+        const unsigned char* const safeEnd = offsetPtr + safeLen;
+        while (offsetPtr < safeEnd) {
+          utf8NextCodepoint(&offsetPtr);
+          overflowVisibleOffset++;
+        }
         char saved[4];
         for (int j = 0; j < overflow; j++) {
           saved[j] = self->partWordBuffer[safeLen + j];
@@ -1228,12 +1450,16 @@ void XMLCALL ChapterHtmlSlimParser::characterData(void* userData, const XML_Char
           self->partWordBuffer[j] = saved[j];
         }
         self->partWordBufferIndex = overflow;
+        self->partWordVisibleOffset = overflowVisibleOffset;
       } else {
         self->flushPartWordBuffer();
         self->nextWordContinues = true;
       }
     }
 
+    if (self->partWordBufferIndex == 0) {
+      self->partWordVisibleOffset = codepointOffset;
+    }
     self->partWordBuffer[self->partWordBufferIndex++] = s[i];
   }
 
@@ -1251,8 +1477,16 @@ void XMLCALL ChapterHtmlSlimParser::characterData(void* userData, const XML_Char
                                         : self->viewportWidth;
     self->currentTextBlock->layoutAndExtractLines(
         self->renderer, self->fontId, effectiveWidth,
-        [self](const std::shared_ptr<TextBlock>& textBlock) { self->addLineToPage(textBlock); }, false);
-    if (self->currentTextBlock->hasOom()) self->latchBuildAborted();
+        [self](const std::shared_ptr<TextBlock>& textBlock, const uint32_t offset) {
+          self->addLineToPage(textBlock, offset);
+        },
+        false);
+    // v149：addWord 的守衛可能在這個 block 進 token 時拒絕過（掉字）。
+    // latch 起來讓本章不被提交 —— 不是讓半截內容變成合法快取。
+    if (self->currentTextBlock->hasOom()) {
+      LOG_ERR("EHP", "Build aborted: low memory while adding words");
+      self->latchBuildAborted();
+    }
   }
 }
 
@@ -1273,9 +1507,61 @@ void XMLCALL ChapterHtmlSlimParser::defaultHandlerExpand(void* userData, const X
 }
 
 void XMLCALL ChapterHtmlSlimParser::endElement(void* userData, const XML_Char* name) {
+  // v150：latch 之後整個 callback 直接跳過 —— XML_StopParser 只擋【下一個】callback，
+  // 目前佇列中的照樣進來，而這裡面還有 push style stack / pendingFootnotes 等 throwing 配置。
+  if (static_cast<ChapterHtmlSlimParser*>(userData)->buildAborted_) return;
+
   auto* self = static_cast<ChapterHtmlSlimParser*>(userData);
   const char* const element = xmlLocalName(name);
 
+  if (self->nonVisibleTextDepth > 0) {
+    self->nonVisibleTextDepth--;
+  }
+
+  // Ruby text: </rt> distributes ruby to base words, </ruby> resets ruby state
+  if (strcmp(element, "rt") == 0) {
+    self->collectingRubyText = false;
+    if (self->inRuby && self->currentTextBlock) {
+      const int currentWordCount = static_cast<int>(self->currentTextBlock->size());
+      const int baseWordCount = currentWordCount - self->rubyStartWordIndex;
+      std::string cleanRuby = trimAndNormalize(self->rubyTextBuffer);
+      if (!cleanRuby.empty()) {
+        if (baseWordCount > 0) {
+          self->currentTextBlock->setRubyGroupAt(self->rubyStartWordIndex, baseWordCount, cleanRuby);
+          self->rubyStartWordIndex = currentWordCount;
+        } else if (self->rubyStartWordIndex > 0) {
+          int leaderIdx = self->rubyStartWordIndex - 1;
+          while (leaderIdx >= 0 &&
+                 (self->currentTextBlock->getWordStyleAt(leaderIdx) & EpdFontFamily::RUBY_CONTINUE) != 0) {
+            leaderIdx--;
+          }
+          if (leaderIdx >= 0) {
+            std::string prevRuby = self->currentTextBlock->getRubyTextAt(leaderIdx);
+            self->currentTextBlock->setRubyForWordAt(leaderIdx, prevRuby + cleanRuby);
+          }
+        }
+      }
+    }
+    self->rubyTextBuffer.clear();
+    // Inline close: the next base (e.g. 字 in <ruby>漢<rt>かん</rt>字<rt>じ</rt></ruby>) joins the
+    // preceding one with no space. Whitespace in the source resets this in characterData().
+    if (self->currentTextBlock && !self->currentTextBlock->isEmpty()) {
+      self->nextWordContinues = true;
+    }
+    self->depth -= 1;
+    return;
+  }
+  if (strcmp(element, "ruby") == 0 && self->inRuby) {
+    self->inRuby = false;
+    self->rubyStartWordIndex = -1;
+    self->rubyTextBuffer.clear();
+    // Inline close: text following </ruby> joins the annotated base with no space.
+    if (self->currentTextBlock && !self->currentTextBlock->isEmpty()) {
+      self->nextWordContinues = true;
+    }
+    self->depth -= 1;
+    return;
+  }
   // Check if any style state will change after we decrement depth
   // If so, we MUST flush the partWordBuffer with the CURRENT style first
   // Note: depth hasn't been decremented yet, so we check against (depth - 1)
@@ -1300,12 +1586,12 @@ void XMLCALL ChapterHtmlSlimParser::endElement(void* userData, const XML_Char* n
   if (self->partWordBufferIndex > 0) {
     // Flush if style will change OR if we're closing a block/structural element
     const bool isInlineTag = !headerOrBlockTag && !tableStructuralTag &&
-                             !matches(name, IMAGE_TAGS, std::size(IMAGE_TAGS)) && self->depth != 1;
-    const bool shouldFlush = styleWillChange || headerOrBlockTag || matches(name, BOLD_TAGS, std::size(BOLD_TAGS)) ||
-                             matches(name, ITALIC_TAGS, std::size(ITALIC_TAGS)) ||
-                             matches(name, UNDERLINE_TAGS, std::size(UNDERLINE_TAGS)) ||
-                             matches(name, LINETHROUGH_TAGS, std::size(LINETHROUGH_TAGS)) || tableStructuralTag ||
-                             matches(name, IMAGE_TAGS, std::size(IMAGE_TAGS)) || self->depth == 1;
+                             !matches(element, IMAGE_TAGS, std::size(IMAGE_TAGS)) && self->depth != 1;
+    const bool shouldFlush = styleWillChange || headerOrBlockTag || matches(element, BOLD_TAGS, std::size(BOLD_TAGS)) ||
+                             matches(element, ITALIC_TAGS, std::size(ITALIC_TAGS)) ||
+                             matches(element, UNDERLINE_TAGS, std::size(UNDERLINE_TAGS)) ||
+                             matches(element, LINETHROUGH_TAGS, std::size(LINETHROUGH_TAGS)) || tableStructuralTag ||
+                             matches(element, IMAGE_TAGS, std::size(IMAGE_TAGS)) || self->depth == 1;
 
     if (shouldFlush) {
       self->flushPartWordBuffer();
@@ -1328,7 +1614,24 @@ void XMLCALL ChapterHtmlSlimParser::endElement(void* userData, const XML_Char* n
       entry.href[sizeof(entry.href) - 1] = '\0';
       int wordIndex =
           self->wordsExtractedInBlock + (self->currentTextBlock ? static_cast<int>(self->currentTextBlock->size()) : 0);
-      self->pendingFootnotes.push_back({wordIndex, entry});
+      // v187：項目 288 B（href 256）。這個 vector 在同一個 block 內會累積到版面追上為止（索引頁一段
+      // 幾十個連結）——封頂 32 條，且成長前先看連續塊，配不到就丟這條註腳，別在建置視窗 abort。
+      constexpr size_t MAX_PENDING_FOOTNOTES = 32;
+      auto& pf = self->pendingFootnotes;
+      if (pf.size() < MAX_PENDING_FOOTNOTES) {
+        bool room = true;
+        if (pf.size() == pf.capacity()) {
+          const size_t nextCap = pf.capacity() ? pf.capacity() * 2 : 1;
+          room = heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT) >= nextCap * sizeof(pf[0]) + 2048;
+        }
+        if (room) {
+          pf.push_back({wordIndex, entry});
+        } else {
+          Page::footnoteDrops++;
+        }
+      } else {
+        Page::footnoteDrops++;  // 同一段超過 32 個連結（索引頁）：後面的不掛註腳
+      }
     }
     self->insideFootnoteLink = false;
   }
@@ -1385,6 +1688,9 @@ void XMLCALL ChapterHtmlSlimParser::endElement(void* userData, const XML_Char* n
         self->currentTextBlock->setBlockStyle(style.addBottom(self->blockStyleStack.back()));
       }
       self->blockStyleStack.pop_back();
+      // Start a new text block with the parent style to prevent subsequent bare text
+      // from inheriting the closed block style (e.g. alignment or margins).
+      if (!self->startNewTextBlock(self->blockStyleStack.back())) return;
     }
 
     // </li> closes: if the bullet never got inline text (empty <li> or <li> with only
@@ -1394,14 +1700,14 @@ void XMLCALL ChapterHtmlSlimParser::endElement(void* userData, const XML_Char* n
       self->listItemBulletOnly = false;
     }
   }
+  if (strcmp(element, "body") == 0) {
+    self->insideBody = false;
+  }
 }
 
 ChapterHtmlSlimParser::~ChapterHtmlSlimParser() { abortParse(); }
 
 bool ChapterHtmlSlimParser::beginParse() {
-  builddiag::parseError[0] = '\0';  // clear the previous section's diagnostic breadcrumb
-  builddiag::parseLine = 0;
-  builddiag::note[0] = '\0';
   // Initialize block style stack with a root entry representing "no ancestor block elements".
   // The user's paragraph alignment is set as the default so child elements without explicit
   // text-align inherit it correctly through getCombinedBlockStyle.
@@ -1417,7 +1723,8 @@ bool ChapterHtmlSlimParser::beginParse() {
   paragraphAlignmentBlockStyle.textAlignDefined = true;
   const auto align = rootBlockStyle.alignment;
   paragraphAlignmentBlockStyle.alignment = align;
-  startNewTextBlock(paragraphAlignmentBlockStyle);
+  // v194：第一個 block 配不到時 xmlParser_ 還不存在。直接回 false，不要繼續建 parser、開檔。
+  if (!startNewTextBlock(paragraphAlignmentBlockStyle)) return false;
 
   xmlParser_ = XML_ParserCreate(nullptr);
   if (!xmlParser_) {
@@ -1452,7 +1759,6 @@ ChapterHtmlSlimParser::ParseStatus ChapterHtmlSlimParser::parseStep() {
   void* const buf = XML_GetBuffer(xmlParser_, PARSE_BUFFER_SIZE);
   if (!buf) {
     LOG_ERR("EHP", "Couldn't allocate memory for buffer");
-    snprintf(builddiag::note, sizeof(builddiag::note), "getbuf");
     return ParseStatus::Error;
   }
 
@@ -1460,27 +1766,23 @@ ChapterHtmlSlimParser::ParseStatus ChapterHtmlSlimParser::parseStep() {
 
   if (len == 0 && parseFile_.available() > 0) {
     LOG_ERR("EHP", "File read error");
-    snprintf(builddiag::note, sizeof(builddiag::note), "fileread");
     return ParseStatus::Error;
   }
 
   const int done = parseFile_.available() == 0;
 
-  const XML_Status parseStatus = XML_ParseBuffer(xmlParser_, static_cast<int>(len), done);
+  const int parseStatus = XML_ParseBuffer(xmlParser_, static_cast<int>(len), done);
+  ParsedText::noteBuildProbe(5);  // v190：步尾；內層沒走到時這就是整步盲區
 
-  // A token/layout/page allocation was refused under low heap during this buffer's callbacks.
-  // latchBuildAborted() also called XML_StopParser, so parseStatus is XML_STATUS_ERROR here; report
-  // it as a memory abandon (caller shows the index-failed popup), not a spurious parse error.
+  // ⚠️ 順序不可對調：latchBuildAborted() 的 XML_StopParser 也會讓上面回 XML_STATUS_ERROR。
+  // 先查旗標才分得出「低記憶體中止」與「這份 XHTML 真的壞了」—— 兩者的處置完全不同
+  // （parse error 該丟掉重來；OOM 該保留 partial、等記憶體寬鬆時再試）。
   if (buildAborted_) {
-    LOG_ERR("EHP", "Build aborted: low memory during layout");
-    snprintf(builddiag::note, sizeof(builddiag::note), "lowmem");
+    LOG_ERR("EHP", "Build aborted: low memory");
     return ParseStatus::Error;
   }
 
   if (parseStatus == XML_STATUS_ERROR) {
-    snprintf(builddiag::parseError, sizeof(builddiag::parseError), "%s",
-             XML_ErrorString(XML_GetErrorCode(xmlParser_)));
-    builddiag::parseLine = static_cast<int>(XML_GetCurrentLineNumber(xmlParser_));
     LOG_ERR("EHP", "Parse error at line %lu:\n%s", XML_GetCurrentLineNumber(xmlParser_),
             XML_ErrorString(XML_GetErrorCode(xmlParser_)));
     return ParseStatus::Error;
@@ -1502,10 +1804,10 @@ void ChapterHtmlSlimParser::abortParse() {
 
 void ChapterHtmlSlimParser::latchBuildAborted() {
   buildAborted_ = true;
-  // Stop expat immediately so no further callback runs on now-inconsistent state (e.g. a nulled
-  // currentTextBlock after a refused ParsedText/Page allocation). XML_ParseBuffer then returns
-  // XML_STATUS_ERROR and parseStep() reports it as a memory abandon. Guarded on xmlParser_ so the
-  // finishParse()->makePages() latch (parser already torn down) is a plain flag set.
+  // ⚠️ 只設旗標不夠：addWord 拒絕之後段落照樣繼續進 token（每個都被丟掉、白做 NFC 與
+  // CJK 切分），整章解析空轉。停掉 expat 讓整章立刻收手；XML_ParseBuffer 之後會回
+  // XML_STATUS_ERROR，由 parseStep() 判成低記憶體中止。守在 xmlParser_ 上，
+  // 因為 finishParse()->makePages() 那條路解析器已經拆掉。
   if (xmlParser_) XML_StopParser(xmlParser_, XML_FALSE);
 }
 
@@ -1520,22 +1822,25 @@ bool ChapterHtmlSlimParser::finishParse() {
   // Process last page if there is still text
   if (currentTextBlock) {
     makePages();
+    // v150：makePages 期間 latch 的話，下面的 completePageFn 會把掉行的最後一頁提交進
+    // build tmp。tmp 反正會被 suspendBuild(aborted) 丟掉，但不提交更乾淨、也省一次寫入。
     if (buildAborted_) {
-      // Trailing-block layout was refused under low heap. Do NOT commit a truncated chapter:
-      // finalizeBuild() abandons and shows the index-failed popup (else a valid-looking but
-      // incomplete section would be cached and survive reboots).
+      currentPage.reset();
+      currentTextBlock.reset();
       return false;
     }
     if (!pendingAnchorId.empty()) {
       anchorData.push_back({std::move(pendingAnchorId), static_cast<uint16_t>(completedPageCount)});
       pendingAnchorId.clear();
     }
-    completePageFn(std::move(currentPage), xpathParagraphIndex, xpathListItemIndex);
+    setCurrentPageVisibleOffset(visibleTextOffset);
+    completePageFn(std::move(currentPage), xpathParagraphIndex, xpathListItemIndex, currentPageVisibleOffset);
     completedPageCount++;
     currentPage.reset();
     currentTextBlock.reset();
   }
 
+  // v149：低記憶體丟過字就不算成功 —— Section 據此不提交本章（保留既有 partial）。
   return !buildAborted_;
 }
 
@@ -1556,28 +1861,20 @@ bool ChapterHtmlSlimParser::parseAndBuildPages() {
   return finishParse();
 }
 
-void ChapterHtmlSlimParser::addLineToPage(std::shared_ptr<TextBlock> line) {
-  const int lineHeight = renderer.getLineHeight(fontId) * lineCompression;
+void ChapterHtmlSlimParser::addLineToPage(std::shared_ptr<TextBlock> line, const uint32_t visibleOffset) {
+  if (buildAborted_) return;
+  const int lineHeight =
+      renderer.getLineHeight(fontId, lineCompression) + line->getRubyShift(renderer.getFontAscenderSize(fontId));
 
-  if (!currentPage) {
-    currentPage.reset(new (std::nothrow) Page());
-    if (!currentPage) {
-      latchBuildAborted();
-      return;
-    }
-    currentPageNextY = 0;
-  }
+  if (!ensureCurrentPage("Page:addLine:first")) return;
 
   if (currentPageNextY + lineHeight > viewportHeight) {
-    completePageFn(std::move(currentPage), xpathParagraphIndex, xpathListItemIndex);
+    setCurrentPageVisibleOffset(visibleOffset);
+    completePageFn(std::move(currentPage), xpathParagraphIndex, xpathListItemIndex, currentPageVisibleOffset);
     completedPageCount++;
-    currentPage.reset(new (std::nothrow) Page());
-    if (!currentPage) {
-      latchBuildAborted();
-      return;
-    }
-    currentPageNextY = 0;
+    if (!ensureCurrentPage("Page:addLine:break")) return;
   }
+  setCurrentPageVisibleOffset(visibleOffset);
 
   // Track cumulative words to assign footnotes to the page containing their anchor
   wordsExtractedInBlock += line->wordCount();
@@ -1600,16 +1897,9 @@ void ChapterHtmlSlimParser::makePages() {
     return;
   }
 
-  if (!currentPage) {
-    currentPage.reset(new (std::nothrow) Page());
-    if (!currentPage) {
-      latchBuildAborted();
-      return;
-    }
-    currentPageNextY = 0;
-  }
+  if (!ensureCurrentPage("Page:makePages")) return;
 
-  const int lineHeight = renderer.getLineHeight(fontId) * lineCompression;
+  const int lineHeight = renderer.getLineHeight(fontId, lineCompression);
 
   // Apply top spacing before the paragraph (stored in pixels)
   const BlockStyle& blockStyle = currentTextBlock->getBlockStyle();
@@ -1627,8 +1917,13 @@ void ChapterHtmlSlimParser::makePages() {
 
   currentTextBlock->layoutAndExtractLines(
       renderer, fontId, effectiveWidth,
-      [this](const std::shared_ptr<TextBlock>& textBlock) { addLineToPage(textBlock); });
-  if (currentTextBlock->hasOom()) latchBuildAborted();
+      [this](const std::shared_ptr<TextBlock>& textBlock, const uint32_t offset) { addLineToPage(textBlock, offset); });
+
+  // v149：同上 —— 兩個排版呼叫點都要檢查，只守一處等於沒守。
+  if (currentTextBlock->hasOom()) {
+    LOG_ERR("EHP", "Build aborted: low memory while adding words");
+    latchBuildAborted();
+  }
 
   // Fallback: transfer any remaining pending footnotes to current page.
   // Normally addLineToPage handles this via word-index tracking, but this catches

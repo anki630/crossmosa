@@ -1,8 +1,7 @@
 #pragma once
-
-#include <DataDir.h>
-#include <cstdio>
 #include <ArduinoJson.h>
+#include <cstdio>
+#include <DataDir.h>
 #include <PersistableStore.h>
 
 #include <string>
@@ -13,11 +12,10 @@ struct RecentBook {
   std::string title;
   std::string author;
   std::string coverBmpPath;
-  // Whole-book progress 0-100, updated when the reader exits; 0 = unknown (pre-v31
-  // entries or never-opened books) and is not displayed.
-  uint8_t progressPercent = 0;
 
   bool operator==(const RecentBook& other) const { return path == other.path; }
+  // v31/v155：全書閱讀進度（0–100）。主畫面續讀卡的作者行顯示成「作者 (45%)」。
+  uint8_t progressPercent = 0;
 };
 
 class RecentBooksStore : public PersistableStore<RecentBooksStore> {
@@ -33,8 +31,8 @@ class RecentBooksStore : public PersistableStore<RecentBooksStore> {
 
  public:
   static const char* getFilePath() {
-    // Built on first use — DataDir::resolve() has run by then (boot order).
-    static char p[32] = "";
+    // v36/v186：掛在開機解析出的資料目錄上；首用必在 DataDir::resolve() 之後（開機順序）。
+    static char p[40] = "";
     if (!p[0]) snprintf(p, sizeof(p), "%s/recent.json", DataDir::path());
     return p;
   }
@@ -48,8 +46,7 @@ class RecentBooksStore : public PersistableStore<RecentBooksStore> {
   void updateBook(const std::string& path, const std::string& title, const std::string& author,
                   const std::string& coverBmpPath);
 
-  // Update the stored whole-book progress for the entry matching path (no-op if absent
-  // or unchanged, so a plain reopen-and-close does not rewrite the file).
+  /// v31/v155：更新某本書的進度百分比（存在才更新；變了才標 dirty）。
   void setProgress(const std::string& path, uint8_t progressPercent);
 
   // Remove the entry whose path matches (used when a book is removed from recents or finished/read).

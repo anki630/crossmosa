@@ -15,15 +15,18 @@ void QrUtils::drawQrCode(const GfxRenderer& renderer, const Rect& bounds, const 
   // Formula: approx version = size / 26 + 1 (very rough estimate, better to find best fit)
   size_t len = textPayload.length();
 
-  // Truncate to max QR capacity at a UTF-8 safe boundary to avoid splitting multi-byte sequences.
-  // 兩個硬前提(v39 實機回報「掃不到」的雙重根因):
-  // ①這個 QRCode 函式庫【不做容量檢查】,payload 超過該 version 的 byte-mode 容量時會
-  //   「成功」產出格式合法但解碼必然失敗的壞 QR(qrcode.c padding 下溢被 clamp、
-  //   interleaver 靜默丟尾巴)——所以 cap 與 ladder 門檻必須用【真實容量】:
-  //   ECC_LOW byte mode:v4=78、v10=271、v20=858(ISO 18004:資料碼字 − 檔頭 2.5B)。
-  //   原上游 ladder 的 114/395/1066/2110 全是超載門檻,長 payload 一律產壞 QR。
-  // ②上限刻意停在 version 20(97×97 模組):再大的版本在 ~488px 顯示區每模組 ≤3px,
-  //   手機相機掃不動。v20 = 每模組 5px(0.63mm)可穩定掃描。中文一頁 ~2KB → 截前 ~286 字。
+  // Truncate to max QR capacity at a UTF-8 safe boundary to avoid splitting multi-byte sequences
+  // v39：兩個硬前提（實機回報「掃不到」的雙重根因）——
+  // ① 這個 QRCode 函式庫【不做容量檢查】。payload 超過該 version 的 byte-mode 容量時，
+  //    它會「成功」產出一個【格式合法但解碼必然失敗】的壞 QR（padding 下溢被 clamp、
+  //    interleaver 靜默丟尾巴）。所以 cap 與下面的 ladder 門檻必須用【真實容量】：
+  //    ECC_LOW byte mode：v4=78、v10=271、v20=858（ISO 18004：資料碼字 − 檔頭 2.5B）。
+  //    上游的 114/395/1066/2110 全是【超載門檻】，長 payload 一律產壞 QR。
+  // ② 上限刻意停在 version 20（97×97 模組）：再大的版本在約 488px 顯示區每模組 ≤3px，
+  //    手機相機掃不動。v20 = 每模組 5px（0.63mm）可穩定掃描。
+  //    中文一頁約 2KB -> 截前約 286 字。
+  // ③（2026-08-25 補）version 40 還有堆疊風險：render 任務堆疊只有 8,192 B
+  //    （ActivityManager.cpp:31），而高 version 的初始化需要遠大於此的暫存。
   static constexpr size_t MAX_QR_CAPACITY = 858;  // Version 20, ECC_LOW, byte mode 真實容量
   std::string truncated;
   const char* payload = textPayload.c_str();

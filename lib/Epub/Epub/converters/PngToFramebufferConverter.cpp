@@ -8,7 +8,6 @@
 #include <PNGdec.h>
 
 #include <cstdlib>
-#include <cstring>
 #include <memory>
 #include <new>
 
@@ -34,6 +33,7 @@ struct PngContext {
   int dstWidth{0};
   int dstHeight{0};
   int lastDstY{-1};  // Track last rendered destination Y to avoid duplicates
+  uint32_t lastYieldMs{0};  // yieldDuringDecode() 的節流狀態
 
   PixelCache cache;
   bool caching{false};
@@ -44,8 +44,14 @@ struct PngContext {
 // File I/O callbacks use pFile->fHandle to access the HalFile*,
 // avoiding the need for global file state.
 void* pngOpenWithHandle(const char* filename, int32_t* size) {
-  HalFile* f = new HalFile();
-  if (!Storage.openFileForRead("PNG", std::string(filename), *f)) {
+  // v194：throwing new HalFile 在 -fno-exceptions 下 OOM 會 abort。失敗不呼叫 close()。
+  HalFile* f = new (std::nothrow) HalFile();
+  if (!f) {
+    HalStorage::noteAllocFail("HalFile:pngOpen", sizeof(HalFile));
+    return nullptr;
+  }
+  // v194：HalStorage 已有 const char* 多載。std::string(filename) 在 nothrow 守衛之後仍會 abort。
+  if (!Storage.openFileForRead("PNG", filename, *f)) {
     delete f;
     return nullptr;
   }
@@ -207,6 +213,8 @@ int pngDrawCallback(PNGDRAW* pDraw) {
   PngContext* ctx = reinterpret_cast<PngContext*>(pDraw->pUser);
   if (!ctx || !ctx->config || !ctx->renderer || !ctx->grayLineBuffer) return 0;
 
+  ImageToFramebufferDecoder::yieldDuringDecode(ctx->lastYieldMs);
+
   int srcY = pDraw->y;
   int srcWidth = ctx->srcWidth;
 
@@ -331,14 +339,10 @@ bool PngToFramebufferConverter::getDimensionsStatic(const std::string& imagePath
   const uint32_t height = (static_cast<uint32_t>(header[20]) << 24) | (static_cast<uint32_t>(header[21]) << 16) |
                           (static_cast<uint32_t>(header[22]) << 8) | static_cast<uint32_t>(header[23]);
 
-  if (width == 0 || height == 0 || width > 20000 || height > 20000 ||
-      static_cast<uint64_t>(width) * height > static_cast<uint64_t>(MAX_SOURCE_PIXELS)) {
+  if (!validateAndStoreDimensions(width, height, out, "PNG", /*applyPixelCap=*/false)) {
     LOG_ERR("PNG", "Invalid PNG dimensions %ux%u: %s", width, height, imagePath.c_str());
     return false;
   }
-
-  out.width = static_cast<int16_t>(width);
-  out.height = static_cast<int16_t>(height);
   return true;
 }
 
@@ -349,6 +353,7 @@ bool PngToFramebufferConverter::decodeToFramebuffer(const std::string& imagePath
   size_t freeHeap = ESP.getFreeHeap();
   if (freeHeap < MIN_FREE_HEAP_FOR_PNG) {
     LOG_ERR("PNG", "Not enough heap for PNG decoder (%u free, need %u)", freeHeap, MIN_FREE_HEAP_FOR_PNG);
+    setLastError(true, "png-heap %u<%u", static_cast<unsigned>(freeHeap), static_cast<unsigned>(MIN_FREE_HEAP_FOR_PNG));
     return false;
   }
 
@@ -356,6 +361,7 @@ bool PngToFramebufferConverter::decodeToFramebuffer(const std::string& imagePath
   std::unique_ptr<PNG> png(new (std::nothrow) PNG());
   if (!png) {
     LOG_ERR("PNG", "Failed to allocate PNG decoder");
+    setLastError(true, "png-alloc-decoder");
     return false;
   }
 
@@ -370,16 +376,16 @@ bool PngToFramebufferConverter::decodeToFramebuffer(const std::string& imagePath
   const ScopedCleanup cleanup{[&png]() { png->close(); }};
   if (rc != PNG_SUCCESS) {
     LOG_ERR("PNG", "Failed to open PNG: %d", rc);
+    setLastError(false, "png-open rc=%d", rc);
     return false;
   }
 
-  if (!validateImageDimensions(png->getWidth(), png->getHeight(), "PNG")) {
-    return false;
-  }
+  ImageDimensions sourceDimensions;
+  if (!validateAndStoreDimensions(png->getWidth(), png->getHeight(), sourceDimensions, "PNG")) return false;
 
   // Calculate output dimensions
-  ctx.srcWidth = png->getWidth();
-  ctx.srcHeight = png->getHeight();
+  ctx.srcWidth = sourceDimensions.width;
+  ctx.srcHeight = sourceDimensions.height;
 
   if (config.useExactDimensions && config.maxWidth > 0 && config.maxHeight > 0) {
     // Use exact dimensions as specified (avoids rounding mismatches with pre-calculated sizes)
@@ -410,6 +416,7 @@ bool PngToFramebufferConverter::decodeToFramebuffer(const std::string& imagePath
         "PNG row buffer too small: need %d bytes for width=%d type=%d bpp=%d, configured PNG_MAX_BUFFERED_PIXELS=%d",
         requiredInternal, ctx.srcWidth, pixelType, bitsPerSample, PNG_MAX_BUFFERED_PIXELS);
     LOG_ERR("PNG", "Aborting decode to avoid PNGdec internal buffer overflow");
+    setLastError(false, "png-rowbuf");
     return false;
   }
 
@@ -427,12 +434,14 @@ bool PngToFramebufferConverter::decodeToFramebuffer(const std::string& imagePath
   if (grayBufSize > MAX_GRAY_LINE_BUFFER_BYTES) {
     LOG_ERR("PNG", "Expanded gray row too wide: need %u bytes for width=%d, max=%u", static_cast<unsigned>(grayBufSize),
             ctx.srcWidth, static_cast<unsigned>(MAX_GRAY_LINE_BUFFER_BYTES));
+    setLastError(false, "png-graywide");
     return false;
   }
 
   auto grayLineBuffer = makeUniqueNoThrow<uint8_t[]>(grayBufSize);
   if (!grayLineBuffer) {
     LOG_ERR("PNG", "Failed to allocate gray line buffer");
+    setLastError(true, "png-alloc-gray");
     return false;
   }
   ctx.grayLineBuffer = grayLineBuffer.get();
@@ -452,6 +461,7 @@ bool PngToFramebufferConverter::decodeToFramebuffer(const std::string& imagePath
   }
 
   unsigned long decodeStart = millis();
+  ctx.lastYieldMs = decodeStart;
   rc = png->decode(&ctx, 0);
   unsigned long decodeTime = millis() - decodeStart;
 
@@ -459,6 +469,7 @@ bool PngToFramebufferConverter::decodeToFramebuffer(const std::string& imagePath
 
   if (rc != PNG_SUCCESS) {
     LOG_ERR("PNG", "Decode failed: %d", rc);
+    setLastError(false, "png-decode rc=%d", rc);
     if (ctx.caching) ctx.cache.abort();
     return false;
   }

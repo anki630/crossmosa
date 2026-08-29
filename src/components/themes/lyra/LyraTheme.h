@@ -2,12 +2,12 @@
 
 #include "components/themes/BaseTheme.h"
 
+#include <string>
+
 class GfxRenderer;
 
 // Lyra theme metrics (zero runtime cost)
 namespace LyraMetrics {
-// Lyra 唯一的圓角半徑 token(清單選取/tab pill/兩種彈窗/鍵盤鍵/封面框共用)
-constexpr int cornerRadius = 6;
 constexpr ThemeMetrics values = {.batteryWidth = 16,
                                  .batteryHeight = 12,
                                  .topPadding = 5,
@@ -17,8 +17,8 @@ constexpr ThemeMetrics values = {.batteryWidth = 16,
                                  .previewPadding = 12,
                                  .previewHeightPercent = 30,
                                  .contentSidePadding = 20,
-                                 .listRowHeight = 48,
-                                 .listWithSubtitleRowHeight = 72,
+                                 .listRowHeight = 48,  // v11/v155：清單主文字已是 14px（v132 別名），列高配合 40→48
+                                 .listWithSubtitleRowHeight = 72,  // v11/v155：60→72
                                  .menuRowHeight = 64,
                                  .menuSpacing = 8,
                                  .tabSpacing = 8,
@@ -37,31 +37,20 @@ constexpr ThemeMetrics values = {.batteryWidth = 16,
                                  .progressBarMarginTop = 1,
                                  .statusBarHorizontalMargin = 5,
                                  .statusBarVerticalMargin = 19,
-                                 .keyboardKeyWidth = 31,
-                                 .keyboardKeyHeight = 40,
+                                 .keyboardKeyHeight = 48,
                                  .keyboardKeySpacing = 0,
-                                 .keyboardBottomKeyHeight = 35,
-                                 .keyboardBottomKeySpacing = 5,
-                                 .keyboardBottomAligned = true,
                                  .keyboardCenteredText = false,
                                  .keyboardVerticalOffset = -7,
                                  .keyboardTextFieldWidthPercent = 85,
-                                 .keyboardWidthPercent = 90,
-                                 .keyboardKeyCornerRadius = cornerRadius,
-                                 .keyboardFillUnselected = false,
-                                 .keyboardOutlineAllUnselected = false,
-                                 .keyboardDrawSpecialOutlineWhenUnselected = true,
-                                 .keyboardSecondaryLabelRightPadding = 1,
-                                 .keyboardSecondaryLabelTopPadding = 0,
-                                 .keyboardMinArrowHeadSize = 0,
-                                 // v49:提示彈窗(休眠中/載入中/已加入書籤…)置中——單行彈窗高 58px
-                                 // (UI_12 行框 34 + 上下 margin 24),直向 (792-58)/2 ≈ 792×0.463;
-                                 // 原 0.165 偏上(實機回饋)。橫向時約低於中心 8px,可接受。
+                                 .keyboardWidthPercent = 94,
+                                 .keyboardKeyCornerRadius = 6,
+                                 // v49（實機回饋）：0.165 偏上 → 0.46。單行彈窗高 58px，直向恰置中；
+                                 // 橫向低於中心約 8px 可接受。影響所有 drawPopup 站點。
                                  .popupTopOffsetRatio = 0.46f,
                                  .popupMarginX = 16,
                                  .popupMarginY = 12,
                                  .popupFrameThickness = 2,
-                                 .popupCornerRadius = cornerRadius,
+                                 .popupCornerRadius = 6,
                                  .popupTextBold = false,
                                  .popupTextInverted = false,
                                  .popupTextBaselineOffsetY = -2,
@@ -75,33 +64,22 @@ constexpr ThemeMetrics values = {.batteryWidth = 16,
                                  .optionPopupSelectionHPadding = 16,
                                  .optionPopupSelectionVPadding = 12,
                                  .optionPopupTitleGap = 16,
-                                 .optionPopupUseSmallFont = false,
+                                 .optionPopupUseSmallFont = true,
                                  .optionPopupOptionFontBold = false,
-                                 .optionPopupSelectionRadius = cornerRadius,
+                                 .optionPopupSelectionRadius = 6,
                                  .optionPopupSelectionLight = true,
                                  .optionPopupDrawAllRows = false,
                                  .optionPopupDialogSideMargin = 20,
                                  .optionPopupTitleSeparator = true,
+                                 .optionPopupSelectionOutline = true,
                                  .textFieldHorizontalPadding = 6,
                                  .textFieldNormalThickness = 1,
                                  .textFieldCursorThickness = 3,
-                                 .textFieldLineEndOffset = 0,
-                                 .optionPopupSelectionOutline = true};
+                                 .textFieldLineEndOffset = 0};
 }
 
 class LyraTheme : public BaseTheme {
  public:
-  // v123:無封面書籍的佔位封面,Lyra 與 Lyra3Covers 共用。
-  //
-  // 上游的畫法是「下三分之二整塊 fillRect 塗黑 + 左上角一個 32px 圖示」——那塊實心黑
-  // 是主畫面上唯一的大面積黑,而 v50 立下的原則是「e-ink 的 UI 不塗滿背景」。v113 只換掉了
-  // 圖示的圖案,沒動它。改成書脊語言:靠左一條細豎線 + 置中的品牌圖示。一條線就足以讀成
-  // 「一本書」,墨量幾乎為零,與 v44-v51 建立的安靜選取語言一致。
-  //
-  // 做成共用 helper 而不是各自複製:兩個主題各有一份自繪複本,而「漏網的自繪站點」
-  // 在 v44 已經付過一次代價(註腳清單)。
-  static void drawEmptyCoverPlaceholder(GfxRenderer& renderer, int x, int y, int w, int h);
-
   // Component drawing methods
   void fillBatteryIcon(const GfxRenderer& renderer, Rect rect, uint16_t percentage) const override;
   void drawHeader(const GfxRenderer& renderer, Rect rect, const char* title, const char* subtitle) const override;
@@ -109,6 +87,18 @@ class LyraTheme : public BaseTheme {
                      const char* rightLabel = nullptr) const override;
   void drawTabBar(const GfxRenderer& renderer, Rect rect, const std::vector<TabInfo>& tabs,
                   bool selected) const override;
+  bool tabIndexFromPoint(const GfxRenderer& renderer, Rect rect, const std::vector<TabInfo>& tabs, int x, int y,
+                         int& index) const override;
+
+  // v124/v156：無封面書籍的佔位封面（書脊線＋置中圖示）。取代上游「下三分之二實心黑」——
+  // 那違反「e-ink 的 UI 不塗滿背景」（v50 維護者拍板），實機抱怨「真的很醜」的正是那塊。
+  // Lyra 與 Lyra3Covers 共用（v44 已為漏網的自繪站點付過一次代價）。
+  static void drawEmptyCoverPlaceholder(GfxRenderer& renderer, int x, int y, int w, int h);
+  // v174（使用者要求）：沒有封面的 txt → 書名畫進封面框，做成一本書的樣子（書脊線＋置中粗體書名＋上下短橫線）。
+  static void drawTitleCoverPlaceholder(GfxRenderer& renderer, int x, int y, int w, int h, const std::string& title);
+  // v174：卡片顯示用的書名 —— txt 的「書名」是檔名，去掉副檔名再顯示（store 內容不動，舊條目一樣受惠）。
+  static std::string displayTitleFor(const std::string& title, const std::string& path);
+  int getListRowStep(bool hasSubtitle) const override;
   int getListPageItems(int contentHeight, bool hasSubtitle) const override;
   void drawList(const GfxRenderer& renderer, Rect rect, int itemCount, int selectedIndex,
                 const std::function<std::string(int index)>& rowTitle,
@@ -126,4 +116,6 @@ class LyraTheme : public BaseTheme {
                            std::function<bool()> storeCoverBuffer) const override;
   void drawEmptyRecents(const GfxRenderer& renderer, const Rect rect) const;
   bool showsFileIcons() const override { return true; }
+  // v179：圖示查表開放給子主題（Formosa Pro）。
+  static const uint8_t* iconForName(UIIcon icon, int size);
 };

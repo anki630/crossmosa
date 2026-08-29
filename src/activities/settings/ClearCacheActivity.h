@@ -3,6 +3,7 @@
 #include <functional>
 
 #include "activities/Activity.h"
+#include "components/OptionPopup.h"
 
 class ClearCacheActivity final : public Activity {
  public:
@@ -16,7 +17,7 @@ class ClearCacheActivity final : public Activity {
   void render(RenderLock&&) override;
 
  private:
-  enum State { WARNING, CLEARING, SUCCESS, FAILED };
+  enum State { WARNING, ASK_PROGRESS, CLEARING, SUCCESS, FAILED };  // v192：ASK_PROGRESS 是動手前的保留／重設詢問
 
   State state = WARNING;
 
@@ -24,5 +25,8 @@ class ClearCacheActivity final : public Activity {
 
   int clearedCount = 0;
   int failedCount = 0;
-  void clearCache();
+  OptionPopup confirmPopup;
+  void askProgress();
+  void beginClear(bool keepProgress);
+  void clearCache(bool keepProgress);
 };

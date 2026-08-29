@@ -10,13 +10,6 @@ HalDisplay::HalDisplay() : einkDisplay(EPD_SCLK, EPD_MOSI, EPD_CS, EPD_DC, EPD_R
 
 HalDisplay::~HalDisplay() {}
 
-bool HalDisplay::reserveFrameBufferEarly() {
-  // reallocBuffers() is alloc-guarded in the SDK (`if (!frameBuffer0)`) and
-  // allocates the compile-time MAX_BUFFER_SIZE, so calling it before the
-  // device profile is applied is safe — the size does not depend on it.
-  return einkDisplay.reallocBuffers();
-}
-
 void HalDisplay::begin(bool seamless) {
   // Set X3-specific panel mode before initializing.
   if (gpio.deviceIsX3()) {
@@ -58,8 +51,7 @@ EInkDisplay::RefreshMode convertRefreshMode(HalDisplay::RefreshMode mode) {
       return EInkDisplay::FULL_REFRESH;
     case HalDisplay::HALF_REFRESH:
       return EInkDisplay::HALF_REFRESH;
-    // v55:送給驅動的仍是 Half,差別在呼叫端不 requestResync ——沒有那個旗標,驅動才會真的
-    // 走 _half bank(全像素驅動)而不是被升級成全同步鏈。詳見 HalDisplay.h 的說明。
+    // v55：驅動端仍收到 Half；差別在呼叫端不 requestResync（見 HalDisplay.h）。
     case HalDisplay::HALF_REFRESH_SCRUB:
       return EInkDisplay::HALF_REFRESH;
     case HalDisplay::FAST_REFRESH:
@@ -68,25 +60,25 @@ EInkDisplay::RefreshMode convertRefreshMode(HalDisplay::RefreshMode mode) {
   }
 }
 
-void HalDisplay::skipInitialResyncAndScrubNext() {
-  if (!gpio.deviceIsX3()) return;  // X4 沒有這條全同步階梯,也沒有 scrub 的必要
-  einkDisplay.skipInitialResync();
-  scrubNextFastPaint_ = true;
-}
-
 void HalDisplay::displayBuffer(HalDisplay::RefreshMode mode, bool turnOffScreen) {
-  // v56:開機動畫之後的第一屏——把 FAST 升級成 scrub(全像素驅動,不留 logo 殘影),
-  // 取代原本那次約 3 秒的強制全同步。旗標無論如何都要消耗掉,避免它飄到後面某一頁。
-  if (scrubNextFastPaint_) {
-    scrubNextFastPaint_ = false;
-    if (mode == RefreshMode::FAST_REFRESH) mode = RefreshMode::HALF_REFRESH_SCRUB;
-  }
   if (gpio.deviceIsX3() && mode == RefreshMode::HALF_REFRESH) {
     einkDisplay.requestResync(1);
   }
 
   einkDisplay.displayBuffer(convertRefreshMode(mode), turnOffScreen);
 }
+
+void HalDisplay::displayBufferAsync(HalDisplay::RefreshMode mode) {
+  if (gpio.deviceIsX3() && mode == RefreshMode::HALF_REFRESH) {
+    einkDisplay.requestResync(1);
+  }
+
+  einkDisplay.displayBufferAsyncNoShadow(convertRefreshMode(mode));
+}
+
+void HalDisplay::waitRefreshComplete() { einkDisplay.waitRefreshComplete(); }
+
+bool HalDisplay::supportsAsyncRefresh() const { return einkDisplay.supportsAsyncRefresh(); }
 
 void HalDisplay::refreshDisplay(HalDisplay::RefreshMode mode, bool turnOffScreen) {
   if (gpio.deviceIsX3() && mode == RefreshMode::HALF_REFRESH) {
@@ -135,7 +127,17 @@ void HalDisplay::copyGrayscaleMsbBuffers(const uint8_t* msbBuffer) { einkDisplay
 
 void HalDisplay::cleanupGrayscaleBuffers(const uint8_t* bwBuffer) { einkDisplay.cleanupGrayscaleBuffers(bwBuffer); }
 
-void HalDisplay::displayGrayBuffer(bool turnOffScreen) { einkDisplay.displayGrayBuffer(turnOffScreen); }
+void HalDisplay::displayGrayBuffer(bool turnOffScreen, bool absolute) {
+  einkDisplay.displayGrayBuffer(turnOffScreen, nullptr, absolute);
+}
+
+void HalDisplay::setGrayscaleVariant(uint8_t variant) { einkDisplay.setGrayscaleVariant(variant); }
+
+uint8_t HalDisplay::lastRefreshBank() const { return einkDisplay.lastRefreshBank(); }
+
+bool HalDisplay::supportsAbsoluteGrayscale() const { return einkDisplay.supportsAbsoluteGrayscale(); }
+
+bool HalDisplay::prefersScrubClean() const { return einkDisplay.prefersScrubClean(); }
 
 void HalDisplay::writeGrayscalePlaneStrip(bool lsbPlane, const uint8_t* rows, uint16_t yStart, uint16_t numRows) {
   einkDisplay.writeGrayscalePlaneStrip(lsbPlane ? EInkDisplay::GRAY_PLANE_LSB : EInkDisplay::GRAY_PLANE_MSB, rows,

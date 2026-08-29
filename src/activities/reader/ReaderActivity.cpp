@@ -14,9 +14,13 @@
 #include "SdCardFontSystem.h"
 #include "Txt.h"
 #include "TxtReaderActivity.h"
+#include "Xtc.h"
+#include "XtcReaderActivity.h"
 #include "activities/util/BmpViewerActivity.h"
 #include "activities/util/FullScreenMessageActivity.h"
 #include "components/UITheme.h"
+
+bool ReaderActivity::isXtcFile(const std::string& path) { return FsHelpers::hasXtcExtension(path); }
 
 bool ReaderActivity::isTxtFile(const std::string& path) {
   return FsHelpers::hasTxtExtension(path) ||
@@ -24,6 +28,13 @@ bool ReaderActivity::isTxtFile(const std::string& path) {
 }
 
 bool ReaderActivity::isBmpFile(const std::string& path) { return FsHelpers::hasBmpExtension(path); }
+
+int ReaderActivity::initialRefreshCountdown() const {
+  if (!allowFastInitialRefresh) return 0;
+
+  const int refreshFrequency = SETTINGS.getRefreshFrequency();
+  return refreshFrequency > 1 ? refreshFrequency : 2;
+}
 
 std::unique_ptr<Epub> ReaderActivity::loadEpub(const std::string& path) {
   if (!Storage.exists(path.c_str())) {
@@ -41,6 +52,8 @@ std::unique_ptr<Epub> ReaderActivity::loadEpub(const std::string& path) {
   // construction, so this check is valid before load(); a cached open loads in a blink -> no popup.
   const bool uncached = !Storage.exists((epub->getCachePath() + "/book.bin").c_str());
   if (uncached) {
+    // The popup replaces the restored Quick Resume frame, so the reader must clean it.
+    allowFastInitialRefresh = false;
     GUI.drawPopup(renderer, tr(STR_INDEXING));
   }
   bool loaded;
@@ -63,6 +76,25 @@ std::unique_ptr<Epub> ReaderActivity::loadEpub(const std::string& path) {
 
   LOG_ERR("READER", "Failed to load epub (loaded=%d, spine=%d)", loaded ? 1 : 0,
           loaded ? epub->getSpineItemsCount() : -1);
+  return nullptr;
+}
+
+std::unique_ptr<Xtc> ReaderActivity::loadXtc(const std::string& path) {
+  if (!Storage.exists(path.c_str())) {
+    LOG_ERR("READER", "File does not exist: %s", path.c_str());
+    return nullptr;
+  }
+
+  auto xtc = makeUniqueNoThrow<Xtc>(path, DataDir::path());
+  if (!xtc) {
+    LOG_ERR("READER", "Failed to allocate XTC object");
+    return nullptr;
+  }
+  if (xtc->load()) {
+    return xtc;
+  }
+
+  LOG_ERR("READER", "Failed to load XTC");
   return nullptr;
 }
 
@@ -94,17 +126,26 @@ void ReaderActivity::goToLibrary(const std::string& fromBookPath) {
 void ReaderActivity::onGoToEpubReader(std::unique_ptr<Epub> epub) {
   const auto epubPath = epub->getPath();
   currentBookPath = epubPath;
-  activityManager.replaceActivity(std::make_unique<EpubReaderActivity>(renderer, mappedInput, std::move(epub)));
+  activityManager.replaceActivity(
+      std::make_unique<EpubReaderActivity>(renderer, mappedInput, std::move(epub), initialRefreshCountdown()));
 }
 
 void ReaderActivity::onGoToBmpViewer(const std::string& path) {
   activityManager.replaceActivity(std::make_unique<BmpViewerActivity>(renderer, mappedInput, path));
 }
 
+void ReaderActivity::onGoToXtcReader(std::unique_ptr<Xtc> xtc) {
+  const auto xtcPath = xtc->getPath();
+  currentBookPath = xtcPath;
+  activityManager.replaceActivity(
+      std::make_unique<XtcReaderActivity>(renderer, mappedInput, std::move(xtc), initialRefreshCountdown()));
+}
+
 void ReaderActivity::onGoToTxtReader(std::unique_ptr<Txt> txt) {
   const auto txtPath = txt->getPath();
   currentBookPath = txtPath;
-  activityManager.replaceActivity(std::make_unique<TxtReaderActivity>(renderer, mappedInput, std::move(txt)));
+  activityManager.replaceActivity(
+      std::make_unique<TxtReaderActivity>(renderer, mappedInput, std::move(txt), initialRefreshCountdown()));
 }
 
 void ReaderActivity::onEnter() {
@@ -115,18 +156,18 @@ void ReaderActivity::onEnter() {
     return;
   }
 
-  if (FsHelpers::hasXtcExtension(initialBookPath)) {
-    // XTC support was removed; a stale path can still arrive once from pre-removal APP_STATE.
-    // Bail out before the indexing popup / epub cache dir get created for a file that can never open.
-    onGoBack();
-    return;
-  }
-
   sdFontSystem.ensureLoaded(renderer);
 
   currentBookPath = initialBookPath;
   if (isBmpFile(initialBookPath)) {
     onGoToBmpViewer(initialBookPath);
+  } else if (isXtcFile(initialBookPath)) {
+    auto xtc = loadXtc(initialBookPath);
+    if (!xtc) {
+      onGoBack();
+      return;
+    }
+    onGoToXtcReader(std::move(xtc));
   } else if (isTxtFile(initialBookPath)) {
     auto txt = loadTxt(initialBookPath);
     if (!txt) {

@@ -11,7 +11,7 @@
 #include "FsHelpers.h"
 
 namespace {
-constexpr uint8_t BOOK_CACHE_VERSION = 8;  // v8: TOC/book titles stored NFC-composed
+constexpr uint8_t BOOK_CACHE_VERSION = 10;  // v10: ignore ambiguous guide text references
 constexpr char bookBinFile[] = "/book.bin";
 constexpr char tmpSpineBinFile[] = "/spine.bin.tmp";
 constexpr char tmpTocBinFile[] = "/toc.bin.tmp";
@@ -386,10 +386,12 @@ uint32_t BookMetadataCache::writeTocEntry(HalFile& file, const TocEntry& entry) 
   return writeTocEntryTo(file, entry);
 }
 
-// v53:入口截斷。序列化的讀側對 >MAX_SERIALIZED_STRING 的字串會「跳過 payload」以維持串流同步,
-// 但 buildBookBin 是「讀 tmp → 回寫 book.bin」的複製,且 LUT 位移是用 tmp 檔的位置算的
-// ——讀側少讀 len bytes 就會讓回寫短少同樣長度,該筆之後所有 LUT 位移全部錯位(靜默壞檔)。
-// 在入口就截斷,tmp 檔永不含超長字串,讀寫重新對稱;讀側的 skip 分支只服務真正壞掉的舊檔。
+// v53：入口截斷。序列化的【讀側】對 >MAX_SERIALIZED_STRING 的字串會「跳過 payload」以維持
+// 串流同步，但 buildBookBin 是「讀 tmp -> 回寫 book.bin」的複製，而 LUT 位移是用 tmp 檔的
+// 位置算的 —— 讀側少讀 len bytes 就會讓回寫短少同樣長度，該筆之後【所有 LUT 位移全部錯位】，
+// 症狀是整本目錄爛掉而且無法自癒（壞檔住在 SD 卡上）。
+// 在【入口】截斷，tmp 檔永不含超長字串，讀寫重新對稱；讀側的 skip 分支只服務真正壞掉的舊檔。
+// ⚠️ 換基底時我們只搬了讀側守衛（lib/Serialization）、沒搬寫側，造出了自己的不對稱。
 static std::string clampSerializedString(const std::string& s) {
   if (s.size() <= serialization::MAX_SERIALIZED_STRING) return s;
   const int safeLen = utf8SafeTruncateBuffer(s.c_str(), static_cast<int>(serialization::MAX_SERIALIZED_STRING));

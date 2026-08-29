@@ -83,6 +83,7 @@ class CssParser {
   void clear() {
     rulesBySelector_.clear();
     heapFloorHit_ = false;
+    heapFloorBytes_ = 56 * 1024;  // v177：回到未過濾的地板（解析新 CSS 時用）
   }
 
   /**
@@ -106,7 +107,23 @@ class CssParser {
    * Clears any existing rules before loading.
    * @return true if cache was loaded successfully
    */
-  bool loadFromCache();
+  // v176：usageHtmlPath 非空時，先掃該章 HTML 的 class 屬性，只載入「本章用得到」的 .class /
+  // tag.class 規則（tag 規則一律保留）。實測某本書 517 條規則每章只用到 4–7 條，
+  // 常駐從 ~70KB 降到 <1KB —— 丹布朗系列的記憶體問題（p2 最大塊 17KB、預取與背景建置全被閘）
+  // 就是這 70KB。掃描失敗或 class 超過上限 → 不過濾、照舊全載（安全退回）。
+  bool loadFromCache(const char* usageHtmlPath = nullptr);
+  // v176：最近一次 loadFromCache 的統計（src 端寫進 diag：CSSLOAD）。
+  uint16_t lastLoadTotal_ = 0;
+  uint16_t lastLoadKept_ = 0;
+  uint16_t lastLoadClasses_ = 0;
+  bool lastLoadFiltered_ = false;
+  // v177：掃描失敗原因（0=成功、1=沒給路徑、2=開檔失敗、3=讀不滿檔案長度、4=class 超過 256、
+  // 5=單一 class 超過 64 字元、6=值裡有字元實體、7=檔案在屬性中間結束）與每次載入的序號。
+  uint8_t lastScanFail_ = 0;
+  uint16_t lastLoadSeq_ = 0;
+  // v187：這次載入是否在記憶體地板前被截斷（規則集不完整）。Section 把它寫進檔頭，
+  // 之後記憶體寬裕時重排——不然打折的版面會被當成永久正確（v163 複查）。
+  bool lastLoadTruncated_ = false;
 
  private:
   // Lookup key for a multi-piece selector. The pieces are hashed and compared
@@ -143,23 +160,21 @@ class CssParser {
   // Storage: maps selector -> style properties. Hash/equal are case-insensitive.
   std::unordered_map<std::string, CssStyle, SvHash, SvEqual> rulesBySelector_;
 
-  // Sticky: set once rule accumulation has hit the heap floor for the current
-  // load. Reset in clear(). Keeps a pathological stylesheet from consuming the
-  // contiguous heap the chapter build needs. See cssHeapExhausted().
+  // v7/v163：sticky——本次載入一旦撞到 heap 地板就不再累積。clear() 重設。
+  // 防肥模板把章節建置需要的連續塊吃光。見 cssHeapExhausted()。
   bool heapFloorHit_ = false;
+  // v177：過濾模式只載入幾條規則，地板 20KB；未過濾（可能 500+ 條）維持 56KB。
+  size_t heapFloorBytes_ = 56 * 1024;
+
+  // 最大連續空塊掉到 MIN_MAXBLOCK_FOR_CSS 就觸發 heapFloorHit_（sticky）。
+  // 每幾條規則抽樣一次（量測走 free-list，不能逐條）。
+  bool cssHeapExhausted();
 
   std::string cachePath;
 
   // Internal parsing helpers
   void processRuleBlockWithStyle(std::string_view selectorGroup, const CssStyle& style);
-
-  // Trips heapFloorHit_ (sticky) once the largest contiguous free block falls to
-  // MIN_MAXBLOCK_FOR_CSS, so rule accumulation stops before it starves the chapter
-  // build. CSS rules stay resident for the whole build; a pathological stylesheet
-  // (seen: a 148KB Kobo KePub) would otherwise grow the map until no contiguous
-  // block remains for ParsedText/layout — an on-screen "lowmem" build failure.
-  // Sampled every few rules; getMaxAllocHeap walks the free list, so not per-rule.
-  bool cssHeapExhausted();
+  static bool collectUsedClasses(const char* htmlPath, std::vector<uint32_t>& out, uint8_t& why);
   static CssStyle parseDeclarations(std::string_view declBlock);
   static void parseDeclarationIntoStyle(std::string_view decl, CssStyle& style);
 

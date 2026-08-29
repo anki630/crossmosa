@@ -29,24 +29,16 @@ bool InflateStream::init(const bool streaming) {
   if (arenaBase) {
     state = reinterpret_cast<tinfl_decompressor*>(arenaBase);
     window = streaming ? arenaBase + STATE_ALIGNED : nullptr;
-    buildscratch::lastInflate = 'S';
   } else {
     // Raw malloc (not makeUniqueNoThrow): the header keeps tinfl_decompressor
     // an incomplete type so consumers never include miniz; both blocks are
     // freed in deinit()/the destructor.
     state = static_cast<tinfl_decompressor*>(malloc(sizeof(tinfl_decompressor)));
-    if (!state) {
-      buildscratch::lastInflate = 's';
-      return false;
-    }
+    if (!state) return false;
     if (streaming) {
       window = static_cast<uint8_t*>(malloc(WINDOW_SIZE));
-      if (!window) {
-        buildscratch::lastInflate = 'W';  // the 32KB window couldn't be found on a fragmented heap
-        return false;                     // state kept; deinit()/next init reclaims it
-      }
+      if (!window) return false;  // state kept; deinit()/next init reclaims it
     }
-    buildscratch::lastInflate = 'H';
   }
 
   tinfl_init(state);

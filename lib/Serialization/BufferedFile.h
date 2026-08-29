@@ -6,7 +6,7 @@
 #include <cstring>
 #include <string>
 
-#include "Serialization.h"  // MAX_SERIALIZED_STRING(壞檔守衛共用上限)
+#include "Serialization.h"  // MAX_SERIALIZED_STRING（壞檔守衛共用上限）
 
 namespace serialization {
 
@@ -146,7 +146,6 @@ void readPod(BufferedFileReader& in, T& value) {
 }
 
 inline void writeString(BufferedFileWriter& out, const std::string& s) {
-  // 不 clamp(見 Serialization.h::writeString 的說明:截斷會讓呼叫端預算的檔案位移漂移)
   const uint32_t len = s.size();
   writePod(out, len);
   out.write(s.data(), len);

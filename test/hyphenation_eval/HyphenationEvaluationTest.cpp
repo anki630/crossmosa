@@ -224,11 +224,9 @@ void runLanguageEval(const char* langName, const char* primaryTag, const char* r
 
 }  // namespace
 
+// CrossMosa L4：只保留英文斷字（其餘 9 種語言的 trie 合計約 323 KB，而 flash 要留給漢字）。
+// 對應的 7 個語言測試一併移除 —— 留著會 ASSERT_NE(hyphenator, nullptr) 失敗。
+// ⚠️ English 這一項【要留】：它是 LanguageRegistry 縮減後仍然正確的唯一證據，
+//    而且 registry 改用 CTAD 推導大小之後，這個測試是「陣列沒有與內容脫鉤」的活證明——
+//    若有人改回寫死的大小並填錯，這裡會是乾淨的 fail 而不是 strlen(nullptr) 崩潰。
 TEST(HyphenationEval, English) { runLanguageEval("english", "en", "english_hyphenation_tests.txt", 98.10); }
-TEST(HyphenationEval, French) { runLanguageEval("french", "fr", "french_hyphenation_tests.txt", 99.00); }
-TEST(HyphenationEval, German) { runLanguageEval("german", "de", "german_hyphenation_tests.txt", 96.73); }
-TEST(HyphenationEval, Russian) { runLanguageEval("russian", "ru", "russian_hyphenation_tests.txt", 96.22); }
-TEST(HyphenationEval, Spanish) { runLanguageEval("spanish", "es", "spanish_hyphenation_tests.txt", 98.02); }
-TEST(HyphenationEval, Italian) { runLanguageEval("italian", "it", "italian_hyphenation_tests.txt", 98.99); }
-TEST(HyphenationEval, Polish) { runLanguageEval("polish", "pl", "polish_hyphenation_tests.txt", 98.92); }
-TEST(HyphenationEval, Swedish) { runLanguageEval("swedish", "sv", "swedish_hyphenation_tests.txt", 94.01); }

@@ -1,5 +1,7 @@
 #include "WifiSelectionActivity.h"
 
+#include "util/DiagLog.h"
+
 #include <GfxRenderer.h>
 #include <HalClock.h>
 #include <I18n.h>
@@ -8,23 +10,22 @@
 
 #include <algorithm>
 
-#include "ble/BleRemoteManager.h"
 #include "CrossPointSettings.h"
 #include "MappedInputManager.h"
 #include "WifiCredentialStore.h"
 #include "activities/util/KeyboardEntryActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
-#include "util/DiagLog.h"
 
 void WifiSelectionActivity::onEnter() {
   Activity::onEnter();
 
   // Load saved WiFi credentials - SD card operations need lock as we use SPI
   // for both
+  bool credOk = false;
   {
     RenderLock lock(*this);
-    WIFI_STORE.loadFromFile();
+    credOk = WIFI_STORE.loadFromFile();  // false = 讀檔／解析失敗 → saved=0 → 只能手動選網
   }
 
   // Reset state
@@ -42,7 +43,13 @@ void WifiSelectionActivity::onEnter() {
   autoConnecting = false;
   manualNetworkListRequested = false;
   autoAttemptedSsids.clear();
-  autoAttemptedSsids.reserve(WIFI_STORE.getCredentials().size());
+  const size_t savedCredentialCount = WIFI_STORE.getCredentialCount();
+  autoAttemptedSsids.reserve(savedCredentialCount);
+  // v185 證人：OPDS「有時連不上、跳回主畫面」發生在 fetch 之前，這個活動原本一行 diag 都沒有。
+  DiagLog::line("WIFI enter ok=%d saved=%u last=%s auto=%d", static_cast<int>(credOk),
+                static_cast<unsigned>(savedCredentialCount), WIFI_STORE.getLastConnectedSsid().c_str(),
+                static_cast<int>(allowAutoConnect));
+  DiagLog::mem("wifi-sel");  // 標籤刻意不叫 wifi-enter：那是 CrossPointWebServerActivity 的，撞名就分不出誰
 
   // Cache MAC address for display
   uint8_t mac[6];
@@ -58,10 +65,10 @@ void WifiSelectionActivity::onEnter() {
   // Attempt to auto-connect to known networks. Try the last successful
   // network first for speed, then scan and try any visible saved networks by
   // signal strength. The user can interrupt this and show the scan result.
-  if (allowAutoConnect && !WIFI_STORE.getCredentials().empty()) {
+  if (allowAutoConnect && savedCredentialCount != 0) {
     const std::string lastSsid = WIFI_STORE.getLastConnectedSsid();
     if (!lastSsid.empty()) {
-      const auto* cred = WIFI_STORE.findCredential(lastSsid);
+      const auto cred = WIFI_STORE.findCredential(lastSsid);
       if (cred && tryAutoConnectCredential(*cred)) {
         return;
       }
@@ -77,6 +84,9 @@ void WifiSelectionActivity::onEnter() {
 
 void WifiSelectionActivity::onExit() {
   Activity::onExit();
+  // 回家手勢／睡眠／被 replace 的拆除都不經 onComplete，這行是它們唯一的證人。
+  DiagLog::line("WIFI exit state=%d status=%d mode=%d", static_cast<int>(state), static_cast<int>(WiFi.status()),
+                static_cast<int>(WiFi.getMode()));
 
   LOG_DBG("WIFI", "Free heap at onExit start: %d bytes", ESP.getFreeHeap());
 
@@ -98,15 +108,16 @@ void WifiSelectionActivity::startWifiScan(const bool autoScan) {
   state = WifiSelectionState::SCANNING;
   networks.clear();
   requestUpdate();
+  DiagLog::line("WIFI scan start auto=%d", static_cast<int>(autoScan));
 
   // Set WiFi mode to station
-  BLE_REMOTE.stopForWifi();  // BLE/WiFi 互斥:讓出無線電與 heap,直到重開機
   WiFi.mode(WIFI_STA);
   WiFi.disconnect();
   delay(100);
 
   // Start async scan
-  WiFi.scanNetworks(true);  // true = async scan
+  const int16_t scanRc = WiFi.scanNetworks(true);  // true = async scan；-2 = 根本沒起掃
+  DiagLog::line("WIFI scan rc=%d", static_cast<int>(scanRc));
 }
 
 void WifiSelectionActivity::processWifiScanResults() {
@@ -116,6 +127,7 @@ void WifiSelectionActivity::processWifiScanResults() {
     // Scan still in progress
     return;
   }
+  DiagLog::line("WIFI scan done n=%d", static_cast<int>(scanResult));  // -2 = WIFI_SCAN_FAILED
 
   if (scanResult == WIFI_SCAN_FAILED) {
     networks.clear();
@@ -170,11 +182,18 @@ void WifiSelectionActivity::processWifiScanResults() {
   appendHiddenNetworkEntry();
 
   WiFi.scanDelete();
+  {
+    const unsigned savedVisible = static_cast<unsigned>(
+        std::count_if(networks.begin(), networks.end(), [](const WifiNetworkInfo& n) { return n.hasSavedPassword; }));
+    DiagLog::line("WIFI list n=%u saved=%u auto=%d manual=%d", static_cast<unsigned>(realNetworkCount), savedVisible,
+                  static_cast<int>(autoConnecting), static_cast<int>(manualNetworkListRequested));
+  }
 
   if (autoConnecting && !manualNetworkListRequested && tryNextSavedNetworkFromScan()) {
     return;
   }
 
+  if (autoConnecting) DiagLog::line("WIFI auto exhausted -> list");
   autoConnecting = false;
   manualNetworkListRequested = false;
   state = WifiSelectionState::NETWORK_LIST;
@@ -213,7 +232,7 @@ void WifiSelectionActivity::selectNetwork(const int index) {
   autoConnecting = false;
 
   // Check if we have saved credentials for this network
-  const auto* savedCred = WIFI_STORE.findCredential(selectedSSID);
+  const auto savedCred = WIFI_STORE.findCredential(selectedSSID);
   if (savedCred && !savedCred->password.empty()) {
     // Use saved password - connect directly
     enteredPassword = savedCred->password;
@@ -303,7 +322,7 @@ bool WifiSelectionActivity::tryNextSavedNetworkFromScan() {
       continue;
     }
 
-    const auto* cred = WIFI_STORE.findCredential(network.ssid);
+    const auto cred = WIFI_STORE.findCredential(network.ssid);
     if (cred && tryAutoConnectCredential(*cred)) {
       return true;
     }
@@ -313,12 +332,14 @@ bool WifiSelectionActivity::tryNextSavedNetworkFromScan() {
 
 void WifiSelectionActivity::handleAutoConnectFailure() {
   LOG_DBG("WIFI", "Saved network failed: %s", selectedSSID.c_str());
+  DiagLog::line("WIFI auto-fail ssid=%s scanned=%d", selectedSSID.c_str(), static_cast<int>(networks.size()));
   WiFi.disconnect();
 
   if (!networks.empty()) {
     if (tryNextSavedNetworkFromScan()) {
       return;
     }
+    DiagLog::line("WIFI auto exhausted after fail -> list");
     autoConnecting = false;
     state = WifiSelectionState::NETWORK_LIST;
     selectedNetworkIndex = 0;
@@ -331,6 +352,7 @@ void WifiSelectionActivity::handleAutoConnectFailure() {
 
 void WifiSelectionActivity::showNetworkListFromAutoConnect() {
   LOG_DBG("WIFI", "User requested manual network list");
+  DiagLog::line("WIFI user show-networks n=%u", static_cast<unsigned>(networks.size()));
   WiFi.disconnect();
   autoConnecting = false;
   manualNetworkListRequested = true;
@@ -351,18 +373,26 @@ void WifiSelectionActivity::attemptConnection() {
   connectedIP.clear();
   connectionError.clear();
   requestUpdate();
+  // 連線前的堆狀態是頭號嫌疑（讀完書再連 WiFi，p2 最大連續塊可能已不夠 WiFi 堆疊配置）。
+  DiagLog::mem("wifi-connect");
+  DiagLog::line("WIFI connect ssid=%s auto=%d saved=%d cpu=%u", selectedSSID.c_str(),
+                static_cast<int>(autoConnecting), static_cast<int>(usedSavedPassword),
+                static_cast<unsigned>(getCpuFrequencyMhz()));
 
-  DiagLog::mem("wifi-pre");  // WiFi 堆疊初始化前(它會吃掉數十 KB)
   WiFi.persistent(false);  // Credentials are managed by WifiCredentialStore; suppress SDK NVS auto-connect
-  BLE_REMOTE.stopForWifi();  // BLE/WiFi 互斥:讓出無線電與 heap,直到重開機
   WiFi.mode(WIFI_STA);
   WiFi.disconnect(true, true);  // Abort any in-progress SDK auto-connect and clear NVS-saved SSID
   delay(100);
 
-  // Set hostname so routers show "CrossMosa-Reader-AABBCCDDEEFF" instead of "esp32-XXXXXXXXXXXX"
+  // Scan all channels so networks with multiple APs use the strongest matching
+  // BSSID instead of the first match found by the framework's default fast scan.
+  WiFi.setScanMethod(WIFI_ALL_CHANNEL_SCAN);
+  WiFi.setSortMethod(WIFI_CONNECT_AP_BY_SIGNAL);
+
+  // Set hostname so routers show "CrossPoint-Reader-AABBCCDDEEFF" instead of "esp32-XXXXXXXXXXXX"
   String mac = WiFi.macAddress();
   mac.replace(":", "");
-  String hostname = "CrossMosa-Reader-" + mac;
+  String hostname = "CrossPoint-Reader-" + mac;
   WiFi.setHostname(hostname.c_str());
 
   if (selectedRequiresPassword && !enteredPassword.empty()) {
@@ -386,33 +416,29 @@ void WifiSelectionActivity::checkConnectionStatus() {
     snprintf(ipStr, sizeof(ipStr), "%d.%d.%d.%d", ip[0], ip[1], ip[2], ip[3]);
     connectedIP = ipStr;
     autoConnecting = false;
-    DiagLog::mem("wifi-connected");
+    DiagLog::line("WIFI connected ssid=%s ip=%s rssi=%d ch=%d took=%lu", selectedSSID.c_str(), connectedIP.c_str(),
+                  static_cast<int>(WiFi.RSSI()), static_cast<int>(WiFi.channel()),
+                  static_cast<unsigned long>(millis() - connectionStartTime));
 
-    // v77: start SNTP on EVERY boot's first successful connect, so that THIS
-    // boot's system clock knows the date. Costs ~0 ms -- configTzTime() only
-    // starts the client and returns; the epoch arrives asynchronously.
-    //
-    // The DS3231 branch below is untouched and still runs once per device: that
-    // is correct for what the RTC actually stores (hours/minutes/seconds, which
-    // drift ~2 ppm). What it cannot store is the DATE, so the date died at every
-    // reboot and nothing ever asked for it again -- five measured sessions with
-    // time() returning uptime, WiFi up in every one of them.
-    //
-    // Deliberately NOT gated on SETTINGS.clockHasBeenSynced. That key means "the
-    // DS3231 has been set at least once"; it is shown to the user as
-    // "Clock synced"/"Not set" and is a web-UI toggle. Re-purposing a key whose
-    // meaning is user-visible is the v27 trap.
-    static bool sntpStartedThisBoot = false;
-    if (!sntpStartedThisBoot) {
-      HalClock::startNtp();
-      sntpStartedThisBoot = true;
-    }
+#if defined(ENABLE_SERIAL_LOG) && LOG_LEVEL >= 2
+    uint8_t connectedBssid[6] = {};
+    WiFi.BSSID(connectedBssid);
+    LOG_DBG("WIFI", "Connected BSSID: %02x:%02x:%02x:%02x:%02x:%02x, channel: %d, RSSI: %d dBm",
+            static_cast<unsigned>(connectedBssid[0]), static_cast<unsigned>(connectedBssid[1]),
+            static_cast<unsigned>(connectedBssid[2]), static_cast<unsigned>(connectedBssid[3]),
+            static_cast<unsigned>(connectedBssid[4]), static_cast<unsigned>(connectedBssid[5]), WiFi.channel(),
+            WiFi.RSSI());
+#endif
 
     // Sync RTC from NTP on the first successful WiFi connection only. The DS3231
     // drifts ~2 ppm so one sync is enough; users can force a re-sync from
     // Settings > Customise Status Bar > Sync clock now.
     if (halClock.isAvailable() && !SETTINGS.clockHasBeenSynced) {
-      if (halClock.syncFromNTP()) {
+      // 這一步是阻塞的 DNS＋UDP，夾在 connected 與 done 之間，正是 v77/v111 DNS 鎖當機的鄰居。
+      const unsigned long ntpT0 = millis();
+      const bool ntpOk = halClock.syncFromNTP();
+      DiagLog::line("WIFI ntp ok=%d took=%lu", static_cast<int>(ntpOk), static_cast<unsigned long>(millis() - ntpT0));
+      if (ntpOk) {
         SETTINGS.clockHasBeenSynced = 1;
         SETTINGS.saveToFile();
       }
@@ -442,6 +468,8 @@ void WifiSelectionActivity::checkConnectionStatus() {
   }
 
   if (status == WL_CONNECT_FAILED || status == WL_NO_SSID_AVAIL) {
+    DiagLog::line("WIFI failed status=%d took=%lu auto=%d", static_cast<int>(status),
+                  static_cast<unsigned long>(millis() - connectionStartTime), static_cast<int>(autoConnecting));
     connectionError = tr(STR_ERROR_GENERAL_FAILURE);
     if (status == WL_NO_SSID_AVAIL) {
       connectionError = tr(STR_ERROR_NETWORK_NOT_FOUND);
@@ -458,6 +486,8 @@ void WifiSelectionActivity::checkConnectionStatus() {
   // Check for timeout
   const unsigned long timeoutMs = autoConnecting ? AUTO_CONNECTION_TIMEOUT_MS : CONNECTION_TIMEOUT_MS;
   if (millis() - connectionStartTime > timeoutMs) {
+    DiagLog::line("WIFI timeout took=%lu auto=%d status=%d", static_cast<unsigned long>(millis() - connectionStartTime),
+                  static_cast<int>(autoConnecting), static_cast<int>(status));
     WiFi.disconnect();
     connectionError = tr(STR_ERROR_CONNECTION_TIMEOUT);
     if (autoConnecting) {
@@ -506,7 +536,7 @@ void WifiSelectionActivity::loop() {
 
   // Reached once the hidden-network SSID has been entered (and was non-empty).
   if (state == WifiSelectionState::HIDDEN_SSID_ENTRY) {
-    const auto* savedCred = WIFI_STORE.findCredential(selectedSSID);
+    const auto savedCred = WIFI_STORE.findCredential(selectedSSID);
     if (savedCred && !savedCred->password.empty()) {
       // We already know this hidden network - connect with the saved password
       enteredPassword = savedCred->password;
@@ -528,6 +558,34 @@ void WifiSelectionActivity::loop() {
 
   // Handle save prompt state
   if (state == WifiSelectionState::SAVE_PROMPT) {
+    {
+      const Rect screen = UITheme::getInstance().getScreenSafeArea(renderer, true, false);
+      const auto height = renderer.getLineHeight(UI_10_FONT_ID);
+      const int buttonY = screen.y + (screen.height - height * 3) / 2 + 80;
+      constexpr int buttonWidth = 60;
+      constexpr int buttonSpacing = 30;
+      const int startX = screen.x + (screen.width - (buttonWidth * 2 + buttonSpacing)) / 2;
+      int touchedOption = -1;
+      const auto touch = mappedInput.colTouch(touchedOption, startX - 8, buttonWidth + buttonSpacing, 2, buttonY - 8,
+                                              buttonY + height + 8, buttonWidth + 16);
+      if (touch == MappedInputManager::RowTouch::Down) {
+        if (savePromptSelection != touchedOption) {
+          savePromptSelection = touchedOption;
+          requestUpdate();
+        }
+        return;
+      }
+      if (touch == MappedInputManager::RowTouch::Tap) {
+        savePromptSelection = touchedOption;
+        if (savePromptSelection == 0) {
+          RenderLock lock(*this);
+          WIFI_STORE.addCredential(selectedSSID, enteredPassword);
+        }
+        onComplete(true);
+        return;
+      }
+    }
+
     if (mappedInput.wasPressed(MappedInputManager::Button::Up) ||
         mappedInput.wasPressed(MappedInputManager::Button::Left)) {
       if (savePromptSelection > 0) {
@@ -557,6 +615,39 @@ void WifiSelectionActivity::loop() {
 
   // Handle forget prompt state (connection failed with saved credentials)
   if (state == WifiSelectionState::FORGET_PROMPT) {
+    {
+      const Rect screen = UITheme::getInstance().getScreenSafeArea(renderer, true, false);
+      const auto height = renderer.getLineHeight(UI_10_FONT_ID);
+      const int buttonY = screen.y + (screen.height - height * 3) / 2 + 80;
+      constexpr int buttonWidth = 120;
+      constexpr int buttonSpacing = 30;
+      const int startX = screen.x + (screen.width - (buttonWidth * 2 + buttonSpacing)) / 2;
+      int touchedOption = -1;
+      const auto touch = mappedInput.colTouch(touchedOption, startX - 8, buttonWidth + buttonSpacing, 2, buttonY - 8,
+                                              buttonY + height + 8, buttonWidth + 16);
+      if (touch == MappedInputManager::RowTouch::Down) {
+        if (forgetPromptSelection != touchedOption) {
+          forgetPromptSelection = touchedOption;
+          requestUpdate();
+        }
+        return;
+      }
+      if (touch == MappedInputManager::RowTouch::Tap) {
+        forgetPromptSelection = touchedOption;
+        if (forgetPromptSelection == 1) {
+          RenderLock lock(*this);
+          WIFI_STORE.removeCredential(selectedSSID);
+          const auto network = find_if(networks.begin(), networks.end(),
+                                       [this](const WifiNetworkInfo& net) { return net.ssid == selectedSSID; });
+          if (network != networks.end()) {
+            network->hasSavedPassword = false;
+          }
+        }
+        startWifiScan();
+        return;
+      }
+    }
+
     if (mappedInput.wasPressed(MappedInputManager::Button::Up) ||
         mappedInput.wasPressed(MappedInputManager::Button::Left)) {
       if (forgetPromptSelection > 0) {
@@ -652,6 +743,35 @@ void WifiSelectionActivity::loop() {
       }
     }
 
+    if (!networks.empty()) {
+      const auto& metrics = UITheme::getInstance().getMetrics();
+      Rect screen = UITheme::getInstance().getScreenSafeArea(renderer, true, false);
+      const int contentTop =
+          screen.y + metrics.topPadding + metrics.headerHeight + metrics.tabBarHeight + metrics.verticalSpacing;
+      const int contentHeight = screen.height - contentTop - metrics.verticalSpacing * 2;
+      int touchSel = static_cast<int>(selectedNetworkIndex);
+      const auto listTouch =
+          handleListTouch(touchSel, static_cast<int>(networks.size()), contentTop, contentHeight, false);
+      if (listTouch != ListTouchResult::None) {
+        selectedNetworkIndex = static_cast<size_t>(touchSel);
+        if (listTouch == ListTouchResult::Activated) selectNetwork(selectedNetworkIndex);
+        return;
+      }
+
+      const int pageItems = GUI.getListPageItems(contentHeight, false);
+      const auto swipe = mappedInput.wasSwipe();
+      if (swipe == MappedInputManager::SwipeDir::Up) {
+        selectedNetworkIndex = ButtonNavigator::nextPageIndex(selectedNetworkIndex, networks.size(), pageItems);
+        requestUpdate();
+        return;
+      }
+      if (swipe == MappedInputManager::SwipeDir::Down) {
+        selectedNetworkIndex = ButtonNavigator::previousPageIndex(selectedNetworkIndex, networks.size(), pageItems);
+        requestUpdate();
+        return;
+      }
+    }
+
     // Handle navigation
     buttonNavigator.onNext([this] {
       selectedNetworkIndex = ButtonNavigator::nextIndex(selectedNetworkIndex, networks.size());
@@ -693,7 +813,9 @@ void WifiSelectionActivity::render(RenderLock&&) {
   Rect screen = theme.getScreenSafeArea(renderer, true, false);
 
   // Draw header
-  char countStr[32];
+  // STR_NETWORKS_FOUND is ~37 bytes once the Arabic translation is substituted,
+  // so 32 truncated it. See ClockSyncActivity for the same class of bug.
+  char countStr[64];
   snprintf(countStr, sizeof(countStr), tr(STR_NETWORKS_FOUND), realNetworkCount);
   GUI.drawHeader(renderer, Rect{screen.x, screen.y + metrics.topPadding, screen.width, metrics.headerHeight},
                  tr(STR_WIFI_NETWORKS), countStr);
@@ -776,20 +898,25 @@ void WifiSelectionActivity::renderNetworkList(const Rect* screen, const ThemeMet
 }
 
 void WifiSelectionActivity::renderConnecting(const Rect* screen, const ThemeMetrics* metrics) const {
+  constexpr int MAX_STATUS_LINES = 2;
   const auto height = renderer.getLineHeight(UI_10_FONT_ID);
   const auto top = screen->y + (screen->height - height) / 2;
+  const int statusX = screen->x + metrics->contentSidePadding;
+  const int statusWidth = screen->width - metrics->contentSidePadding * 2;
 
   if (state == WifiSelectionState::SCANNING) {
-    UITheme::drawCenteredText(renderer, *screen, UI_10_FONT_ID, top,
-                              autoConnecting ? tr(STR_FINDING_SAVED_WIFI) : tr(STR_SCANNING));
+    const char* statusText = autoConnecting ? tr(STR_FINDING_SAVED_WIFI) : tr(STR_SCANNING);
+    const Rect statusBounds{statusX, screen->y, statusWidth, screen->height};
+    UITheme::drawCenteredWrappedText(renderer, statusBounds, UI_10_FONT_ID, statusText, MAX_STATUS_LINES);
     if (autoConnecting) {
       const auto labels = mappedInput.mapLabels(tr(STR_CANCEL), tr(STR_SHOW_NETWORKS), "", "");
       GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
     }
   } else {
-    UITheme::drawCenteredText(renderer, *screen, UI_12_FONT_ID, top - 40,
-                              autoConnecting ? tr(STR_CONNECTING_SAVED_WIFI) : tr(STR_CONNECTING), true,
-                              EpdFontFamily::BOLD);
+    const char* statusText = autoConnecting ? tr(STR_CONNECTING_SAVED_WIFI) : tr(STR_CONNECTING);
+    const Rect statusBounds{statusX, screen->y, statusWidth, top - metrics->verticalSpacing - screen->y};
+    UITheme::drawCenteredWrappedText(renderer, statusBounds, UI_12_FONT_ID, statusText, MAX_STATUS_LINES, true,
+                                     EpdFontFamily::BOLD, UITheme::TextVerticalAlignment::BOTTOM);
 
     std::string ssidInfo = std::string(tr(STR_TO_PREFIX)) + selectedSSID;
     if (ssidInfo.length() > 25) {
@@ -922,6 +1049,7 @@ void WifiSelectionActivity::renderForgetPrompt(const Rect* screen, const ThemeMe
 }
 
 void WifiSelectionActivity::onComplete(const bool connected) {
+  DiagLog::line("WIFI done connected=%d state=%d", static_cast<int>(connected), static_cast<int>(state));
   ActivityResult result;
   result.isCancelled = !connected;
   if (connected) {

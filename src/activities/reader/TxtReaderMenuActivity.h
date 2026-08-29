@@ -24,8 +24,10 @@ class TxtReaderMenuActivity final : public Activity {
  public:
   enum class MenuAction { GO_TO_PERCENT, FONT_SIZE, ROTATE_SCREEN };
 
+  // v161：字級改點數制（upstream 1.5 的 per-family 可用點數集），由呼叫端傳入
   explicit TxtReaderMenuActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, const std::string& title,
-                                 float bookProgressPercent, uint8_t currentOrientation);
+                                 float bookProgressPercent, uint8_t currentOrientation,
+                                 std::vector<uint8_t> pointSizes);
 
   void onEnter() override;
   void onExit() override;
@@ -52,6 +54,7 @@ class TxtReaderMenuActivity final : public Activity {
 
   const std::vector<StrId> orientationLabels = {StrId::STR_PORTRAIT, StrId::STR_LANDSCAPE_CW,
                                                 StrId::STR_ORIENTATION_INVERTED, StrId::STR_LANDSCAPE_CCW};
-  const std::vector<StrId> fontSizeLabels = {StrId::STR_SMALL, StrId::STR_MEDIUM, StrId::STR_LARGE,
-                                             StrId::STR_X_LARGE};
+  // v161：點數集與其標籤（"16 pt"）；pendingFontSize 存【點數】不是 enum 槽位
+  std::vector<uint8_t> pointSizes_;
+  std::vector<std::string> fontSizeLabels_;
 };

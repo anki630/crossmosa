@@ -24,12 +24,4 @@ void reclaim();
 uint8_t* claim(size_t minLen, size_t* lenOut = nullptr);
 void release(const uint8_t* p);
 
-// On-device diagnostic breadcrumbs (no serial): set by claim()/InflateStream::init so the reader's
-// build-failed screen can show why a chapter's 32KB DEFLATE inflate fell back to (and failed on) the
-// heap. lastClaim: 'K'=handed out, 'A'=absent (no loan lent), 'S'=block smaller than needed,
-// 'C'=already claimed, '?'=none. lastInflate: 'S'=used scratch, 'H'=heap ok, 'W'=heap 32KB window
-// malloc FAILED, 's'=state malloc failed, '?'=none.
-inline char lastClaim = '?';
-inline char lastInflate = '?';
-
 }  // namespace buildscratch

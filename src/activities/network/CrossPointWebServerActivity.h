@@ -7,7 +7,6 @@
 #include "NetworkModeSelectionActivity.h"
 #include "activities/Activity.h"
 #include "network/CrossPointWebServer.h"
-#include "network/SmbServer.h"
 
 // Web server activity states
 enum class WebServerActivityState {
@@ -38,13 +37,9 @@ class CrossPointWebServerActivity final : public Activity {
   // Web server - owned by this activity
   std::unique_ptr<CrossPointWebServer> webServer;
 
-  // SMB2 server - owned by this activity, and deliberately OPTIONAL. Null
-  // whenever it could not be started; HTTP/WebDAV/Calibre are the shipping
-  // transfer paths and must keep working on their own, so nothing in this
-  // class may treat a null smbServer as an error state.
-  std::unique_ptr<SmbServer> smbServer;
-
   // Server status
+  // v148：本次 session 是否卸載過 SD 字型（onExit 的無重啟分支據此回載）。
+  bool didUnloadFonts_ = false;
   std::string connectedIP;
   std::string connectedSSID;  // For STA mode: network name, For AP mode: AP name
 
@@ -61,11 +56,6 @@ class CrossPointWebServerActivity final : public Activity {
 
   void renderServerRunning() const;
   void renderWifiIndicator(int subHeaderTop) const;
-  // Draws the SMB connection block (label, both smb:// addresses, credentials)
-  // starting at `y`; `centered` ignores `x`. Returns the y after the last line,
-  // or `y` unchanged when it drew nothing (SMB not running, or no room in this
-  // orientation). See the definition for both reasons.
-  int renderSmbDetails(int x, int y, bool centered) const;
 
   void onNetworkModeSelected(NetworkMode mode);
   void onWifiSelectionComplete(bool connected);

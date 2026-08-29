@@ -14,5 +14,4 @@ class PngToFramebufferConverter final : public ImageToFramebufferDecoder {
 
   static bool supportsFormat(const std::string& extension);
   const char* getFormatName() const override { return "PNG"; }
-  size_t minContiguousHeapForDecode() const override { return 52 * 1024; }  // v54:PNG 解碼器單塊 ~44KB + 8KB 餘裕
 };

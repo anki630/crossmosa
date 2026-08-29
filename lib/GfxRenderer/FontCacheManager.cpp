@@ -51,6 +51,22 @@ void FontCacheManager::clearCache() {
   }
 }
 
+size_t FontCacheManager::releaseRetainedCache() {
+  warmIdentity_.invalidate();
+  if (fontDecompressor_) fontDecompressor_->clearCache();
+  size_t bytes = 0;
+  for (auto& [id, font] : sdCardFonts_) {
+    bytes += font->releaseMiniData();
+  }
+  return bytes;
+}
+
+size_t FontCacheManager::retainedMiniBitmapCapacity(const int fontId) const {
+  const auto it = sdCardFonts_.find(fontId);
+  if (it == sdCardFonts_.end() || !it->second) return 0;
+  return it->second->retainedMiniBitmapCapacity();
+}
+
 void FontCacheManager::prewarmCache(int fontId, const char* utf8Text, uint8_t styleMask) {
   prewarmCacheImpl(fontId, utf8Text, styleMask, nullptr, nullptr);
 }
@@ -64,13 +80,14 @@ FontCacheManager::PrewarmOutcome FontCacheManager::prewarmCacheImpl(int fontId, 
   // SD card font prewarm path: prewarm all requested styles in one call
   auto it = sdCardFonts_.find(fontId);
   if (it != sdCardFonts_.end()) {
-    int missed = it->second->prewarm(utf8Text, styleMask, false, shouldAbort, abortCtx);
-    // v110:只有 SD 分支吃中止。PREWARM_ABORTED(-2)不會落進下面的 missed > 0。
-    if (missed == SdCardFont::PREWARM_ABORTED) return PrewarmOutcome::Aborted;
-    // v110 複審修正:硬失敗(PREWARM_FAILED,-3)過去與「缺了 N 個字」共用同一個回傳通道,
-    // 於是一份【已經被 freeStyleMiniData 釋放掉】的快取照樣被呼叫端蓋上 valid 身分。
-    if (missed == SdCardFont::PREWARM_FAILED) {
-      LOG_ERR("FCM", "prewarmCache(SD): hard failure (styleMask=0x%02X) -- cache freed", styleMask);
+    // v161 適配：新樹 SdCardFont（v154 階梯版）尚無 v110 的可中止 prewarm ——
+    // 中止能力連同 v121 預取一起排後續版本（帳本 P5 追補）。失敗以 <0 表示
+    // （未載入／碼位緩衝配置失敗）；v154 的降級階梯讓「整組釋放」的硬失敗幾乎不存在。
+    (void)shouldAbort;
+    (void)abortCtx;
+    int missed = it->second->prewarm(utf8Text, styleMask, false);
+    if (missed < 0) {
+      LOG_ERR("FCM", "prewarmCache(SD): hard failure (styleMask=0x%02X)", styleMask);
       return PrewarmOutcome::Failed;
     }
     if (missed > 0) {
@@ -228,6 +245,13 @@ bool FontCacheManager::PrewarmScope::endScanAndPrewarmImpl(bool (*shouldAbort)(v
   bool completed = true;
   for (uint8_t i = 0; i < 4; i++) {
     if (manager_->scanTextPerStyle_[i].empty()) continue;
+    // v161（codex 複查）：SD prewarm 本體尚不可中止（見 prewarmCacheImpl 適配註解），
+    // 至少在桶與桶之間查一次——中止語意與 Aborted 相同：解除 retain、不 adopt、解構清快取。
+    if (shouldAbort && shouldAbort(abortCtx)) {
+      completed = false;
+      retainCacheOnExit_ = false;
+      break;
+    }
     const PrewarmOutcome outcome =
         manager_->prewarmCacheImpl(manager_->scanFontId_, manager_->scanTextPerStyle_[i].c_str(),
                                    static_cast<uint8_t>(1u << i), shouldAbort, abortCtx);

@@ -1,16 +1,17 @@
 #include "CssParser.h"
 
 #include <Arduino.h>
+#include <esp_heap_caps.h>
+#include <HalStorage.h>
 #include <Logging.h>
 
 #include <algorithm>
 #include <array>
 #include <cctype>
 #include <charconv>
-#include <cstdlib>
 #include <cstring>
 #include <string_view>
-#include <type_traits>
+#include <vector>
 
 namespace {
 
@@ -43,20 +44,20 @@ constexpr size_t READ_BUFFER_SIZE = 512;
 // Prevents unbounded memory growth from pathological CSS files
 constexpr size_t MAX_RULES = 1500;
 
+// v7/v163：一旦最大【連續】空塊掉到這個地板，就停止累積規則。
+// CSS 規則整個章節建置期間常駐；肥模板（實測：時報文化四檔 148-152KB → 518 條規則
+// ≈ 77KB 常駐）會把連續塊吃到 ParsedText/排版配不出來——在機上以「lowmem 建置失敗」
+// 現形（v163 之前前景還會誤報成「無效的書籍檔」）。在這裡封頂 = 犧牲部分樣式換書開得起來。
+// 一般書只有幾 KB CSS，遠在地板之前就完成，完全不受影響。
+// 量連續塊不量總量：殺手是連續塊耗盡（CLAUDE.md 硬限制 2）。
+// ⚠️ 用 MALLOC_CAP_DEFAULT 不用 ESP.getMaxAllocHeap()（INTERNAL）——與 ParsedText
+// 守衛家族同一慣例（malloc 實際走 DEFAULT；v151 CAPS 探針證實開機時兩者相等，
+// 但守量測的與守配置的必須同一套 caps）。
+constexpr size_t MIN_MAXBLOCK_FOR_CSS = 56 * 1024;
+
 // Minimum free heap required to apply CSS during rendering
 // If below this threshold, we skip CSS to avoid display artifacts.
 constexpr size_t MIN_FREE_HEAP_FOR_CSS = 48 * 1024;
-
-// Stop growing the rule map once the largest CONTIGUOUS free block falls to this
-// floor. CSS rules stay resident for the entire chapter build; a pathological
-// stylesheet (seen: a 148KB Kobo KePub with a 83KB + 52KB pair) would otherwise
-// grow the map to tens of KB, leaving no contiguous block for ParsedText/layout,
-// which surfaces on-device as a "lowmem" build failure (the book won't open).
-// Capping here keeps the book readable at the cost of some styling. Ordinary
-// books have a few KB of CSS and finish long before the heap drops this far, so
-// they are unaffected. getMaxAllocHeap (not getFreeHeap) because the killer is
-// contiguous-block exhaustion, not total free bytes.
-constexpr size_t MIN_MAXBLOCK_FOR_CSS = 56 * 1024;
 
 // Maximum length for a single selector string
 // Prevents parsing of extremely long or malformed selectors
@@ -116,32 +117,14 @@ constexpr size_t fnv1aMix(size_t hash, unsigned char byte) { return (hash ^ byte
 // Parse the entirety of s as a number into `out`. Accepts an optional leading
 // '+' (which std::from_chars rejects by spec) so callers can pass CSS-style
 // signed numbers without manual trimming. Returns false on empty input, a
-// non-numeric suffix, or any parse error.
-//
-// Floats go through strtof instead of std::from_chars: the float from_chars
-// specialization drags libstdc++'s floating_from_chars.o (~20KB flash) into the
-// image for this single call site. strtof accepts inputs from_chars would not
-// (leading whitespace, "inf"/"nan", hex floats), so the first character is
-// restricted to digit/dot/minus to keep the original strict semantics.
+// non-numeric suffix, or any from_chars error.
 template <typename T>
 bool tryParseNumber(std::string_view s, T& out) {
   const char* begin = s.data();
   const char* end = s.data() + s.size();
   if (begin < end && *begin == '+') ++begin;
-  if constexpr (std::is_floating_point_v<T>) {
-    char buf[32];
-    const size_t len = static_cast<size_t>(end - begin);
-    if (len == 0 || len >= sizeof(buf)) return false;
-    if (!(begin[0] == '.' || begin[0] == '-' || (begin[0] >= '0' && begin[0] <= '9'))) return false;
-    memcpy(buf, begin, len);
-    buf[len] = '\0';
-    char* parseEnd = nullptr;
-    out = static_cast<T>(strtof(buf, &parseEnd));
-    return parseEnd == buf + len;
-  } else {
-    const auto r = std::from_chars(begin, end, out);
-    return r.ec == std::errc{} && r.ptr == end;
-  }
+  const auto r = std::from_chars(begin, end, out);
+  return r.ec == std::errc{} && r.ptr == end;
 }
 
 // Collect up to 4 whitespace-separated tokens for a CSS edge-value shorthand
@@ -463,10 +446,9 @@ CssStyle CssParser::parseDeclarations(std::string_view declBlock) {
 
 bool CssParser::cssHeapExhausted() {
   if (heapFloorHit_) return true;
-  // The map only grows, so once the block is low it stays low: sample every 8th
-  // rule instead of calling the O(free-list) getMaxAllocHeap on every insert.
+  // 規則圖只增不減，塊一旦低就回不去：每 8 條抽樣一次，不必每插一條就走 O(free-list) 的量測。
   if ((rulesBySelector_.size() & 7) != 0) return false;
-  if (ESP.getMaxAllocHeap() < MIN_MAXBLOCK_FOR_CSS) {
+  if (heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT) < heapFloorBytes_) {
     heapFloorHit_ = true;
     LOG_DBG("CSS", "maxblock below %uKB at %zu rules; stopping CSS accumulation to preserve build heap",
             static_cast<unsigned>(MIN_MAXBLOCK_FOR_CSS / 1024), rulesBySelector_.size());
@@ -815,7 +797,152 @@ bool CssParser::saveToCache() const {
   return true;
 }
 
-bool CssParser::loadFromCache() {
+// v176：掃一章 HTML 的 class 屬性，收集用到的 class（小寫、FNV-1a 32-bit 雜湊、去重）。
+// 512B 分塊、狀態機跨塊；辨識 <!-- --> 註解（註解裡的引號不會吞掉真正的屬性）；
+// '=' 與引號前後接受 XML 空白（含換行）；無引號的值讀到空白或 '>'。
+// 【安全退回＝不過濾、照舊全載】的條件（codex 複查）：讀不滿檔案長度（SD I/O 中斷）、
+// class 超過 256 個、單一 class 超過 64 字元、值裡有字元實體（'&'，我們不解碼）、
+// 檔案在屬性中間結束。雜湊碰撞只會多留規則，不會錯刪。
+// 成本：一次 1KB 的 vector（256×4B）＋ 多讀一次章節 HTML（30–120KB，約 50–150ms）。
+bool CssParser::collectUsedClasses(const char* htmlPath, std::vector<uint32_t>& out, uint8_t& why) {
+  why = 0;
+  HalFile f;
+  if (!Storage.openFileForRead("CSS", htmlPath, f)) {
+    why = 2;
+    return false;
+  }
+  constexpr size_t kMaxClasses = 256;
+  constexpr size_t kMaxClassLen = 64;
+  out.clear();
+  out.reserve(kMaxClasses);
+  static const char kw[] = "class";
+  static const char cmOpen[] = "<!--";
+  static const char cmClose[] = "-->";
+  enum { S_IDLE, S_ATTR, S_QUOTE, S_VALUE, S_COMMENT } state = S_IDLE;
+  int kwPos = 0;
+  int cmPos = 0;
+  char quote = 0;
+  char prev = ' ';
+  uint32_t hash = 2166136261u;
+  size_t tokenLen = 0;
+  bool ok = true;
+  auto isWs = [](const char ch) { return ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r'; };
+  auto flush = [&]() {
+    if (tokenLen == 0) return;
+    if (std::find(out.begin(), out.end(), hash) == out.end()) {
+      if (out.size() >= kMaxClasses) {
+        ok = false;
+        why = 4;
+      } else {
+        out.push_back(hash);
+      }
+    }
+    hash = 2166136261u;
+    tokenLen = 0;
+  };
+  const size_t fileSize = f.size();
+  size_t totalRead = 0;
+  uint8_t buf[512];
+  while (ok) {
+    const int n = f.read(buf, sizeof(buf));
+    if (n <= 0) break;
+    totalRead += static_cast<size_t>(n);
+    for (int i = 0; i < n && ok; i++) {
+      const char ch = static_cast<char>(buf[i]);
+      switch (state) {
+        case S_IDLE:
+          // 註解偵測與關鍵字比對並行；進入註解就丟掉關鍵字進度。
+          if (ch == cmOpen[cmPos]) {
+            cmPos++;
+            if (cmOpen[cmPos] == '\0') {
+              state = S_COMMENT;
+              cmPos = 0;
+              kwPos = 0;
+              break;
+            }
+          } else {
+            cmPos = (ch == cmOpen[0]) ? 1 : 0;
+          }
+          if (ch == kw[kwPos] && (kwPos > 0 || isWs(prev))) {
+            kwPos++;
+            if (kw[kwPos] == '\0') {
+              state = S_ATTR;
+              kwPos = 0;
+            }
+          } else {
+            kwPos = (ch == kw[0] && isWs(prev)) ? 1 : 0;
+          }
+          break;
+        case S_COMMENT:
+          if (ch == cmClose[cmPos]) {
+            cmPos++;
+            if (cmClose[cmPos] == '\0') {
+              state = S_IDLE;
+              cmPos = 0;
+            }
+          } else {
+            cmPos = (ch == cmClose[0]) ? 1 : 0;
+          }
+          break;
+        case S_ATTR:
+          if (isWs(ch)) break;
+          state = (ch == '=') ? S_QUOTE : S_IDLE;
+          break;
+        case S_QUOTE:
+          if (isWs(ch)) break;
+          hash = 2166136261u;
+          tokenLen = 0;
+          if (ch == '"' || ch == '\'') {
+            quote = ch;
+            state = S_VALUE;
+          } else if (ch == '>' || ch == '/') {
+            state = S_IDLE;
+          } else if (ch == '&') {
+            ok = false;
+            why = 6;
+          } else {
+            quote = 0;  // 無引號的值（HTML5 寫法）
+            hash = (hash ^ static_cast<uint8_t>(std::tolower(static_cast<unsigned char>(ch)))) * 16777619u;
+            tokenLen = 1;
+            state = S_VALUE;
+          }
+          break;
+        case S_VALUE:
+          if ((quote != 0 && ch == quote) || (quote == 0 && (ch == '>' || ch == '/'))) {
+            flush();
+            state = S_IDLE;
+          } else if (isWs(ch)) {
+            flush();
+            if (quote == 0) state = S_IDLE;
+          } else if (ch == '&') {
+            ok = false;  // 字元實體：我們不解碼，寧可不過濾
+            why = 6;
+          } else if (tokenLen >= kMaxClassLen) {
+            ok = false;
+            why = 5;
+          } else {
+            hash = (hash ^ static_cast<uint8_t>(std::tolower(static_cast<unsigned char>(ch)))) * 16777619u;
+            tokenLen++;
+          }
+          break;
+      }
+      prev = ch;
+    }
+  }
+  f.close();
+  if (!ok) return false;
+  if (totalRead != fileSize) {
+    why = 3;
+    return false;
+  }
+  if (state != S_IDLE) {
+    why = 7;
+    return false;
+  }
+  return true;
+}
+
+bool CssParser::loadFromCache(const char* usageHtmlPath) {
   if (cachePath.empty()) {
     return false;
   }
@@ -852,7 +979,28 @@ bool CssParser::loadFromCache() {
   }
 
   // Size the bucket array up front to avoid incremental rehashes while loading rules.
-  rulesBySelector_.reserve(ruleCount);
+  // v176：reserve 移到過濾決定之後（見下）。
+
+  // v176：按章過濾（見標頭）。排序後二分搜尋；掃描失敗就不過濾。
+  std::vector<uint32_t> usedClasses;
+  bool filter = false;
+  lastLoadSeq_++;
+  lastScanFail_ = 1;
+  if (usageHtmlPath && usageHtmlPath[0] != '\0') {
+    filter = collectUsedClasses(usageHtmlPath, usedClasses, lastScanFail_);
+    if (filter) {
+      std::sort(usedClasses.begin(), usedClasses.end());
+    } else {
+      std::vector<uint32_t>().swap(usedClasses);
+    }
+  }
+  lastLoadFiltered_ = filter;
+  lastLoadClasses_ = static_cast<uint16_t>(usedClasses.size());
+  lastLoadTotal_ = ruleCount;
+  lastLoadKept_ = 0;
+  lastLoadTruncated_ = false;
+  rulesBySelector_.reserve(filter ? 32 : ruleCount);
+  heapFloorBytes_ = filter ? 20 * 1024 : MIN_MAXBLOCK_FOR_CSS;
 
   auto hasRemainingBytes = [&file](const size_t neededBytes) -> bool {
     return static_cast<size_t>(file.available()) >= neededBytes;
@@ -865,12 +1013,12 @@ bool CssParser::loadFromCache() {
 
   // Read each rule
   for (uint16_t i = 0; i < ruleCount; ++i) {
-    // A cache written before the heap-floor cap (or on a device with more RAM)
-    // can hold more rules than fit alongside this build. Stop here and keep the
-    // rules loaded so far — partial styling, but the book opens. Not a failure,
-    // so no clear(): fall through to the success return below.
+    // v7/v163：快取可能是在（別的記憶體條件下）寫出的、規則多到裝不進這一次建置。
+    // 撞地板就停在這裡、保留已載入的規則——樣式打折，但書開得起來。
+    // 不算失敗，所以不 clear()：直落到最後的成功 return。
     if (cssHeapExhausted()) {
       LOG_DBG("CSS", "Stopped loading CSS cache at %u/%u rules (heap floor)", i, ruleCount);
+      lastLoadTruncated_ = true;
       break;
     }
 
@@ -1000,10 +1148,21 @@ bool CssParser::loadFromCache() {
     style.defined.direction = (definedBits & 1 << 16) != 0;
     style.defined.verticalAlign = (definedBits & 1 << 17) != 0;
 
+    if (filter) {
+      const size_t dot = selector.find('.');
+      if (dot != std::string::npos) {
+        uint32_t h = 2166136261u;
+        for (size_t k = dot + 1; k < selector.size(); k++) {
+          h = (h ^ static_cast<uint8_t>(std::tolower(static_cast<unsigned char>(selector[k])))) * 16777619u;
+        }
+        if (!std::binary_search(usedClasses.begin(), usedClasses.end(), h)) continue;  // 本章用不到
+      }
+    }
     rulesBySelector_[selector] = style;
+    lastLoadKept_++;
   }
 
-  // Actual size may be below ruleCount if the heap-floor cap stopped the load early.
+  // 實際筆數可能低於 ruleCount（heap 地板提早收手）。
   LOG_DBG("CSS", "Loaded %zu/%u rules from cache", rulesBySelector_.size(), ruleCount);
   return true;
 }

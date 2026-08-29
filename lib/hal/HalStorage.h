@@ -47,6 +47,10 @@ class HalStorage {
 
   static HalStorage& getInstance() { return instance; }
 
+  // v194：Impl／HalFile 配置失敗的證人（先到先得）。src 讀走寫成 ALLOCFAIL。
+  static char lastAllocFail[96];
+  static void noteAllocFail(const char* where, size_t bytes);
+
   class StorageLock;  // private class, used internally
 
  private:
@@ -73,89 +77,6 @@ class HalFile : public Print {
   HalFile& operator=(const HalFile&) = delete;
 
   void flush();
-  // Same write-back as flush(), but reports whether it worked.
-  //
-  // FsFile::flush() is `void flush() { sync(); }` (SdFat FsLib/FsFile.h:262):
-  // it throws away sync()'s bool (FsFile.h:809-810), so a caller that has to
-  // make a durability promise -- SMB2's WRITE_THROUGH, MS-SMB2 2.2.21, which
-  // asserts "on stable storage before the response" -- had no way to keep it.
-  // Exposing the existing return value here is the sanctioned way to reach an
-  // SDK capability; the alternative would be reaching around the HAL and its
-  // mutex.
-  bool sync();
-  // This handle's MODIFY date/time, read from its FAT directory entry, in
-  // FAT's own packed 16-bit format -- the exact pair SdFat returns
-  // (FsFile::getModifyDateTime(), FsLib/FsFile.h:305-309, forwarding to
-  // FatFile::getModifyDateTime(), FatLib/FatFile.cpp:310-322). Returns false
-  // when the entry cannot be read, leaving *date/*time untouched. Decode with
-  // src/util/FatTimestamp.h.
-  //
-  // Added for the SMB2 server: an SMB client wants a real modification time
-  // per file, and reporting a constant instead makes every book in the Files
-  // app share one date, which destroys sorting -- the main thing the feature
-  // is for. Exposing the SDK capability HERE, rather than reaching around the
-  // HAL to SdFat from a network handler, is the same choice `sync()` above
-  // documents: the wrapped call inherits the storage mutex and the HAL's
-  // error contract, and SdFat is not thread-safe (CLAUDE.md's HAL section).
-  //
-  // THE SHARE ROOT IS A KNOWN NON-ANSWER, and callers must not use it: the
-  // FAT root directory has no directory entry to read. FatFile::openRoot()
-  // memsets the file object (FatFile.cpp:697-724), leaving m_dirSector = 0,
-  // and FatFile::dirEntry()'s sync() succeeds for a clean read-only handle --
-  // so getModifyDateTime() on the root returns TRUE having read sector 0 (the
-  // boot sector / MBR) as though it were a directory entry. Garbage, reported
-  // as success. There is no cheap way to detect that from here; the SMB
-  // handler skips the root instead, and the desktop stub returns false for it
-  // so the fallback path stays exercised.
-  bool getModifyDateTime(uint16_t* date, uint16_t* time);
-  // Set this file's length to `length` bytes. Returns false on failure,
-  // leaving the file unchanged.
-  //
-  // ⚠️ THIS CANNOT EXTEND A FILE, and that is a property of the filesystem,
-  // not of this wrapper. Both implementations are literally
-  //     bool truncate(uint64_t length) { return seekSet(length) && truncate(); }
-  // (FatLib/FatFile.h:957, ExFatLib/ExFatFile.h:786) and seekSet() refuses any
-  // position past end-of-file (FatFile.cpp:1184-1188, ExFatFile.cpp:715-719).
-  // So a length greater than the current size returns false and changes
-  // nothing -- it does NOT zero-extend the way POSIX ftruncate() does. A
-  // caller that needs growth has to write the bytes (see extendWithZeros() in
-  // src/network/SmbFileHandlers.cpp).
-  //
-  // SIDE EFFECT: on success the file position is left at the new end of file
-  // (truncate() sets m_fileSize = m_curPosition after seekSet moved there).
-  // Anything that seeks before its next read/write is unaffected.
-  //
-  // Added for the SMB2 server's FILE_END_OF_FILE_INFORMATION. Exposing the
-  // SDK capability here rather than reaching around the HAL is the same choice
-  // sync() and getModifyDateTime() above document.
-  // Write this file's timestamps into its directory entry. `flags` is a
-  // bitwise OR of SdFat's T_ACCESS / T_CREATE / T_WRITE (common/
-  // FsApiConstants.h:79-83, already included by this header). Returns false on
-  // failure, changing nothing.
-  //
-  // The parameters mirror SdFat's own setter exactly
-  // (FsFile::timestamp(), FsLib/FsFile.h:844-850) rather than taking the
-  // packed FAT pair getModifyDateTime() returns, for a layering reason: the
-  // decomposition needs a calendar algorithm, that algorithm lives in
-  // src/util/FatTimestamp, and lib/hal must not depend on src/. The caller
-  // decomposes; this wraps.
-  //
-  // ⚠️ RANGE IS 1980-2099, NARROWER THAN THE GETTER'S. FatFile::timestamp()
-  // refuses `year < 1980 || year > 2099` outright (FatLib/FatFile.cpp:
-  // 1278-1283), while the packed date the getter reads has a 7-bit year field
-  // that reaches 2107. FatTimestamp::fromUnixSeconds() enforces the narrower
-  // bound so callers get a clear refusal instead of a write that fails.
-  //
-  // Works on directories as well as files (isFileOrSubDir(), same line).
-  //
-  // Added for the SMB2 server's FILE_BASIC_INFORMATION: a client that has just
-  // copied a file stamps its timestamps, and there is no honest way to answer
-  // that request without being able to write them -- accepting it and doing
-  // nothing is the "report unverified success" antipattern this project has
-  // already paid for twice.
-  bool setTimestamp(uint8_t flags, uint16_t year, uint8_t month, uint8_t day, uint8_t hour, uint8_t minute,
-                    uint8_t second);
-  bool truncate(uint64_t length);
   size_t getName(char* name, size_t len);
   size_t size();
   size_t fileSize();
@@ -170,9 +91,8 @@ class HalFile : public Print {
   int read();  // read a single byte
   size_t write(const void* buf, size_t count);
   size_t write(uint8_t b) override;
-  // v53:必須覆寫 Print 的緩衝版,否則任何走 Print 介面的寫入(serializeJson(doc, halFile) 等)
-  // 會落到基底類別的「逐位元組迴圈」——每個 byte 一次遞迴 mutex + 一次 1-byte SdFat 寫入,
-  // 且每 byte 都開一個讓其他 task 插隊驅逐 SdFat 單一 sector cache 的窗口。
+  // 沒有這個 override，Print::write(buf,count) 會退化成逐 byte 呼叫 write(uint8_t)，
+  // 而每個 byte 都要進一次 SD 的 semaphore。serializeJson(doc, halFile) 直接踩到。
   size_t write(const uint8_t* buf, size_t count) override { return write(static_cast<const void*>(buf), count); }
   bool rename(const char* newPath);
   bool isDirectory() const;

@@ -3,11 +3,9 @@
 
 #include <Epub.h>
 #include <FsHelpers.h>
-#include <HalStorage.h>
 #include <Logging.h>
 #include <Txt.h>
-
-#include <functional>
+#include <Xtc.h>
 
 bool isBookCacheDirectoryName(const char* name) {
   if (!name) {
@@ -27,12 +25,7 @@ void clearBookCache(const std::string& path) {
   if (FsHelpers::hasEpubExtension(path)) {
     Epub(path, DataDir::path()).clearCache();
   } else if (FsHelpers::hasXtcExtension(path)) {
-    // XTC support was removed; still clear the leftover cache dir when the file is deleted/moved
-    // via web/WebDAV. Same naming scheme as Xtc.h (kept out of lib/Xtc so the lib stays gc-able).
-    const std::string cacheDir = std::string(DataDir::path()) + "/xtc_" + std::to_string(std::hash<std::string>{}(path));
-    if (Storage.exists(cacheDir.c_str())) {
-      Storage.removeDir(cacheDir.c_str());
-    }
+    Xtc(path, DataDir::path()).clearCache();
   } else if (FsHelpers::hasTxtExtension(path)) {
     Txt(path, DataDir::path()).clearCache();
   } else {

@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "Epub.h"
+#include "ReaderRenderSpec.h"
 
 class Page;
 class GfxRenderer;
@@ -19,9 +20,7 @@ class Section {
   std::string filePath;
   HalFile file;
 
-  void writeSectionFileHeader(int fontId, float lineCompression, bool extraParagraphSpacing, uint8_t paragraphAlignment,
-                              uint16_t viewportWidth, uint16_t viewportHeight, bool hyphenationEnabled,
-                              bool embeddedStyle, uint8_t imageRendering, bool focusReadingEnabled, bool boldBodyText);
+  void writeSectionFileHeader(const ReaderRenderSpec& spec);
   uint32_t onPageComplete(std::unique_ptr<Page> page);
 
   // Page-offset table entry, kept in RAM while an incremental build is running so
@@ -30,6 +29,7 @@ class Section {
     uint32_t fileOffset;
     uint16_t paragraphIndex;
     uint16_t listItemIndex;
+    uint32_t visibleTextOffset;
   };
   // Held only while an incremental build is in progress (see startBuild). Carries the
   // live parser plus the strings it references (the parser stores them by reference)
@@ -44,6 +44,8 @@ class Section {
     std::string tmpHtmlPath;
     bool reusedHtml = false;
     CssParser* cssParser = nullptr;
+    // v187：這次建置的 CSS 載入狀態（見 CSS_STATE_*），commit 時補進檔頭。
+    uint8_t cssState = 0;
     // HTML byte progress, for estimating the section's total page count while it's still building.
     uint32_t bytesConsumed = 0;
     uint32_t totalBytes = 0;
@@ -55,6 +57,13 @@ class Section {
   };
   std::unique_ptr<BuildContext> build_;
   bool buildComplete_ = false;
+  bool lastBuildWasLowMemory_ = false;  // v149，見 lastBuildWasLowMemory()
+  // v187：loadSectionFile 因「CSS 截斷版面」丟掉快取後設為 true；接下來的重建若又截斷，就寫
+  // CSS_STATE_TRUNCATED_FINAL 進檔頭，之後不再為此重排（收斂：每章最多多排一次）。
+  bool cssRetry_ = false;
+  // v187：最近一次 loadSectionFile 丟掉快取的原因（0 無／1 版號／2 參數／3 CSS 截斷重排／4 partial 尾段壞）。
+  uint8_t lastLoadReject_ = 0;
+  mutable bool lastLoadWasLowMemory_ = false;  // v152，見 lastLoadWasLowMemory()
   // Pages laid out by the active build (== build_->lut.size()). Distinct from pageCount,
   // which is the pages *available to read* and also counts a loaded partial file's pages.
   uint16_t builtPageCount_ = 0;
@@ -85,29 +94,45 @@ class Section {
   // forward-declared ChapterHtmlSlimParser, whose full definition is only visible in the .cpp.
   explicit Section(const std::shared_ptr<Epub>& epub, int spineIndex, GfxRenderer& renderer);
   ~Section();
-  bool loadSectionFile(int fontId, float lineCompression, bool extraParagraphSpacing, uint8_t paragraphAlignment,
-                       uint16_t viewportWidth, uint16_t viewportHeight, bool hyphenationEnabled, bool embeddedStyle,
-                       uint8_t imageRendering, bool focusReadingEnabled, bool boldBodyText);
+  bool loadSectionFile(const ReaderRenderSpec& spec);
   bool clearCache() const;
-  bool createSectionFile(int fontId, float lineCompression, bool extraParagraphSpacing, uint8_t paragraphAlignment,
-                         uint16_t viewportWidth, uint16_t viewportHeight, bool hyphenationEnabled, bool embeddedStyle,
-                         uint8_t imageRendering, bool focusReadingEnabled, bool boldBodyText,
-                         const std::function<void()>& popupFn = nullptr);
+  bool createSectionFile(const ReaderRenderSpec& spec, const std::function<void()>& popupFn = nullptr);
 
   // Incremental build: lay out the section a few pages at a time so a large chapter
   // can show its first page immediately and keep the UI responsive while the rest
   // builds. createSectionFile() above is the one-shot wrapper over these.
   //   if (!startBuild(...)) fail;
   //   each tick: buildSomeMore(N); render up to pageCount; when isBuildComplete() stop.
-  bool startBuild(int fontId, float lineCompression, bool extraParagraphSpacing, uint8_t paragraphAlignment,
-                  uint16_t viewportWidth, uint16_t viewportHeight, bool hyphenationEnabled, bool embeddedStyle,
-                  uint8_t imageRendering, bool focusReadingEnabled, bool boldBodyText,
-                  const std::function<void()>& popupFn = nullptr);
+  bool startBuild(const ReaderRenderSpec& spec, const std::function<void()>& popupFn = nullptr);
   // Lay out up to maxPages more pages (maxPages <= 0 = build to completion). Returns
   // false on error (the build is abandoned). Sets isBuildComplete() when finished.
-  bool buildSomeMore(int maxPages);
+  // v189：shouldYield 在每個 parseStep（1KB 一步）之間被問一次；回 true 就立刻回傳 true
+  // （可能一頁都沒排完，這是正常的：背景 tick 下一圈接著做）。背景建置用它看原始按鍵電平，
+  // 讓持 RenderLock 的盲區縮到一個 parseStep。nullptr ＝ 不讓路（同步站點）。
+  bool buildSomeMore(int maxPages, bool (*shouldYield)(void*) = nullptr, void* yieldCtx = nullptr);
+
+  /// v149：最近一次建置失敗是否為【低記憶體中止】（sticky，startBuild 時清除）。
+  /// 呼叫端據此分流：低記憶體 -> 不要 reset、不要立刻重建（那是無退避的正回饋迴圈：
+  /// 重建從章首跑到同一個長段落、再撞同一次 OOM）；真 parse error 才走原本的錯誤路徑。
+  bool lastBuildWasLowMemory() const { return lastBuildWasLowMemory_; }
+  uint8_t lastLoadReject() const { return lastLoadReject_; }
+  // v194：src 讀走後歸零。-1＝沒有待寫的 SECTPOISON 行。
+  static int lastPoisonAvoidedSpine;
+
+  /// v152：最近一次 loadPage 回 nullptr 是否因為【低記憶體地板】。
+  /// 呼叫端據此分流：低記憶體 -> 不要 clearCache／abandonBuild（那會在記憶體最緊的
+  /// 時刻強迫全量重建）；跳過本輪 render、下一輪重試 —— pxc slot 在 render 結束釋放，
+  /// 下一輪幾乎必然成功。真的讀檔損壞才走原本的清快取重建。
+  bool lastLoadWasLowMemory() const { return lastLoadWasLowMemory_; }
   bool isBuilding() const { return static_cast<bool>(build_); }
   bool isBuildComplete() const { return buildComplete_; }
+  // v189：這次建置已排出的頁數（partial 延伸時 pageCount 釘在 watermark，這個才是進度）。
+  uint16_t builtPageCount() const { return builtPageCount_; }
+  // v189 儀器（B-22：盲區要量不要猜）：單一 parseStep 的最長／累計耗時與步數。
+  // lib 不能反向依賴 DiagLog，所以 lib 記、活動讀（與 Page::footnoteDrops 同型）。由活動歸零。
+  static uint32_t buildStepMaxMs;   // 最長一步（含收尾那一步），ms
+  static uint32_t buildStepTotalUs;  // 累計，µs（millis 解析度會把 <1ms 的步算成 0）
+  static uint32_t buildStepCount;
   // Best-known total page count: the exact pageCount once finalized, or a smoothed byte-based
   // estimate (pages so far scaled by totalBytes/bytesConsumed, damped by an EMA) while a giant spine
   // is still building, so "page X of Y" / progress don't read off the small build watermark.
@@ -155,4 +180,23 @@ class Section {
 
   // Look up the synthetic paragraph index for the given rendered page.
   std::optional<uint16_t> getParagraphIndexForPage(uint16_t page) const;
+
+  // Exact zero-based visible Unicode-codepoint offset where a rendered page
+  // starts. Available from both an active build and finalized/partial caches.
+  std::optional<uint32_t> getVisibleTextOffsetForPage(uint16_t page) const;
+
+  // Derive the local page containing an exact visible-text offset. When
+  // preferFirstAtOffset is true, ties caused by zero-width content such as an
+  // image-only page select the first page at that offset.
+  std::optional<uint16_t> getPageForVisibleTextOffset(uint32_t offset, bool preferFirstAtOffset = false) const;
+
+  // True once the active build has laid out a page starting at or past `offset`, i.e.
+  // getPageForVisibleTextOffset() can resolve it from the build without laying out more.
+  // Lets a caller build to a content target instead of a page number, which is what a
+  // re-pagination needs: the old page index no longer names the same content.
+  // False with no build running -- there is nothing left to wait for, so the on-disk
+  // cache answers directly.
+  bool buildReachedVisibleTextOffset(uint32_t offset) const {
+    return build_ && !build_->lut.empty() && offset <= build_->lut.back().visibleTextOffset;
+  }
 };

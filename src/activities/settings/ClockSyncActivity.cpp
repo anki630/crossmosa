@@ -93,14 +93,9 @@ void ClockSyncActivity::loop() {
     return;
   }
 
-  if (state == FAILED && mappedInput.wasPressed(MappedInputManager::Button::Confirm)) {
-    // 失敗態的「下一步」:確認鍵重試(下一輪 loop 走 SYNCING 分支重跑 runSync)
-    state = SYNCING;
-    requestUpdate();
-    return;
-  }
-
-  if (mappedInput.wasPressed(MappedInputManager::Button::Back)) {
+  int x = 0;
+  int y = 0;
+  if (mappedInput.wasPressed(MappedInputManager::Button::Back) || mappedInput.wasScreenTapped(x, y)) {
     finish();
   }
 }
@@ -123,7 +118,10 @@ void ClockSyncActivity::render(RenderLock&&) {
     case SUCCESS: {
       renderer.drawCenteredText(UI_12_FONT_ID, midY - 20, tr(STR_CLOCK_SYNC_OK), true, EpdFontFamily::BOLD);
       if (syncedTime[0] != '\0') {
-        char line[32];
+        // Sized for the label in any language: STR_CURRENT_TIME is 26 bytes in
+        // Russian (UTF-8 Cyrillic is 2 bytes per letter) versus 13 in English,
+        // plus a separator and up to "08:56 PM".
+        char line[64];
         snprintf(line, sizeof(line), "%s %s", tr(STR_CURRENT_TIME), syncedTime);
         renderer.drawCenteredText(UI_10_FONT_ID, midY + 10, line);
       }
@@ -135,12 +133,12 @@ void ClockSyncActivity::render(RenderLock&&) {
       break;
     case FAILED:
       renderer.drawCenteredText(UI_12_FONT_ID, midY - 20, tr(STR_CLOCK_SYNC_FAIL), true, EpdFontFamily::BOLD);
-      renderer.drawCenteredText(UI_10_FONT_ID, midY + 10, tr(STR_RETRY_OR_BACK_HINT));
+      renderer.drawCenteredText(UI_10_FONT_ID, midY + 10, tr(STR_CHECK_SERIAL_OUTPUT));
       break;
   }
 
   if (state != SYNCING) {
-    const auto labels = mappedInput.mapLabels(tr(STR_BACK), state == FAILED ? tr(STR_RETRY) : "", "", "");
+    const auto labels = mappedInput.mapLabels(tr(STR_BACK), "", "", "");
     GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
   }
 

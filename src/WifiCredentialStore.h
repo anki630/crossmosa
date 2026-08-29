@@ -1,16 +1,22 @@
 #pragma once
-
-#include <DataDir.h>
-#include <cstdio>
 #include <ArduinoJson.h>
+#include <cstdio>
+#include <DataDir.h>
 #include <PersistableStore.h>
 
+#include <optional>
 #include <string>
 #include <vector>
 
 struct WifiCredential {
   std::string ssid;
   std::string password;  // Plaintext in memory; obfuscated with hardware key on disk
+};
+
+struct WifiCredentialSummary {
+  std::string ssid;
+  bool hasPassword = false;
+  bool isLastConnected = false;
 };
 
 /**
@@ -23,8 +29,13 @@ class WifiCredentialStore : public PersistableStore<WifiCredentialStore> {
  private:
   std::vector<WifiCredential> credentials;
   std::string lastConnectedSsid;
+  // Protects the in-memory strings independently of PersistableStore's file
+  // serialization mutex. Readers only hold this briefly and never wait on SD
+  // I/O; saveToFile() snapshots under this mutex from toJson().
+  mutable std::mutex credentialMutex;
 
   static constexpr size_t MAX_NETWORKS = 8;
+  static constexpr size_t MAX_PASSWORD_LENGTH = 64;
 
   // Private constructor for singleton
   WifiCredentialStore() = default;
@@ -33,8 +44,8 @@ class WifiCredentialStore : public PersistableStore<WifiCredentialStore> {
 
  public:
   static const char* getFilePath() {
-    // Built on first use — DataDir::resolve() has run by then (boot order).
-    static char p[32] = "";
+    // v36/v186：掛在開機解析出的資料目錄上；首用必在 DataDir::resolve() 之後（開機順序）。
+    static char p[40] = "";
     if (!p[0]) snprintf(p, sizeof(p), "%s/wifi.json", DataDir::path());
     return p;
   }
@@ -44,17 +55,19 @@ class WifiCredentialStore : public PersistableStore<WifiCredentialStore> {
   // Credential management
   bool addCredential(const std::string& ssid, const std::string& password);
   bool removeCredential(const std::string& ssid);
-  const WifiCredential* findCredential(const std::string& ssid) const;
-
-  // Get all stored credentials (for UI display)
-  const std::vector<WifiCredential>& getCredentials() const { return credentials; }
+  std::optional<WifiCredential> findCredential(const std::string& ssid) const;
+  std::optional<WifiCredential> getCredentialAt(size_t index) const;
+  std::optional<std::string> getSsidAt(size_t index) const;
+  size_t getCredentialCount() const;
+  // Password-free snapshot for display/API consumers.
+  std::vector<WifiCredentialSummary> getCredentialSummaries() const;
 
   // Check if a network is saved
   bool hasSavedCredential(const std::string& ssid) const;
 
   // Last connected network
   void setLastConnectedSsid(const std::string& ssid);
-  const std::string& getLastConnectedSsid() const;
+  std::string getLastConnectedSsid() const;
   void clearLastConnectedSsid();
 
   // Clear all credentials

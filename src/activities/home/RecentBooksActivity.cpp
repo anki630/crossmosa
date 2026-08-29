@@ -43,6 +43,10 @@ void RecentBooksActivity::onExit() {
 
 void RecentBooksActivity::loop() {
   const int pageItems = UITheme::getInstance().getNumberOfItemsPerPage(renderer, true, false, true, true);
+  const auto& metrics = UITheme::getInstance().getMetrics();
+  const int contentTop = metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
+  const int contentHeight =
+      renderer.getScreenHeight() - contentTop - metrics.buttonHintsHeight - metrics.verticalSpacing;
 
   // After a long-press has fired, swallow input until Confirm is physically released
   // (so the release doesn't also open the book; re-arm only once the button is up).
@@ -71,11 +75,34 @@ void RecentBooksActivity::loop() {
     }
   }
 
+  int touchSel = static_cast<int>(selectorIndex);
+  const auto listTouch =
+      handleListTouch(touchSel, static_cast<int>(recentBooks.size()), contentTop, contentHeight, true);
+  if (listTouch != ListTouchResult::None) {
+    selectorIndex = static_cast<size_t>(touchSel);
+    if (listTouch == ListTouchResult::Activated) {
+      LOG_DBG("RBA", "Tapped recent book: %s", recentBooks[selectorIndex].path.c_str());
+      onSelectBook(recentBooks[selectorIndex].path);
+    }
+    return;
+  }
+
   if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
     onGoHome();
   }
 
   int listSize = static_cast<int>(recentBooks.size());
+  const auto swipe = mappedInput.wasSwipe();
+  if (swipe == MappedInputManager::SwipeDir::Up) {
+    selectorIndex = ButtonNavigator::nextPageIndexClamped(static_cast<int>(selectorIndex), listSize, pageItems);
+    requestUpdate();
+    return;
+  }
+  if (swipe == MappedInputManager::SwipeDir::Down) {
+    selectorIndex = ButtonNavigator::previousPageIndexClamped(static_cast<int>(selectorIndex), listSize, pageItems);
+    requestUpdate();
+    return;
+  }
 
   buttonNavigator.onNextRelease([this, listSize] {
     selectorIndex = ButtonNavigator::nextIndex(static_cast<int>(selectorIndex), listSize);
@@ -128,38 +155,18 @@ void RecentBooksActivity::render(RenderLock&&) {
   const auto pageHeight = renderer.getScreenHeight();
   const auto& metrics = UITheme::getInstance().getMetrics();
 
-  // 頁碼副標(pageItems 與 loop 翻頁同源,單頁時空字串=不顯示)
-  const std::string pageText = UITheme::pageIndicatorText(
-      static_cast<int>(selectorIndex), static_cast<int>(recentBooks.size()),
-      UITheme::getNumberOfItemsPerPage(renderer, true, false, true, true));
-  GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.headerHeight}, tr(STR_MENU_RECENT_BOOKS),
-                 pageText.empty() ? nullptr : pageText.c_str());
+  GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.headerHeight}, tr(STR_MENU_RECENT_BOOKS));
 
   const int contentTop = metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
   const int contentHeight = pageHeight - contentTop - metrics.buttonHintsHeight - metrics.verticalSpacing;
 
   // Recent tab
   if (recentBooks.empty()) {
-    // 空狀態:置中兩級字(主句 14B + 提示句 10R),不再是左上角小字
-    const int midY = contentTop + contentHeight / 2;
-    renderer.drawCenteredText(UI_12_FONT_ID, midY - renderer.getLineHeight(UI_12_FONT_ID) - 2,
-                              tr(STR_NO_RECENT_BOOKS), true, EpdFontFamily::BOLD);
-    renderer.drawCenteredText(UI_10_FONT_ID, midY + 2, tr(STR_RECENTS_EMPTY_HINT));
+    renderer.drawText(UI_10_FONT_ID, metrics.contentSidePadding, contentTop + 20, tr(STR_NO_RECENT_BOOKS));
   } else {
     GUI.drawList(
         renderer, Rect{0, contentTop, pageWidth, contentHeight}, recentBooks.size(), selectorIndex,
-        [this](int index) { return recentBooks[index].title; },
-        [this](int index) {
-          // Author line doubles as the progress display: "author (45%)"; a 0 progress
-          // (pre-v31 entry or never opened) shows the author alone.
-          const RecentBook& book = recentBooks[index];
-          std::string subtitle = book.author;
-          if (book.progressPercent > 0) {
-            if (!subtitle.empty()) subtitle += " ";
-            subtitle += "(" + std::to_string(book.progressPercent) + "%)";
-          }
-          return subtitle;
-        },
+        [this](int index) { return recentBooks[index].title; }, [this](int index) { return recentBooks[index].author; },
         [this](int index) { return UITheme::getFileIcon(recentBooks[index].path); });
   }
 

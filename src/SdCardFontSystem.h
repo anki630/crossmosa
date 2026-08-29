@@ -22,39 +22,33 @@ class SdCardFontSystem {
   /// Also re-discovers if the registry has been marked dirty (e.g. by web upload).
   void ensureLoaded(GfxRenderer& renderer);
 
-  /// Unload the currently loaded SD reader font from RAM to reclaim heap before
-  /// a RAM-hungry phase (e.g. bringing up WiFi). Frees the resident interval
-  /// tables, advance and glyph caches and unregisters the font from the
-  /// renderer, but does NOT clear the user's saved selection
-  /// (SETTINGS.sdFontFamilyName). The font is reloaded automatically afterwards:
-  /// by begin() after the WiFi-session reboot, or by ensureLoaded() on the next
-  /// reader entry. UI text is unaffected (it uses the flash-resident builtin
-  /// fonts). No-op if nothing is loaded. Reclaims roughly 20-90 KB depending on
-  /// the loaded family/size.
-  void unloadForLowMemory(GfxRenderer& renderer);
-
-  /// Resolve an SD card font ID from family name + fontSize enum.
+  /// Resolve an SD card font ID from family name + reader point size.
   /// Returns 0 if not found. Used by CrossPointSettings::getReaderFontId().
-  int resolveFontId(const char* familyName, uint8_t fontSizeEnum) const;
-
-  /// 「改字級會不會真的換到不同字面」——問【登錄表】而非已載入字型。
-  /// resolveFontId 回傳的是當下已載入那一級的 fontId(改設定後要到下次 ensureLoaded
-  /// 才重載),改前改後比對永遠相同;v38 字級快捷的重啟守門就是這樣被跳過(實機回報)。
-  /// 內建備援(無 SD 字型)回 false:OMIT_FONTS 下四級同一字面,重啟純浪費。
-  bool sizeChangeTakesEffect(uint8_t oldSizeEnum, uint8_t newSizeEnum) const;
-
-  /// v53 量測:目前載入的內文字型物件(讀 prewarm 統計用;無 SD 字型時 nullptr)。
-  SdCardFont* currentReaderFont() const { return manager_.currentFont(); }
-
-  /// v55:目前 SD 內文字型常駐的位元組數(沒載入回 0)。
-  /// 供「卸字型換連續堆」的呼叫點先問一句「值不值得」——重載一次約 868ms。
-  size_t residentBytes() const;
+  int resolveFontId(const char* familyName, uint8_t pointSize) const;
 
   /// Access the registry (e.g. for settings UI to enumerate available fonts).
   const SdCardFontRegistry& registry() const { return registry_; }
 
+  // v121/v161：診斷統計用（TXTPAGE 折算預取的 afail/dropped）。可能為 nullptr（未載入 SD 字型）。
+  SdCardFont* currentReaderFont() const { return manager_.currentFontForStats(); }
+
   /// Non-const access to the registry (for FontInstaller).
   SdCardFontRegistry& registry() { return registry_; }
+
+  /// v5/v148：釋放常駐的 SD 閱讀字型（interval 表 + advance/glyph 快取，數十 KB —— 實測
+  /// p2 裡的 43,008 mini bitmap 就是它的）。給 WiFi 啟動或圖片解碼這類需要大連續塊的
+  /// 階段用。已存的選擇（SETTINGS.sdFontFamilyName）不動，所以 begin()（WiFi session 後
+  /// 的重開機）或 ensureLoaded()（下次進閱讀器）會自動重載 —— 這裡不需要顯式 reload。
+  /// 字型 ID 是內容雜湊（SdCardFontManager::computeFontId），重載後不變。
+  void unloadForLowMemory(GfxRenderer& renderer);
+
+  /// v148（codex 複查後新增）：relief 之後的專用重載 —— 與 ensureLoaded() 有三個刻意的差異：
+  ///  ① 【絕不】清除 SETTINGS.sdFontFamilyName —— 暫時性低記憶體不是使用者改了選擇，
+  ///     清掉會把一次 OOM 變成永久設定遺失（ensureLoaded 失敗時會 clearSdFontFamily）。
+  ///  ② 只載 reader 尺寸，不做 setupUiFallbacks（那最多再讀三個 UI 尺寸檔，
+  ///     在 RenderLock 下的 render 中途做太重；UI 備援等下次 ensureLoaded 補）。
+  ///  ③ 回傳 bool —— 失敗時呼叫端知道，內文暫時落回內建字型（下次進閱讀器自癒）。
+  bool reloadReaderFontAfterRelief(GfxRenderer& renderer);
 
   /// Mark the registry as needing re-discovery.
   /// Thread-safe: can be called from the web server task.
@@ -70,6 +64,13 @@ class SdCardFontSystem {
   }
 
  private:
+  // Load the active SD family at the built-in UI point sizes and register each
+  // as a size-matched CJK fallback for the corresponding UI font, so CJK book
+  // titles/list rows render at the same size as the surrounding Latin UI text.
+  // No-op when no SD family is loaded. Safe to call repeatedly (sizes already
+  // loaded are reused).
+  void setupUiFallbacks(GfxRenderer& renderer);
+
   SdCardFontRegistry registry_;
   SdCardFontManager manager_;
   std::atomic<bool> registryDirty_{false};

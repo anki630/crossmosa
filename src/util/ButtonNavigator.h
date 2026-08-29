@@ -44,9 +44,9 @@ class ButtonNavigator final {
   [[nodiscard]] static int nextPageIndex(int currentIndex, int totalItems, int itemsPerPage);
   [[nodiscard]] static int previousPageIndex(int currentIndex, int totalItems, int itemsPerPage);
 
-  // PageDown/PageUp variants that CLAMP to the last/first item instead of wrapping: paging past
-  // the last page stops at the bottom, paging before the first stays at the top. Use these where
-  // a long list should page to its end (e.g. an OPDS feed) rather than loop around.
+  // v31/v156：翻頁的【夾限】版 —— 翻過最後一頁停在底、第一頁之前停在頂，不環繞。
+  // 長按翻頁在到底之後環繞回頂端 = 使用者在長清單（OPDS feed、書籤、章節）裡
+  // 無限繞圈，長按變成賭「放手的時機」。單步選取的環繞（nextIndex）維持不變。
   [[nodiscard]] static int nextPageIndexClamped(int currentIndex, int totalItems, int itemsPerPage);
   [[nodiscard]] static int previousPageIndexClamped(int currentIndex, int totalItems, int itemsPerPage);
 

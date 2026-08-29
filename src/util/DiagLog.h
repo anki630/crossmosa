@@ -8,7 +8,7 @@
 // 回傳的是「各池取大者」——也就是說 v20 以來十幾個版本一直在對一個無法歸因的數字做二分法。
 // 在拿到 per-pool 數字之前,任何記憶體佈局改動(framebuffer 移池、IRAM 回收)都無法驗收。
 //
-// 這台裝置沒有序列埠,所以輸出走 SD 檔:<資料目錄>/diag.log,把卡插電腦回傳即可。
+// 這台裝置沒有序列埠,所以輸出走 SD 檔:<資料目錄>/diag.log,他把卡插電腦回傳即可。
 namespace DiagLog {
 
 // v57:儀器改成【預設關閉、靠 SD 上的哨兵檔開啟】。
@@ -64,7 +64,8 @@ bool setForced(bool on, const char* reason = "forced");
 void mem(const char* tag);
 
 // 記一行自由格式文字(翻頁分段耗時、字型 prewarm 統計等)。
-void line(const char* fmt, ...) __attribute__((format(printf, 1, 2)));
+// 回傳是否寫進 diag.log。既有呼叫點可忽略；v194 麵包屑要確認成功才清 RTC。
+bool line(const char* fmt, ...) __attribute__((format(printf, 1, 2)));
 
 // v55:傾印各大池的「大型已用區塊」位址與大小。mem() 只說「最大連續塊剩多少」,
 // 答不出【是誰卡在池中間】——diag3.log 那顆把 p2 從 115,616 砍到 42,312 的

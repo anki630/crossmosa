@@ -3,7 +3,6 @@
 #include <GfxRenderer.h>
 #include <I18n.h>
 
-#include "CrossPointSettings.h"
 #include "MappedInputManager.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
@@ -16,20 +15,16 @@ EpubReaderMenuActivity::EpubReaderMenuActivity(GfxRenderer& renderer, MappedInpu
       menuItems(buildMenuItems(hasFootnotes, hasBookmarks)),
       title(title),
       pendingOrientation(currentOrientation),
-      pendingFontSize(SETTINGS.fontSize),
-      pendingLineSpacing(SETTINGS.lineSpacing),
-      pendingBoldBody(SETTINGS.boldBodyText),
       currentPage(currentPage),
       totalPages(totalPages),
       bookProgressPercent(bookProgressPercent) {}
 
 std::vector<EpubReaderMenuActivity::MenuItem> EpubReaderMenuActivity::buildMenuItems(bool hasFootnotes,
                                                                                      bool hasBookmarks) {
-  // v129:依「開這個選單的目的」排序,不依「是不是設定」分類。
-  // ⚠️ 直向可見 12 列,最壞情況(有註腳 + 有書籤)正好 12 項——【零餘裕】。
-  //    要加任何一項,必須先砍一項。橫向只看得見 7 列 → 前 7 項決定橫向讀者
-  //    不捲動能碰到什麼。判準與三條否決見 docs/specs/2026-08-12-reader-menu-ia.md。
   std::vector<MenuItem> items;
+  // ⚠️ 直向可見 12 列是硬上限，而最壞情況（有註腳＋有書籤）正好 12 項——【零餘裕】。
+  // reserve 不是上限，加到第 13 項時 vector 照常成長、編譯與執行都不會警告。
+  // 這條不變量只靠這行註解與 CLAUDE.md 守著：要加任何一項，必須先砍一項。
   items.reserve(12);
   items.push_back({MenuAction::SELECT_CHAPTER, StrId::STR_SELECT_CHAPTER});
   if (hasFootnotes) {
@@ -39,18 +34,14 @@ std::vector<EpubReaderMenuActivity::MenuItem> EpubReaderMenuActivity::buildMenuI
     items.push_back({MenuAction::BOOKMARKS, StrId::STR_BOOKMARKS});
   }
   items.push_back({MenuAction::TOGGLE_BOOKMARK, StrId::STR_TOGGLE_BOOKMARK});
-  // 排版三兄弟必須相鄰:是「邊看邊調」的一叢動作,調完會互相影響
-  // (字級調大之後常常就想收緊行距)。v38/v41 加入,v129 改為集中。
-  items.push_back({MenuAction::FONT_SIZE, StrId::STR_FONT_SIZE});
-  items.push_back({MenuAction::LINE_SPACING, StrId::STR_LINE_SPACING});
-  items.push_back({MenuAction::BOLD_TEXT, StrId::STR_BOLD_TEXT});
-  items.push_back({MenuAction::GO_TO_PERCENT, StrId::STR_GO_TO_PERCENT});
-  // 「一次設定型」與排錯型降位到選單尾。v129 否決了把它們收進子選單:
-  // 兩者已各自帶一個 OptionPopup,再包一層就變三層,而清單底部本來就等於免費的子選單。
+  items.push_back({MenuAction::TEXT_SETTINGS, StrId::STR_TEXT_SETTINGS});
   items.push_back({MenuAction::ROTATE_SCREEN, StrId::STR_ORIENTATION});
   items.push_back({MenuAction::AUTO_PAGE_TURN, StrId::STR_AUTO_TURN_PAGES_PER_MIN});
-  items.push_back({MenuAction::DELETE_CACHE, StrId::STR_DELETE_CACHE});
+  items.push_back({MenuAction::GO_TO_PERCENT, StrId::STR_GO_TO_PERCENT});
+  items.push_back({MenuAction::SCREENSHOT, StrId::STR_SCREENSHOT_BUTTON});
   items.push_back({MenuAction::DISPLAY_QR, StrId::STR_DISPLAY_QR});
+  items.push_back({MenuAction::GO_HOME, StrId::STR_GO_HOME_BUTTON});
+  items.push_back({MenuAction::DELETE_CACHE, StrId::STR_DELETE_CACHE});
   return items;
 }
 
@@ -61,56 +52,50 @@ void EpubReaderMenuActivity::onEnter() {
 
 void EpubReaderMenuActivity::onExit() { Activity::onExit(); }
 
+void EpubReaderMenuActivity::closeCancelled() {
+  ActivityResult result;
+  result.isCancelled = true;
+  result.data = MenuResult{-1, pendingOrientation, selectedPageTurnOption};
+  setResult(std::move(result));
+  finish();
+}
+
+bool EpubReaderMenuActivity::handleHomeGesture() {
+  closeCancelled();
+  return true;
+}
+
 void EpubReaderMenuActivity::loop() {
-  if (optionPopup.handleInput(mappedInput, [this] { requestUpdate(); })) return;
+  if (optionPopup.handleInput(mappedInput, [this] { requestUpdate(); })) {
+    // The popup acts on button press; if that input closed it, the trailing
+    // release must be swallowed below (Back would close the menu, Confirm
+    // would re-activate the selected item).
+    popupClosing = !optionPopup.isActive();
+    return;
+  }
+  if (popupClosing) {
+    if (mappedInput.isPressed(MappedInputManager::Button::Back) ||
+        mappedInput.isPressed(MappedInputManager::Button::Confirm)) {
+      return;  // closing press still held
+    }
+    popupClosing = false;
+    if (mappedInput.wasReleased(MappedInputManager::Button::Back) ||
+        mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+      return;  // swallow the release that closed the popup
+    }
+  }
 
-  // Handle navigation
-  buttonNavigator.onNext([this] {
-    selectedIndex = ButtonNavigator::nextIndex(selectedIndex, static_cast<int>(menuItems.size()));
-    requestUpdate();
-  });
+  if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
+    closeCancelled();
+    return;
+  }
 
-  buttonNavigator.onPrevious([this] {
-    selectedIndex = ButtonNavigator::previousIndex(selectedIndex, static_cast<int>(menuItems.size()));
-    requestUpdate();
-  });
-
-  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+  auto activateSelected = [this] {
     const auto selectedAction = menuItems[selectedIndex].action;
     if (selectedAction == MenuAction::ROTATE_SCREEN) {
       optionPopup.show(StrId::STR_ORIENTATION, orientationLabels.data(), static_cast<int>(orientationLabels.size()),
                        pendingOrientation, [this](int idx) {
                          pendingOrientation = idx;
-                         requestUpdate();
-                       });
-      requestUpdate();
-      return;
-    }
-
-    if (selectedAction == MenuAction::FONT_SIZE) {
-      optionPopup.show(StrId::STR_FONT_SIZE, fontSizeLabels.data(), static_cast<int>(fontSizeLabels.size()),
-                       pendingFontSize, [this](int idx) {
-                         pendingFontSize = static_cast<uint8_t>(idx);
-                         requestUpdate();
-                       });
-      requestUpdate();
-      return;
-    }
-
-    if (selectedAction == MenuAction::LINE_SPACING) {
-      optionPopup.show(StrId::STR_LINE_SPACING, lineSpacingLabels.data(), static_cast<int>(lineSpacingLabels.size()),
-                       pendingLineSpacing, [this](int idx) {
-                         pendingLineSpacing = static_cast<uint8_t>(idx);
-                         requestUpdate();
-                       });
-      requestUpdate();
-      return;
-    }
-
-    if (selectedAction == MenuAction::BOLD_TEXT) {
-      optionPopup.show(StrId::STR_BOLD_TEXT, boldTextLabels.data(), static_cast<int>(boldTextLabels.size()),
-                       pendingBoldBody, [this](int idx) {
-                         pendingBoldBody = static_cast<uint8_t>(idx);
                          requestUpdate();
                        });
       requestUpdate();
@@ -127,17 +112,65 @@ void EpubReaderMenuActivity::loop() {
       return;
     }
 
-    setResult(MenuResult{static_cast<int>(selectedAction), pendingOrientation, selectedPageTurnOption, pendingFontSize,
-                         pendingLineSpacing, pendingBoldBody});
+    if (selectedAction == MenuAction::DELETE_CACHE) {
+      // v184（維護者）：清快取時追加詢問 —— 只清快取（保留進度）／連進度一起重設。
+      // 閱讀選單直向 12 項零餘裕，不能加項目，所以做成詢問。
+      optionPopup.show(StrId::STR_DELETE_CACHE, clearCacheLabels.data(), static_cast<int>(clearCacheLabels.size()),
+                       0, [this](int idx) {
+                         MenuResult r{static_cast<int>(MenuAction::DELETE_CACHE), pendingOrientation,
+                                      selectedPageTurnOption};
+                         r.resetProgress = idx == 1 ? 1 : 0;
+                         setResult(std::move(r));
+                         finish();
+                       });
+      requestUpdate();
+      return;
+    }
+
+    setResult(MenuResult{static_cast<int>(selectedAction), pendingOrientation, selectedPageTurnOption});
     finish();
+  };
+
+  auto metrics = UITheme::getInstance().getMetrics();
+  Rect screen = UITheme::getInstance().getScreenSafeArea(renderer, true, false);
+  const int contentTop =
+      screen.y + metrics.topPadding + metrics.headerHeight + metrics.tabBarHeight + metrics.verticalSpacing;
+  const int contentHeight = screen.height - contentTop - metrics.verticalSpacing;
+  switch (handleListTouch(selectedIndex, static_cast<int>(menuItems.size()), contentTop, contentHeight, false)) {
+    case ListTouchResult::Activated:
+      activateSelected();
+      return;
+    case ListTouchResult::Consumed:
+      return;
+    case ListTouchResult::None:
+      break;
+  }
+
+  const auto swipe = mappedInput.wasSwipe();
+  if (swipe == MappedInputManager::SwipeDir::Up) {
+    selectedIndex = ButtonNavigator::nextIndex(selectedIndex, static_cast<int>(menuItems.size()));
+    requestUpdate();
     return;
-  } else if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
-    ActivityResult result;
-    result.isCancelled = true;
-    result.data =
-        MenuResult{-1, pendingOrientation, selectedPageTurnOption, pendingFontSize, pendingLineSpacing, pendingBoldBody};
-    setResult(std::move(result));
-    finish();
+  }
+  if (swipe == MappedInputManager::SwipeDir::Down) {
+    selectedIndex = ButtonNavigator::previousIndex(selectedIndex, static_cast<int>(menuItems.size()));
+    requestUpdate();
+    return;
+  }
+
+  // Handle navigation
+  buttonNavigator.onNext([this] {
+    selectedIndex = ButtonNavigator::nextIndex(selectedIndex, static_cast<int>(menuItems.size()));
+    requestUpdate();
+  });
+
+  buttonNavigator.onPrevious([this] {
+    selectedIndex = ButtonNavigator::previousIndex(selectedIndex, static_cast<int>(menuItems.size()));
+    requestUpdate();
+  });
+
+  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+    activateSelected();
     return;
   }
 }
@@ -169,29 +202,24 @@ void EpubReaderMenuActivity::render(RenderLock&&) {
       screen.y + metrics.topPadding + metrics.headerHeight + metrics.tabBarHeight + metrics.verticalSpacing;
   const int contentHeight = screen.height - contentTop - metrics.verticalSpacing;
 
-  GUI.drawList(
+  // v181：走 drawMenuList —— 群組分隔（導覽／顯示／工具／系統）只有 Formosa Pro 會畫，其他主題等同 drawList。
+  GUI.drawMenuList(
       renderer, Rect{screen.x, contentTop, screen.width, contentHeight}, menuItems.size(), selectedIndex,
-      [this](int index) { return I18N.get(menuItems[index].labelId); }, nullptr, nullptr,
+      [this](int index) { return I18N.get(menuItems[index].labelId); },
       [this](int index) {
         const auto value = menuItems[index].action;
         if (value == MenuAction::ROTATE_SCREEN) {
-          // Render current orientation value on the right edge of the content area.
           return I18N.get(orientationLabels[pendingOrientation]);
-        } else if (value == MenuAction::FONT_SIZE) {
-          // Render current / pending font size on the right edge of the content area.
-          return I18N.get(fontSizeLabels[pendingFontSize]);
-        } else if (value == MenuAction::LINE_SPACING) {
-          return I18N.get(lineSpacingLabels[pendingLineSpacing]);
-        } else if (value == MenuAction::BOLD_TEXT) {
-          return I18N.get(boldTextLabels[pendingBoldBody]);
         } else if (value == MenuAction::AUTO_PAGE_TURN) {
-          // Render current page turn value on the right edge of the content area.
           return pageTurnLabels[selectedPageTurnOption];
         } else {
           return "";
         }
       },
-      true);
+      [this](int index) {
+        const auto a = menuItems[index].action;
+        return a == MenuAction::TEXT_SETTINGS || a == MenuAction::SCREENSHOT || a == MenuAction::GO_HOME;
+      });
 
   // Footer / Hints
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));

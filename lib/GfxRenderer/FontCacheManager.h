@@ -18,6 +18,10 @@ class FontCacheManager {
   void setFontDecompressor(FontDecompressor* d);
 
   void clearCache();
+  // v188：同步章節重排前用——clearCache() 保留 SD 字型的 mini 容量，這個真的還回去。回傳釋放位元組數。
+  size_t releaseRetainedCache();
+  // v189：fontId 對應的 SD 字型目前保留中的 mini bitmap 容量（bytes；非 SD 字型或未載入 = 0）。
+  size_t retainedMiniBitmapCapacity(int fontId) const;
   void prewarmCache(int fontId, const char* utf8Text, uint8_t styleMask = 0x0F);
   void logStats(const char* label = "render");
   void resetStats();

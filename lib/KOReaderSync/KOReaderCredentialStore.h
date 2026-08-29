@@ -1,8 +1,7 @@
 #pragma once
-
-#include <DataDir.h>
-#include <cstdio>
 #include <ArduinoJson.h>
+#include <cstdio>
+#include <DataDir.h>
 #include <PersistableStore.h>
 
 #include <cstdint>
@@ -44,8 +43,8 @@ class KOReaderCredentialStore : public PersistableStore<KOReaderCredentialStore>
 
  public:
   static const char* getFilePath() {
-    // Built on first use — DataDir::resolve() has run by then (boot order).
-    static char p[36] = "";
+    // v36/v186：掛在開機解析出的資料目錄上；首用必在 DataDir::resolve() 之後（開機順序）。
+    static char p[40] = "";
     if (!p[0]) snprintf(p, sizeof(p), "%s/koreader.json", DataDir::path());
     return p;
   }
@@ -72,6 +71,9 @@ class KOReaderCredentialStore : public PersistableStore<KOReaderCredentialStore>
 
   // Get base URL for API calls (with http:// normalization if no protocol, falls back to default)
   std::string getBaseUrl() const;
+
+  // Whether API calls target the CrossPoint sync server that supports protocol extensions.
+  bool usesCrossPointSyncServer() const;
 
   // Document matching method
   void setMatchMethod(DocumentMatchMethod method);

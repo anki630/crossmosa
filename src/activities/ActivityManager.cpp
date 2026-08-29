@@ -6,6 +6,7 @@
 #include <algorithm>
 
 #include "OpdsServerStore.h"
+#include "util/DiagLog.h"
 #include "boot_sleep/BootActivity.h"
 #include "boot_sleep/SleepActivity.h"
 #include "browser/OpdsBookBrowserActivity.h"
@@ -22,12 +23,17 @@
 static portMUX_TYPE activityManagerSpinlock = portMUX_INITIALIZER_UNLOCKED;
 
 void ActivityManager::begin() {
+#if defined(configNUM_CORES) && configNUM_CORES > 1
+  constexpr BaseType_t renderTaskCore = 1;
+#else
+  constexpr BaseType_t renderTaskCore = 0;
+#endif
   xTaskCreatePinnedToCore(&renderTaskTrampoline, "ActivityManagerRender",
                           8192,               // Stack size
                           this,               // Parameters
                           1,                  // Priority
                           &renderTaskHandle,  // Task handle
-                          0                   // Pin to core 0 (PRO_CPU)
+                          renderTaskCore  // Keep long renders/cover decodes off CPU 0's idle watchdog when available
   );
   assert(renderTaskHandle != nullptr && "Failed to create render task");
 }
@@ -40,13 +46,6 @@ void ActivityManager::renderTaskTrampoline(void* param) {
 void ActivityManager::renderTaskLoop() {
   while (true) {
     ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-    // v110: consume the pending-render hint HERE, i.e. strictly before render() runs.
-    // That ordering is what makes the flag usable from inside render(): anything that
-    // requests an update while this render is in flight sets it true again, and the
-    // reader's end-of-render glyph prefetch polls it to abort within a few ms.
-    // Cleared unconditionally (not only when currentActivity exists) so the flag can
-    // never latch true and silently disable prefetching forever.
-    renderPending_ = false;
     // Acquire the lock before reading currentActivity to avoid a TOCTOU race
     // where the main task deletes the activity between the null-check and render().
     RenderLock lock;
@@ -68,6 +67,15 @@ void ActivityManager::renderTaskLoop() {
 
 void ActivityManager::loop() {
   if (currentActivity) {
+    if (!currentActivity->isHomeActivity() && mappedInput.wasHomeGesture()) {
+      if (currentActivity->handleHomeGesture()) {
+        return;
+      }
+      DiagLog::line("HOME gesture from %s", currentActivity->name.c_str());  // v185：唯一沒證人的回家路
+      goHome();
+      return;
+    }
+
     // Note: do not hold a lock here, the loop() method must be responsible for acquire one if needed
     currentActivity->loop();
   }
@@ -202,8 +210,8 @@ void ActivityManager::goToBrowser() {
   }
 }
 
-void ActivityManager::goToReader(std::string path) {
-  replaceActivity(std::make_unique<ReaderActivity>(renderer, mappedInput, std::move(path)));
+void ActivityManager::goToReader(std::string path, const bool allowFastInitialRefresh) {
+  replaceActivity(std::make_unique<ReaderActivity>(renderer, mappedInput, std::move(path), allowFastInitialRefresh));
 }
 
 void ActivityManager::goToSleep(bool fromTimeout) {
@@ -263,6 +271,8 @@ bool ActivityManager::isReaderActivity() const {
          (currentActivity && currentActivity->isReaderActivity());
 }
 
+bool ActivityManager::handleForcedRefresh() { return currentActivity && currentActivity->handleForcedRefresh(); }
+
 bool ActivityManager::skipLoopDelay() const { return currentActivity && currentActivity->skipLoopDelay(); }
 
 ScreenshotInfo ActivityManager::getScreenshotInfo() const {
@@ -275,20 +285,11 @@ ScreenshotInfo ActivityManager::getScreenshotInfo() const {
 void ActivityManager::requestUpdate(bool immediate) {
   if (immediate) {
     if (renderTaskHandle) {
-      // Set before notifying so the render task can never clear it first (v110 hint).
-      renderPending_ = true;
       xTaskNotify(renderTaskHandle, 1, eIncrement);
     }
   } else {
     // Deferring the update until current loop is finished
     // This is to avoid multiple updates being requested in the same loop
-    // v110: raise the hint now rather than at the deferred notify below, so a keypress
-    // aborts an in-flight prefetch on the spot instead of at the end of this loop tick.
-    // Guarded like the immediate branch: with no render task the deferred notify in loop()
-    // never fires, and an unguarded set would latch the flag true forever (structurally
-    // safe beats argued-safe -- the "begin() always runs first" argument is true today but
-    // is not enforced by anything).
-    if (renderTaskHandle) renderPending_ = true;
     requestedUpdate = true;
   }
 }
@@ -318,33 +319,18 @@ void ActivityManager::requestUpdateAndWait() {
   // Cannot call while holding RenderLock or it will cause a deadlock
   assert(!holdingRenderLock && "Cannot call requestUpdateAndWait() while holding RenderLock");
 
-  renderPending_ = true;  // v110 hint; see renderPending_ in the header
   xTaskNotify(renderTaskHandle, 1, eIncrement);
   ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-}
-
-void ActivityManager::raiseRenderPendingIfNotRenderTask() {
-  // See the declaration for why this lives at the lock chokepoint and why the render task
-  // itself is excluded. Cheap enough for every acquisition: one task-handle read + compare.
-  // The null check is the same structural guard as requestUpdate(): with no render task
-  // nothing would ever clear the flag again (and nothing could be prefetching either).
-  if (renderTaskHandle != nullptr && xTaskGetCurrentTaskHandle() != renderTaskHandle) {
-    renderPending_ = true;
-  }
 }
 
 // RenderLock
 
 RenderLock::RenderLock() {
-  // v110: raise the abort hint BEFORE blocking -- once we are parked on the semaphore we
-  // cannot signal anything, and the holder may be a prefetch we want to cut short.
-  activityManager.raiseRenderPendingIfNotRenderTask();
   xSemaphoreTake(activityManager.renderingMutex, portMAX_DELAY);
   isLocked = true;
 }
 
 RenderLock::RenderLock([[maybe_unused]] Activity&) {
-  activityManager.raiseRenderPendingIfNotRenderTask();  // v110; see above
   xSemaphoreTake(activityManager.renderingMutex, portMAX_DELAY);
   isLocked = true;
 }

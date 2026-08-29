@@ -1,5 +1,7 @@
 #include "Epub.h"
 
+#include <esp_heap_caps.h>
+
 #include <FsHelpers.h>
 #include <HalStorage.h>
 #include <JpegToBmpConverter.h>
@@ -256,8 +258,44 @@ void Epub::parseCssFiles() const {
     return;
   }
 
+  // Some converters emit one byte-identical stylesheet per chapter (100+ .css
+  // entries), and each parse costs a zip locate plus an SD extract round-trip.
+  // Map every CSS path to its central-directory (CRC32, compressed size) in a
+  // single scan and parse only the first of each identical pair. Rules merge
+  // into one global set, so dropping exact duplicates cannot lose styles. A
+  // path that never matches a directory entry keeps key 0 and always parses.
+  std::vector<uint64_t> dedupKeys(cssFiles.size(), 0);
+  if (cssFiles.size() > 1) {
+    std::unordered_map<std::string, size_t> pathToIndex;
+    pathToIndex.reserve(cssFiles.size());
+    for (size_t i = 0; i < cssFiles.size(); i++) {
+      pathToIndex.emplace(FsHelpers::normalisePath(cssFiles[i]), i);
+    }
+    ZipFile(filepath).enumerateFileEntries([&](std::string_view entryPath, uint32_t crc32, uint32_t compressedSize) {
+      if (!FsHelpers::hasCssExtension(entryPath)) {
+        return;
+      }
+      const auto it = pathToIndex.find(std::string{entryPath});
+      if (it != pathToIndex.end()) {
+        dedupKeys[it->second] = (static_cast<uint64_t>(crc32) << 32) | compressedSize;
+      }
+    });
+  }
+  std::vector<uint64_t> seenKeys;
+  seenKeys.reserve(cssFiles.size());
+  size_t skippedDuplicates = 0;
+
   // No cache yet - parse CSS files
-  for (const auto& cssPath : cssFiles) {
+  for (size_t cssIndex = 0; cssIndex < cssFiles.size(); cssIndex++) {
+    const auto& cssPath = cssFiles[cssIndex];
+    const uint64_t dedupKey = dedupKeys[cssIndex];
+    if (dedupKey != 0) {
+      if (std::find(seenKeys.begin(), seenKeys.end(), dedupKey) != seenKeys.end()) {
+        skippedDuplicates++;
+        continue;
+      }
+      seenKeys.push_back(dedupKey);
+    }
     LOG_DBG("EBP", "Parsing CSS file: %s", cssPath.c_str());
 
     // Check heap before parsing - CSS parsing allocates heavily
@@ -312,7 +350,8 @@ void Epub::parseCssFiles() const {
     LOG_ERR("EBP", "Failed to save CSS rules to cache");
   }
 
-  LOG_DBG("EBP", "Loaded %zu CSS style rules from %zu files", cssParser->ruleCount(), cssFiles.size());
+  LOG_DBG("EBP", "Loaded %zu CSS style rules from %zu files (%zu identical duplicates skipped)", cssParser->ruleCount(),
+          cssFiles.size(), skippedDuplicates);
   cssParser->clear();
 }
 
@@ -546,6 +585,7 @@ bool Epub::generateCoverBmp(bool cropped) const {
 
     HalFile coverJpg;
     if (!Storage.openFileForWrite("EBP", coverJpgTempPath, coverJpg)) {
+      thumbFailReason_ = "jpg-tmp-write";
       return false;
     }
     readItemContentsToStream(coverImageHref, coverJpg, 1024);
@@ -580,6 +620,7 @@ bool Epub::generateCoverBmp(bool cropped) const {
 
     HalFile coverPng;
     if (!Storage.openFileForWrite("EBP", coverPngTempPath, coverPng)) {
+      thumbFailReason_ = "png-tmp-write";
       return false;
     }
     readItemContentsToStream(coverImageHref, coverPng, 1024);
@@ -617,6 +658,7 @@ std::string Epub::getThumbBmpPath(int height) const { return cachePath + "/thumb
 
 bool Epub::generateThumbBmp(int height) const {
   const auto thumbPath = getThumbBmpPath(height);
+  thumbFailReason_ = "";  // v174：失敗原因給 src 端的 THUMBFAIL 診斷行（lib 不反向依賴 DiagLog）
 
   // Already generated, return true.
   //
@@ -649,12 +691,14 @@ bool Epub::generateThumbBmp(int height) const {
 
   if (!bookMetadataCache || !bookMetadataCache->isLoaded()) {
     LOG_ERR("EBP", "Cannot generate thumb BMP, cache not loaded");
+    thumbFailReason_ = "cache-not-loaded";
     return false;
   }
 
   const auto coverImageHref = bookMetadataCache->coreMetadata.coverItemHref;
   if (coverImageHref.empty()) {
     LOG_DBG("EBP", "No known cover image for thumbnail");
+    thumbFailReason_ = "no-cover-href";
   } else if (FsHelpers::hasJpgExtension(coverImageHref)) {
     LOG_DBG("EBP", "Generating thumb BMP from JPG cover image");
     const auto coverJpgTempPath = getCachePath() + "/.cover.jpg";
@@ -668,16 +712,18 @@ bool Epub::generateThumbBmp(int height) const {
     coverJpg.close();
 
     if (!Storage.openFileForRead("EBP", coverJpgTempPath, coverJpg)) {
+      thumbFailReason_ = "jpg-tmp-read";
       return false;
     }
 
     HalFile thumbBmp;
     if (!Storage.openFileForWrite("EBP", getThumbBmpPath(height), thumbBmp)) {
+      thumbFailReason_ = "jpg-thumb-open";
       return false;
     }
     // Use smaller target size for Continue Reading card (half of screen: 240x400)
     // Generate 1-bit BMP for fast home screen rendering (no gray passes needed)
-    int THUMB_TARGET_WIDTH = height * 0.6;
+    int THUMB_TARGET_WIDTH = (height * 2 + 1) / 3;  // v174：2:3（Kobo 1600×2400／紙本 6×9）；0.6 太瘦，標準封面左右各裁 5%
     int THUMB_TARGET_HEIGHT = height;
     const bool success = JpegToBmpConverter::jpegFileTo1BitBmpStreamWithSize(coverJpg, thumbBmp, THUMB_TARGET_WIDTH,
                                                                              THUMB_TARGET_HEIGHT);
@@ -688,6 +734,7 @@ bool Epub::generateThumbBmp(int height) const {
 
     if (!success) {
       LOG_ERR("EBP", "Failed to generate thumb BMP from JPG cover image");
+      thumbFailReason_ = "jpg-convert";
       Storage.remove(getThumbBmpPath(height).c_str());
     }
     LOG_DBG("EBP", "Generated thumb BMP from JPG cover image, success: %s", success ? "yes" : "no");
@@ -705,14 +752,16 @@ bool Epub::generateThumbBmp(int height) const {
     coverPng.close();
 
     if (!Storage.openFileForRead("EBP", coverPngTempPath, coverPng)) {
+      thumbFailReason_ = "png-tmp-read";
       return false;
     }
 
     HalFile thumbBmp;
     if (!Storage.openFileForWrite("EBP", getThumbBmpPath(height), thumbBmp)) {
+      thumbFailReason_ = "png-thumb-open";
       return false;
     }
-    int THUMB_TARGET_WIDTH = height * 0.6;
+    int THUMB_TARGET_WIDTH = (height * 2 + 1) / 3;  // v174：2:3（Kobo 1600×2400／紙本 6×9）；0.6 太瘦，標準封面左右各裁 5%
     int THUMB_TARGET_HEIGHT = height;
     const bool success =
         PngToBmpConverter::pngFileTo1BitBmpStreamWithSize(coverPng, thumbBmp, THUMB_TARGET_WIDTH, THUMB_TARGET_HEIGHT);
@@ -723,12 +772,14 @@ bool Epub::generateThumbBmp(int height) const {
 
     if (!success) {
       LOG_ERR("EBP", "Failed to generate thumb BMP from PNG cover image");
+      thumbFailReason_ = "png-convert";
       Storage.remove(getThumbBmpPath(height).c_str());
     }
     LOG_DBG("EBP", "Generated thumb BMP from PNG cover image, success: %s", success ? "yes" : "no");
     return success;
   } else {
     LOG_ERR("EBP", "Cover image is not a supported format, skipping thumbnail");
+    thumbFailReason_ = "unsupported-format";
   }
 
   // Write an empty bmp file to avoid generation attempts in the future
@@ -754,14 +805,32 @@ uint8_t* Epub::readItemContentsToBytes(const std::string& itemHref, size_t* size
   return content;
 }
 
-bool Epub::readItemContentsToStream(const std::string& itemHref, Print& out, const size_t chunkSize) const {
+bool Epub::readItemContentsToStream(const std::string& itemHref, Print& out, const size_t chunkSize,
+                                    const bool allowEarlyStop) const {
   if (itemHref.empty()) {
     LOG_DBG("EBP", "Failed to read item, empty href");
     return false;
   }
 
   const std::string path = FsHelpers::normalisePath(itemHref);
-  return ZipFile(filepath).readFileToStream(path.c_str(), out, chunkSize);
+  return ZipFile(filepath).readFileToStream(path.c_str(), out, chunkSize, allowEarlyStop);
+}
+
+bool Epub::extractItemToFile(const std::string& itemHref, const std::string& destPath) const {
+  HalFile out;
+  if (!Storage.openFileForWrite("EBP", destPath, out)) {
+    return false;
+  }
+  // 上游 #2959：大圖主宰惰性抽取；緩衝跟 section 串流一樣 8KB，SD 讀寫次數減半。但抽取發生在圖片頁
+  // 首次 render，可能撞上背景建置視窗（最大連續塊 5–25KB）——堆緊時退回 4KB（複查）。
+  const size_t chunk = heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT) >= 32 * 1024 ? 8192 : 4096;
+  const bool ok = readItemContentsToStream(itemHref, out, chunk);
+  out.flush();
+  out.close();
+  if (!ok) {
+    Storage.remove(destPath.c_str());
+  }
+  return ok;
 }
 
 bool Epub::getItemSize(const std::string& itemHref, size_t* size) const {

@@ -2,49 +2,54 @@
 
 #include <Logging.h>
 #include <WiFi.h>
+#include <common/FsDateTime.h>
 #include <esp_sntp.h>
 #include <time.h>
 
-#include <cassert>
-
 HalClock halClock;  // Singleton instance
 
-// DS3231 register layout (BCD encoded):
-//   0x00: Seconds  (bits 6-4 = tens, bits 3-0 = ones)
-//   0x01: Minutes  (bits 6-4 = tens, bits 3-0 = ones)
-//   0x02: Hours    (bit 6 = 12/24 mode, bits 5-4 = tens, bits 3-0 = ones)
+void HalClock::fatDateTimeCb(uint16_t* date, uint16_t* time) {
+  // v194：SdFat 在持鎖改目錄時同步呼叫。這裡不准 I2C／LOG／寫檔，只讀快取立刻回。
+  // v194（複查）：讀的是【一次發布的 32 位元】而不是多欄位結構——逐欄寫入會被中途讀到
+  // 「新日期配舊時間」，跨日／跨月時甚至產生不合法的 FAT 時戳。0 同時代表無效。
+  const uint32_t packed = halClock._fatStamp.load(std::memory_order_acquire);
+  if (packed == 0) {
+    *date = 0;
+    *time = 0;
+    return;
+  }
+  *date = static_cast<uint16_t>(packed >> 16);
+  *time = static_cast<uint16_t>(packed & 0xFFFF);
+}
 
-static uint8_t bcdToDec(uint8_t bcd) { return ((bcd >> 4) * 10) + (bcd & 0x0F); }
-static uint8_t decToBcd(uint8_t dec) { return ((dec / 10) << 4) | (dec % 10); }
+// v194（複查）：把 date/time 壓成一個 32 位元一次發布；順帶在快取第一次有效時補註冊
+// ——原本只在開機試一次，那一次 I2C 失敗就整次開機都不會有 FAT 時戳。
+void HalClock::publishFatStamp(const Rtc::DateTime& dt) const {
+  if (dt.year < 2020 || dt.year > 2107) return;
+  const uint32_t packed = (static_cast<uint32_t>(FS_DATE(dt.year, dt.month, dt.day)) << 16) |
+                          static_cast<uint32_t>(FS_TIME(dt.hour, dt.minute, dt.second));
+  if (packed == 0) return;  // 理論上不會，但 0 是無效哨兵，不能發布
+  _fatStamp.store(packed, std::memory_order_release);
+  if (!_fatCbInstalled) {
+    FsDateTime::setCallback(&HalClock::fatDateTimeCb);
+    _fatCbInstalled = true;
+    LOG_INF("CLK", "FsDateTime callback registered year=%u", dt.year);
+  }
+}
+
+void HalClock::installFatDateTimeCallbackIfKnown() {
+  if (!_available) return;
+  Rtc::DateTime dt;
+  if (!_sdkRtc.now(dt)) return;
+  // v194：時鐘已知才註冊。年 < 2020 視為沒對過（出廠／震盪器剛醒）。
+  publishFatStamp(dt);
+}
 
 void HalClock::begin() {
-  if (!gpio.deviceIsX3()) {
-    _available = false;
-    return;
-  }
-
-  // I2C is already initialised by HalPowerManager::begin() for X3.
-  // Probe the DS3231 by reading the seconds register.
-  Wire.beginTransmission(I2C_ADDR_DS3231);
-  Wire.write(DS3231_SEC_REG);
-  if (Wire.endTransmission(false) != 0) {
-    LOG_INF("CLK", "DS3231 RTC not found");
-    _available = false;
-    return;
-  }
-  Wire.requestFrom(I2C_ADDR_DS3231, (uint8_t)1);
-  if (Wire.available() < 1) {
-    _available = false;
-    return;
-  }
-  Wire.read();  // discard — just testing connectivity
-
-  _available = true;
-  LOG_INF("CLK", "DS3231 RTC found");
-
-  // Prime the cache with an initial read
-  uint8_t h, m;
-  getTime(h, m);
+  _available = _sdkRtc.begin();
+  LOG_INF("CLK", _available ? "SDK RTC found" : "RTC not found");
+  // v194：開機時 RTC 已有可信時間才掛 FAT 時戳；沒對過就維持編譯年 1 月 1 日。
+  installFatDateTimeCallbackIfKnown();
 }
 
 bool HalClock::getTime(uint8_t& hour, uint8_t& minute) const {
@@ -57,44 +62,20 @@ bool HalClock::getTime(uint8_t& hour, uint8_t& minute) const {
     return true;
   }
 
-  // Read 3 bytes starting at register 0x00: seconds, minutes, hours
-  Wire.beginTransmission(I2C_ADDR_DS3231);
-  Wire.write(DS3231_SEC_REG);
-  if (Wire.endTransmission(false) != 0) {
+  Rtc::DateTime dt;
+  if (!_sdkRtc.now(dt)) {
     if (!_hasCachedTime) return false;
     _lastPollMs = now;
     hour = _cachedHour;
     minute = _cachedMinute;
     return true;
   }
-  Wire.requestFrom(I2C_ADDR_DS3231, (uint8_t)3);
-  if (Wire.available() < 3) {
-    if (!_hasCachedTime) return false;
-    _lastPollMs = now;
-    hour = _cachedHour;
-    minute = _cachedMinute;
-    return true;
-  }
-
-  Wire.read();  // seconds — not needed
-  const uint8_t rawMin = Wire.read();
-  const uint8_t rawHour = Wire.read();
-
-  _cachedMinute = bcdToDec(rawMin & 0x7F);
-  // Handle 12/24h mode: bit 6 high = 12h mode
-  if (rawHour & 0x40) {
-    // 12h mode: bit 5 = PM, bits 4-0 = hours (1-12)
-    uint8_t h12 = bcdToDec(rawHour & 0x1F);
-    bool pm = rawHour & 0x20;
-    if (h12 == 12) h12 = 0;
-    _cachedHour = pm ? (h12 + 12) : h12;
-  } else {
-    // 24h mode: bits 5-0 = hours (0-23)
-    _cachedHour = bcdToDec(rawHour & 0x3F);
-  }
+  _cachedHour = dt.hour;
+  _cachedMinute = dt.minute;
   _lastPollMs = now;
   _hasCachedTime = true;
-
+  // v194：FAT callback 只讀快取。真正的 I2C 取時放這裡——狀態列低頻輪詢，不持 SdFat 鎖。
+  publishFatStamp(dt);  // v194（複查）：這裡也會補註冊，開機那次 I2C 失敗不再是永久的
   hour = _cachedHour;
   minute = _cachedMinute;
   return true;
@@ -127,49 +108,6 @@ bool HalClock::formatTime(char* buf, size_t bufSize, uint8_t utcOffsetQuarterHou
   return true;
 }
 
-bool HalClock::writeTimeToRTC(uint8_t hour, uint8_t minute, uint8_t second) {
-  assert(hour < 24);
-  assert(minute < 60);
-  assert(second < 60);
-  Wire.beginTransmission(I2C_ADDR_DS3231);
-  Wire.write(DS3231_SEC_REG);    // Start at register 0x00
-  Wire.write(decToBcd(second));  // 0x00: Seconds
-  Wire.write(decToBcd(minute));  // 0x01: Minutes
-  Wire.write(decToBcd(hour));    // 0x02: Hours (24h mode, bit 6 = 0)
-  if (Wire.endTransmission() != 0) {
-    LOG_ERR("CLK", "Failed to write time to DS3231");
-    return false;
-  }
-
-  // Invalidate cache so next read fetches fresh data
-  _lastPollMs = 0;
-  _cachedHour = hour;
-  _cachedMinute = minute;
-  _hasCachedTime = true;
-  return true;
-}
-
-// v77: split out of syncFromNTP(), and deliberately NOT gated on _available.
-//
-// Setting the SYSTEM clock needs no DS3231 at all -- configTzTime() starts the
-// SNTP client and the epoch arrives asynchronously on the tcpip task. The old
-// code reached this only inside a function that early-returns when the RTC chip
-// is missing, and only behind `!clockHasBeenSynced`, i.e. ONCE IN A DEVICE'S
-// LIFE. That is why five measured sessions all had time() returning uptime:
-// the date is not persisted anywhere (writeTimeToRTC stores hours/minutes/
-// seconds only), so it dies at every reboot and was never fetched again.
-//
-// Non-blocking: this returns as soon as the client is started. Callers that
-// need the value wait separately -- see finishNtpToRtc().
-void HalClock::startNtp() {
-  if (WiFi.status() != WL_CONNECTED) {
-    LOG_ERR("CLK", "WiFi not connected, cannot start NTP");
-    return;
-  }
-  LOG_INF("CLK", "Starting NTP...");
-  configTzTime("UTC0", "pool.ntp.org", "time.nist.gov");
-}
-
 bool HalClock::syncFromNTP() {
   if (!_available) return false;
 
@@ -178,7 +116,8 @@ bool HalClock::syncFromNTP() {
     return false;
   }
 
-  startNtp();
+  LOG_INF("CLK", "Starting NTP sync...");
+  configTzTime("UTC0", "pool.ntp.org", "time.nist.gov");
 
   // Wait for SNTP sync to complete (up to 5 seconds)
   constexpr int maxAttempts = 50;
@@ -188,8 +127,23 @@ bool HalClock::syncFromNTP() {
       struct tm timeinfo;
       gmtime_r(&now, &timeinfo);
 
-      if (writeTimeToRTC(timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec)) {
-        LOG_INF("CLK", "RTC set to %02d:%02d:%02d UTC", timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
+      Rtc::DateTime dt;
+      dt.year = static_cast<uint16_t>(timeinfo.tm_year + 1900);
+      dt.month = static_cast<uint8_t>(timeinfo.tm_mon + 1);
+      dt.day = static_cast<uint8_t>(timeinfo.tm_mday);
+      dt.hour = static_cast<uint8_t>(timeinfo.tm_hour);
+      dt.minute = static_cast<uint8_t>(timeinfo.tm_min);
+      dt.second = static_cast<uint8_t>(timeinfo.tm_sec);
+      dt.weekday = static_cast<uint8_t>(timeinfo.tm_wday);
+      if (_sdkRtc.set(dt)) {
+        _lastPollMs = 0;
+        _cachedHour = dt.hour;
+        _cachedMinute = dt.minute;
+        _hasCachedTime = true;
+        publishFatStamp(dt);  // v194（複查）：對過時間之後立刻發布並補註冊
+        LOG_INF("CLK", "RTC set to %04u-%02u-%02u %02u:%02u:%02u UTC", dt.year, dt.month, dt.day, dt.hour, dt.minute,
+                dt.second);
+        installFatDateTimeCallbackIfKnown();
         return true;
       }
       return false;

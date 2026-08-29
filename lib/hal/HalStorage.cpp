@@ -1,15 +1,27 @@
 #include "HalStorage.h"
 
 #include <FS.h>  // need to be included before SdFat.h for compatibility with FS.h's File class
+#include <Arduino.h>
 #include <Logging.h>
-#include <Memory.h>  // makeUniqueNoThrow -- see the HalFile::Impl allocation note below
+#include <Memory.h>
 #include <SDCardManager.h>
 
 #include <cassert>
+#include <cstdio>
 
 #define SDCard SDCardManager::getInstance()
 
 HalStorage HalStorage::instance;
+char HalStorage::lastAllocFail[96] = {0};
+
+void HalStorage::noteAllocFail(const char* where, size_t bytes) {
+  // v194：HAL 不能碰 DiagLog；先到先得，src 讀走寫成 ALLOCFAIL。
+  LOG_ERR("HAL", "ALLOCFAIL where=%s bytes=%u max=%u", where, static_cast<unsigned>(bytes),
+          static_cast<unsigned>(ESP.getMaxAllocHeap()));
+  if (lastAllocFail[0] != '\0') return;
+  snprintf(lastAllocFail, sizeof(lastAllocFail), "where=%s bytes=%u max=%u", where, static_cast<unsigned>(bytes),
+           static_cast<unsigned>(ESP.getMaxAllocHeap()));
+}
 
 HalStorage::HalStorage() {
   // Recursive so the same task can re-enter StorageLock without self-deadlock.
@@ -82,33 +94,15 @@ HalFile::~HalFile() = default;
 HalFile::HalFile(HalFile&&) = default;
 HalFile& HalFile::operator=(HalFile&&) = default;
 
-// ---------------------------------------------------------------------------
-// Every HalFile::Impl allocation below is nothrow, and that is not cosmetic.
-// This firmware builds with -fno-exceptions, so a failed `new` inside
-// std::make_unique calls abort() -- an instant reboot with no log line, at
-// exactly the moment the device is most short of heap (CLAUDE.md hard limit
-// 2: WiFi up). openNextFile() in particular is now on a PER-DIRECTORY-ENTRY
-// path with WiFi up, via SMB2's query_directory: a 300-entry folder is 300 of
-// these allocations while a network stack holds the heap.
-//
-// A null Impl is already a meaningful, and correct, result at every call
-// site: HalFile::isOpen() (and therefore operator bool) returns false when
-// impl is null, which is exactly what "could not open" and "end of directory"
-// already look like to every caller. For openNextFile() that also happens to
-// match what SdFat itself does for an entry it cannot read -- it returns an
-// invalid file indistinguishable from end-of-directory (FatFile.cpp:676-680),
-// which src/network/SmbFileHandlers.cpp's listing loop already documents and
-// handles. openFileForRead/openFileForWrite additionally force their bool
-// result to false, because there the caller reads the bool rather than the
-// file's truthiness.
 HalFile HalStorage::open(const char* path, const oflag_t oflag) {
   StorageLock lock;  // ensure thread safety for the duration of this function
-  auto impl = makeUniqueNoThrow<HalFile::Impl>(SDCard.open(path, oflag));
-  if (!impl) {
-    LOG_ERR("HalStorage", "OOM allocating file handle for %s", path);
+  // v194：make_unique 是 throwing new，OOM 會 abort。失敗回空檔柄（impl=nullptr）。
+  auto implPtr = makeUniqueNoThrow<HalFile::Impl>(SDCard.open(path, oflag));
+  if (!implPtr) {
+    noteAllocFail("HalFile::Impl:open", sizeof(HalFile::Impl));
     return HalFile();
   }
-  return HalFile(std::move(impl));
+  return HalFile(std::move(implPtr));
 }
 
 bool HalStorage::mkdir(const char* path, const bool pFlag) { HAL_STORAGE_WRAPPED_CALL(mkdir, path, pFlag); }
@@ -126,13 +120,14 @@ bool HalStorage::openFileForRead(const char* moduleName, const char* path, HalFi
   StorageLock lock;  // ensure thread safety for the duration of this function
   FsFile fsFile;
   bool ok = SDCard.openFileForRead(moduleName, path, fsFile);
-  auto impl = makeUniqueNoThrow<HalFile::Impl>(std::move(fsFile));
-  if (!impl) {
-    LOG_ERR("HalStorage", "OOM allocating file handle for %s (%s)", path, moduleName);
+  auto implPtr = makeUniqueNoThrow<HalFile::Impl>(std::move(fsFile));
+  if (!implPtr) {
+    // v194：Impl 配不到 → 空檔柄。close() 必須能接受 impl=nullptr（見 HalFile::close）。
+    noteAllocFail("HalFile::Impl:openRead", sizeof(HalFile::Impl));
     file = HalFile();
-    return false;  // the caller reads this bool, not file's truthiness
+    return false;
   }
-  file = HalFile(std::move(impl));
+  file = HalFile(std::move(implPtr));
   return ok;
 }
 
@@ -148,13 +143,13 @@ bool HalStorage::openFileForWrite(const char* moduleName, const char* path, HalF
   StorageLock lock;  // ensure thread safety for the duration of this function
   FsFile fsFile;
   bool ok = SDCard.openFileForWrite(moduleName, path, fsFile);
-  auto impl = makeUniqueNoThrow<HalFile::Impl>(std::move(fsFile));
-  if (!impl) {
-    LOG_ERR("HalStorage", "OOM allocating file handle for %s (%s)", path, moduleName);
+  auto implPtr = makeUniqueNoThrow<HalFile::Impl>(std::move(fsFile));
+  if (!implPtr) {
+    noteAllocFail("HalFile::Impl:openWrite", sizeof(HalFile::Impl));
     file = HalFile();
-    return false;  // the caller reads this bool, not file's truthiness
+    return false;
   }
-  file = HalFile(std::move(impl));
+  file = HalFile(std::move(implPtr));
   return ok;
 }
 
@@ -182,22 +177,6 @@ bool HalStorage::removeDir(const char* path) { HAL_STORAGE_WRAPPED_CALL(removeDi
   return impl->file.method(__VA_ARGS__);
 
 void HalFile::flush() { HAL_FILE_WRAPPED_CALL(flush, ); }
-bool HalFile::sync() { HAL_FILE_WRAPPED_CALL(sync, ); }  // flush() discards this bool; see the header
-// WRAPPED, not FORWARD: FatFile::getModifyDateTime() -> dirEntry() calls
-// sync() and then reads a cached SD sector (FatFile.cpp:200-219), so it
-// touches the card and must hold the storage mutex like every other SD access.
-bool HalFile::getModifyDateTime(uint16_t* date, uint16_t* time) {
-  HAL_FILE_WRAPPED_CALL(getModifyDateTime, date, time);
-}
-// sync()s and then writes the cached directory entry (FatFile.cpp:1287-1310),
-// so WRAPPED like every other SD access.
-bool HalFile::setTimestamp(uint8_t flags, uint16_t year, uint8_t month, uint8_t day, uint8_t hour, uint8_t minute,
-                           uint8_t second) {
-  HAL_FILE_WRAPPED_CALL(timestamp, flags, year, month, day, hour, minute, second);
-}
-// Writes the FAT/exFAT allocation chain and the directory entry -- squarely an
-// SD access, so WRAPPED. Cannot grow a file; see the header.
-bool HalFile::truncate(uint64_t length) { HAL_FILE_WRAPPED_CALL(truncate, length); }
 size_t HalFile::getName(char* name, size_t len) { HAL_FILE_WRAPPED_CALL(getName, name, len); }
 size_t HalFile::size() { HAL_FILE_FORWARD_CALL(size, ); }              // already thread-safe, no need to wrap
 size_t HalFile::fileSize() { HAL_FILE_FORWARD_CALL(fileSize, ); }      // already thread-safe, no need to wrap
@@ -215,16 +194,19 @@ size_t HalFile::write(uint8_t b) { HAL_FILE_WRAPPED_CALL(write, b); }
 bool HalFile::rename(const char* newPath) { HAL_FILE_WRAPPED_CALL(rename, newPath); }
 bool HalFile::isDirectory() const { HAL_FILE_FORWARD_CALL(isDirectory, ); }  // already thread-safe, no need to wrap
 void HalFile::rewindDirectory() { HAL_FILE_WRAPPED_CALL(rewindDirectory, ); }
-bool HalFile::close() { HAL_FILE_WRAPPED_CALL(close, ); }
+bool HalFile::close() {
+  // v194：Impl 配置失敗的空檔柄 impl=nullptr。裝置上 assert 有進出貨韌體，
+  // 這裡改成 no-op 回 false，解構子（unique_ptr 對 nullptr）本來就是安全的。
+  // 成功路徑（impl 非空）行為不變。
+  if (!impl) return false;
+  HAL_FILE_WRAPPED_CALL(close, );
+}
 HalFile HalFile::openNextFile() {
   HalStorage::StorageLock lock;
   assert(impl != nullptr);
-  // Nothrow: see the note above HalStorage::open(). A null result is
-  // end-of-directory to every caller, which is a truncated listing rather
-  // than an abort() -- and the one shape SdFat itself already produces here.
   auto next = makeUniqueNoThrow<Impl>(impl->file.openNextFile());
   if (!next) {
-    LOG_ERR("HalStorage", "OOM allocating directory entry handle; listing truncated");
+    HalStorage::noteAllocFail("HalFile::Impl:openNext", sizeof(Impl));
     return HalFile();
   }
   return HalFile(std::move(next));

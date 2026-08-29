@@ -2,7 +2,9 @@
 
 #include <Arduino.h>
 #include <ArduinoJson.h>
+#include <Logging.h>
 
+#include <mutex>
 #include <string>
 
 /**
@@ -15,26 +17,55 @@
  * is what makes the abstraction flash-neutral.
  */
 class PersistableStoreBase {
- public:
-  // v53:JSON 持久化的單一落地路徑,三個完整性缺陷一次修掉——
-  // ①序列化直接串流進檔案(不經中介 Arduino String:低記憶體下 String 配置失敗會被靜默截斷,
-  //   寫出半截 JSON 卻回報成功);②比對 measureJson 預期值偵測短寫;③tmp + rename 原子落地
-  //   (舊路徑先 remove 目標再寫,寫到一半失敗/斷電就永久失去該檔)。
-  // 手法同 ProgressFile::writeAtomic(已在進度檔驗證過)。呼叫端負責確保父目錄存在。
-  // 注意:rename 失敗的極短窗口內主檔不存在(與舊路徑同風險,ProgressFile 明文接受的取捨)。
-  static bool writeDocAtomic(const char* path, const JsonDocument& doc);
-
  protected:
   PersistableStoreBase() = default;
   ~PersistableStoreBase() = default;
 
+  // Serializes saveToFile/loadFromFile against each other across FreeRTOS
+  // tasks, so the JSON snapshot cannot tear mid-serialize and two concurrent
+  // saves cannot write their documents out of order. Concurrent saves are
+  // reachable: the web server task saves settings while the main task can too.
+  //
+  // It is deliberately held across the SD write. That is safe only because the
+  // read path does NOT take it — derived stores build their snapshots (e.g.
+  // CrossPointSettings::statusBarSpec) unlocked. If you ever lock this mutex on
+  // a read path, you put it on the render path and stall rendering behind SD
+  // I/O, and you create a storeMutex/storageMutex ordering hazard. Don't.
+  mutable std::mutex storeMutex;
+
+  // fromJson() implementations call this (instead of saveToFile()) when the
+  // on-disk JSON used a legacy shape that was upgraded in memory.
+  // loadFromFile() performs the save after releasing storeMutex; calling
+  // saveToFile() from inside fromJson() would deadlock on storeMutex.
+  void requestResave() { resaveRequested = true; }
+
+  bool resaveRequested = false;
+
+ public:
+  // Public so non-store JSON files (e.g. per-book bookmarks) can reuse them
+  // instead of instantiating serializeJson/deserializeJson in their own TU —
+  // that per-TU duplication is exactly what this class exists to prevent.
+
+  // v53：JSON 持久化的單一落地路徑，三個完整性缺陷一次修掉——
+  // ① 序列化直接串流進檔案（不經中介 Arduino String：低記憶體下 String 配置失敗會被
+  //    靜默截斷，寫出半截 JSON 卻【回報成功】）
+  // ② 比對 measureJson 的預期值偵測短寫
+  // ③ tmp + rename 原子落地（Storage.writeFile 是先刪目標再寫，寫到一半失敗或斷電
+  //    就永久失去該檔 —— 而上游 13a077d 改成每動一項就存，曝險頻率更高）
+  // 手法同 ProgressFile::writeAtomic（已在進度檔驗證過）。呼叫端負責父目錄存在。
+  // ⚠️ 依賴 HalFile 的 write(const uint8_t*, size_t) override —— 沒有它
+  //    serializeJson 會退化成逐 byte、每個 byte 一次 SD semaphore。
+  static bool writeDocAtomic(const char* path, const JsonDocument& doc);
+
   // Serializes doc and writes it to path (ensures the data dir exists). Logs on failure.
+  // 內部走 writeDocAtomic，所有既有呼叫端自動受益。
   static bool writeDocToFile(const char* path, const JsonDocument& doc);
 
   // Reads path and parses it into doc. Returns false silently when the file
   // does not exist (expected on first boot); logs on read/parse failure.
   static bool readDocFromFile(const char* path, JsonDocument& doc);
 
+ protected:
   /**
    * Helper function for extracting an obfuscated password from a JSON value.
    * Accepts JsonVariantConst so callers can pass either a whole JsonDocument
@@ -42,6 +73,7 @@ class PersistableStoreBase {
    * If the decoded password requires a resave (e.g. from plaintext fallback), `needsResave` is set to true.
    */
   static std::string extractPassword(JsonVariantConst doc, bool& needsResave);
+  static std::string extractPassword(JsonVariantConst doc, bool& needsResave, size_t maxLength, bool& valid);
 };
 
 /**
@@ -58,6 +90,10 @@ class PersistableStoreBase {
  * `obj["name"] | ""`), never as `| std::string("")` — ArduinoJson's
  * std::string converter drags a per-TU copy of the whole JSON serializer
  * into flash via its serializeJson fallback.
+ *
+ * Concurrency: saveToFile/loadFromFile lock storeMutex, so toJson/fromJson
+ * always run under it. fromJson must signal legacy-shape upgrades with
+ * requestResave(), never by calling saveToFile() directly (deadlock).
  */
 template <typename T>
 class PersistableStore : public PersistableStoreBase {
@@ -76,16 +112,31 @@ class PersistableStore : public PersistableStoreBase {
   }
 
   bool saveToFile() const {
+    std::lock_guard<std::mutex> lock(storeMutex);
     JsonDocument doc;
     static_cast<const T*>(this)->toJson(doc);
     return writeDocToFile(T::getFilePath(), doc);
   }
 
   bool loadFromFile() {
-    JsonDocument doc;
-    if (!readDocFromFile(T::getFilePath(), doc)) {
-      return false;
+    bool ok;
+    bool doResave;
+    {
+      std::lock_guard<std::mutex> lock(storeMutex);
+      resaveRequested = false;
+      JsonDocument doc;
+      if (!readDocFromFile(T::getFilePath(), doc)) {
+        return false;
+      }
+      ok = static_cast<T*>(this)->fromJson(doc.as<JsonVariantConst>());
+      // Read the flag under the lock that guards the fromJson() that set it.
+      doResave = resaveRequested;
+      resaveRequested = false;
     }
-    return static_cast<T*>(this)->fromJson(doc.as<JsonVariantConst>());
+    // Deliberately outside the lock: saveToFile() takes storeMutex itself.
+    if (ok && doResave && !saveToFile()) {
+      LOG_ERR("PERSIST", "Failed to resave %s after format update", T::getFilePath());
+    }
+    return ok;
   }
 };

@@ -1,13 +1,15 @@
 #include "PngToBmpConverter.h"
-#include <new>  // v57:std::nothrow
 
 #include <HalDisplay.h>
 #include <HalStorage.h>
 #include <InflateStream.h>
 #include <Logging.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 
 #include <cstdio>
 #include <cstring>
+#include <new>
 
 #include "BitmapHelpers.h"
 
@@ -72,6 +74,12 @@ enum PngFilter : uint8_t {
   PNG_FILTER_AVERAGE = 3,
   PNG_FILTER_PAETH = 4,
 };
+
+void yieldDuringDecode(uint8_t& rowsSinceYield) {
+  if (++rowsSinceYield < 8) return;
+  rowsSinceYield = 0;
+  vTaskDelay(1);
+}
 
 // Read a big-endian 32-bit value from file
 bool readBE32(HalFile& file, uint32_t& value) {
@@ -622,12 +630,34 @@ bool PngToBmpConverter::pngFileToBmpStreamInternal(HalFile& pngFile, Print& bmpO
   Atkinson1BitDitherer* atkinson1BitDitherer = nullptr;
 
   if (oneBit) {
+    // v194：nothrow；配不到退回 quantize1bit，轉換繼續。
     atkinson1BitDitherer = new (std::nothrow) Atkinson1BitDitherer(outWidth);
+    if (!atkinson1BitDitherer || !atkinson1BitDitherer->ok()) {
+      const size_t bytes =
+          sizeof(Atkinson1BitDitherer) + (static_cast<size_t>(outWidth) + 4) * sizeof(int16_t) * 3;
+      noteDitherAllocFail("Atkinson1BitDitherer:PngToBmp", bytes);
+      delete atkinson1BitDitherer;
+      atkinson1BitDitherer = nullptr;
+    }
   } else if (!USE_8BIT_OUTPUT) {
     if (USE_ATKINSON) {
       atkinsonDitherer = new (std::nothrow) AtkinsonDitherer(outWidth);
+      if (!atkinsonDitherer || !atkinsonDitherer->ok()) {
+        const size_t bytes =
+            sizeof(AtkinsonDitherer) + (static_cast<size_t>(outWidth) + 4) * sizeof(int16_t) * 3;
+        noteDitherAllocFail("AtkinsonDitherer:PngToBmp", bytes);
+        delete atkinsonDitherer;
+        atkinsonDitherer = nullptr;
+      }
     } else if (USE_FLOYD_STEINBERG) {
       fsDitherer = new (std::nothrow) FloydSteinbergDitherer(outWidth);
+      if (!fsDitherer || !fsDitherer->ok()) {
+        const size_t bytes =
+            sizeof(FloydSteinbergDitherer) + (static_cast<size_t>(outWidth) + 2) * sizeof(int16_t) * 2;
+        noteDitherAllocFail("FloydSteinbergDitherer:PngToBmp", bytes);
+        delete fsDitherer;
+        fsDitherer = nullptr;
+      }
     }
   }
 
@@ -638,27 +668,9 @@ bool PngToBmpConverter::pngFileToBmpStreamInternal(HalFile& pngFile, Print& bmpO
   uint32_t nextOutY_srcStart = 0;
 
   if (needsScaling) {
-    rowAccum = new (std::nothrow) uint32_t[outWidth]();
-    rowCount = new (std::nothrow) uint16_t[outWidth]();
+    rowAccum = new uint32_t[outWidth]();
+    rowCount = new uint16_t[outWidth]();
     nextOutY_srcStart = scaleY_fp;
-  }
-
-  // v57:上面的抖動器與縮放累加器原本都是裸 new——`-fno-exceptions` 下失敗直接 abort(),
-  // 也就是低記憶體時整台重開機而不是「這張圖畫不出來」。全改 nothrow 後在這裡統一守門:
-  // 抖動器要連【建構子內部的誤差列陣列】都問到(ok()),否則物件非 null 也還是不能用。
-  if ((atkinson1BitDitherer && !atkinson1BitDitherer->ok()) || (atkinsonDitherer && !atkinsonDitherer->ok()) ||
-      (fsDitherer && !fsDitherer->ok()) || (oneBit && !atkinson1BitDitherer) ||
-      (needsScaling && (!rowAccum || !rowCount))) {
-    LOG_ERR("PNG", "OOM: ditherer / scaling accumulators");
-    delete[] rowAccum;
-    delete[] rowCount;
-    delete atkinsonDitherer;
-    delete fsDitherer;
-    delete atkinson1BitDitherer;
-    free(rowBuffer);
-    free(ctx.currentRow);
-    free(ctx.previousRow);
-    return false;
   }
 
   // Allocate grayscale row buffer - batch-convert each scanline to avoid
@@ -678,6 +690,7 @@ bool PngToBmpConverter::pngFileToBmpStreamInternal(HalFile& pngFile, Print& bmpO
   }
 
   bool success = true;
+  uint8_t rowsSinceYield = 0;
 
   // Process each scanline
   for (uint32_t y = 0; y < height; y++) {
@@ -729,6 +742,7 @@ bool PngToBmpConverter::pngFileToBmpStreamInternal(HalFile& pngFile, Print& bmpO
           fsDitherer->nextRow();
       }
       bmpOut.write(rowBuffer, bytesPerRow);
+      yieldDuringDecode(rowsSinceYield);
     } else {
       // Area-averaging scaling (same as JpegToBmpConverter)
       for (int outX = 0; outX < outWidth; outX++) {
@@ -797,6 +811,7 @@ bool PngToBmpConverter::pngFileToBmpStreamInternal(HalFile& pngFile, Print& bmpO
 
         bmpOut.write(rowBuffer, bytesPerRow);
         currentOutY++;
+        yieldDuringDecode(rowsSinceYield);
 
         nextOutY_srcStart = static_cast<uint32_t>(currentOutY + 1) * scaleY_fp;
 

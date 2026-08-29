@@ -67,9 +67,7 @@ void BmpViewerActivity::onEnter() {
 
   const auto pageWidth = renderer.getScreenWidth();
   const auto pageHeight = renderer.getScreenHeight();
-  // Text-only popup: the old two-step (20%/50%) bar was fake progress -- the single-core
-  // decode blocks between the steps, so the bar just flashed twice and never completed.
-  GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
+  GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));  // v155：純文字，假進度條已移除
   // 1. Open the file
   if (Storage.openFileForRead("BMP", filePath, file)) {
     Bitmap bitmap(file, true);
@@ -105,6 +103,7 @@ void BmpViewerActivity::onEnter() {
       const auto labels =
           mappedInput.mapLabels(tr(STR_BACK), tr(STR_SET_SLEEP_COVER), (hasPrevious ? "<" : ""), (hasNext ? ">" : ""));
 
+
       renderer.clearScreen();
       // Assuming drawBitmap defaults to 0,0 crop if omitted, or pass explicitly: drawBitmap(bitmap, x, y, pageWidth,
       // pageHeight, 0, 0)
@@ -119,7 +118,7 @@ void BmpViewerActivity::onEnter() {
     } else {
       // Handle file parsing error
       renderer.clearScreen();
-      renderer.drawCenteredText(UI_10_FONT_ID, pageHeight / 2, tr(STR_INVALID_BMP));
+      renderer.drawCenteredText(UI_10_FONT_ID, pageHeight / 2, tr(STR_INVALID_BMP_FILE));
       const auto labels = mappedInput.mapLabels(tr(STR_BACK), "", "", "");
       GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
       renderer.displayBuffer(HalDisplay::HALF_REFRESH);
@@ -179,8 +178,34 @@ void BmpViewerActivity::loop() {
   // Keep CPU awake/polling so 1st click works
   Activity::loop();
 
+  auto openSibling = [this](const int delta) {
+    if (currentImageIndex < 0) {
+      return false;
+    }
+    const int nextIndex = currentImageIndex + delta;
+    if (siblingImages.size() <= 1 || nextIndex < 0 || nextIndex >= static_cast<int>(siblingImages.size())) {
+      return false;
+    }
+    currentImageIndex = nextIndex;
+    std::string dirPath = FsHelpers::extractFolderPath(filePath);
+    if (dirPath.back() != '/') dirPath += "/";
+    filePath = dirPath + siblingImages[currentImageIndex];
+    onEnter();
+    return true;
+  };
+
   if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
     activityManager.goToFileBrowser(filePath);
+    return;
+  }
+
+  const auto swipe = mappedInput.wasSwipe();
+  if (swipe == MappedInputManager::SwipeDir::Left) {
+    openSibling(1);
+    return;
+  }
+  if (swipe == MappedInputManager::SwipeDir::Right) {
+    openSibling(-1);
     return;
   }
 
@@ -191,26 +216,13 @@ void BmpViewerActivity::loop() {
 
   if (mappedInput.wasReleased(MappedInputManager::Button::Left) ||
       mappedInput.wasReleased(MappedInputManager::Button::Up)) {
-    if (siblingImages.size() > 1 && currentImageIndex > 0) {
-      currentImageIndex--;
-      std::string dirPath = FsHelpers::extractFolderPath(filePath);
-      if (dirPath.back() != '/') dirPath += "/";
-      filePath = dirPath + siblingImages[currentImageIndex];
-      onEnter();
-    }
+    openSibling(-1);
     return;
   }
 
   if (mappedInput.wasReleased(MappedInputManager::Button::Right) ||
       mappedInput.wasReleased(MappedInputManager::Button::Down)) {
-    if (siblingImages.size() > 1 && currentImageIndex != -1 &&
-        currentImageIndex < static_cast<int>(siblingImages.size()) - 1) {
-      currentImageIndex++;
-      std::string dirPath = FsHelpers::extractFolderPath(filePath);
-      if (dirPath.back() != '/') dirPath += "/";
-      filePath = dirPath + siblingImages[currentImageIndex];
-      onEnter();
-    }
+    openSibling(1);
     return;
   }
 }

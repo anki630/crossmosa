@@ -1,8 +1,9 @@
+#include <esp_heap_caps.h>
+#include <Arduino.h>
 #include "SdCardFont.h"
 
 #include <HalStorage.h>
 #include <Logging.h>
-#include <esp_heap_caps.h>
 #include <Utf8.h>
 
 #include <algorithm>
@@ -69,15 +70,116 @@ bool collectUniqueCodepoints(const char* text, uint32_t* codepoints, uint32_t& c
 const char* asCStr(const std::string& s) { return s.c_str(); }
 const char* asCStr(const char* s) { return s; }
 
+// resetStyleMiniData retention bounds (see the PerStyle comment in the header).
+constexpr size_t MINI_RETAIN_MIN_FREE_HEAP = 40 * 1024;
+// v188：留不留也要看【最大連續塊】（CLAUDE.md 硬限制 2：殺手是連續塊不是 free 總量）。
+// diag187_2 的四次「記憶體不足」：總 free 48KB（>40KB → 留）而最大連續塊只剩 28KB。
+// 但這個量是在 mini 還駐留時量的（自我參照）：門檻設 32KB 會在三分之一的頁觸發、變成每頁配丟的
+// 碎片機（驗證者用 diag187_2 的 pmax 算過）。16KB（＝背景建置的地板）只在堆真的出事時觸發（~6% 頁）；
+// 建置視窗本身由 releaseMiniData() 明確處理，這裡只是最後防線。每次 clearCache 只量一次。
+constexpr size_t MINI_RETAIN_MIN_MAXBLOCK = 16 * 1024;
+constexpr uint8_t MINI_UNDERUSE_RUNS_BEFORE_FREE = 3;
+
+// Keep-if-fits buffer reuse: only reallocate when the needed size exceeds the
+// current capacity. Freeing + reallocating slightly different sizes every page
+// turn punches non-coalescing holes in the heap (the freed block rarely fits the
+// next page's need), eroding the largest contiguous block all session. With
+// reuse, capacities converge on the book's max page after a few turns and page
+// turns stop touching the allocator. Only three small instantiations exist
+// (interval/glyph/byte arrays), so template bloat is negligible.
+// v142：把上游那個 keep-if-fits 補完 —— 它擋掉了「縮小重配」，但【沒擋掉放大重配】。
+//
+// 實機量到的殘留（v141，只讀書、無網路、讀約 20 頁）：
+//    33800 build-start  p2 f=115,616 max=115,616
+//   120552 build-start  p2 f= 71,244 max= 27,476     <- 87 秒內最大連續塊蝕掉 88,140
+//   [92283] Failed to allocate mini bitmap (33422 bytes)
+//   [95791] Failed to allocate mini bitmap (38071 bytes)
+//   [99810] Failed to allocate mini bitmap (31569 bytes)
+// 字圖要 31–38KB 連續，而 p2 最大只剩 27,476 -> 配不到 -> 字型降級 -> 最後 abort。
+//
+// 為什麼配【剛好夠】會這樣：每一頁的用字不同，所需大小逐頁小幅變動。配 exact size 時，
+// 只要某一頁比歷史高水位大一點就重配一次；而剛釋放的舊塊【永遠差一點裝不下】新的，
+// 於是配置器往前找新位置，舊塊變成洞。上游的註解自己描述了這個機制
+// （"punches non-coalescing holes… eroding the largest contiguous block all session"），
+// 只是 keep-if-fits 只解掉一半。
+//
+// 修法：成長時【向上取整到 8KB 級距】。容量因此在兩三次之內收斂到「這本書最大的一頁」，
+// 之後翻頁完全不碰配置器。溢配上限是 8KB（有界），換掉的是無界的碎片化。
+//   實測序列 30,000 -> 32,768 / 33,422 -> 40,960 / 38,071 命中 => 只重配兩次。
+// 這與 v55/v138 的 advance table 同一個形狀（一次配到位、之後就地重用），那個已實機驗證。
+//
+// ⚠️ 級距用【位元組】換算成元素數，因為呼叫端的 needed 有的是位元組（miniBitmap）、
+//    有的是元素數（miniIntervals / miniGlyphs / kern classes）。
+// ⚠️ CapT 可能是 uint16_t（kern class 計數）—— 夾限，否則截斷後 capacity 會記成比實際
+//    配置【小】的值，下一次判斷就錯，反而變成每頁都重配。
+template <typename T, typename CapT>
+bool ensureArrayCapacity(T*& buf, CapT& capacity, const uint32_t needed) {
+  if (buf && capacity >= needed) return true;
+
+  constexpr uint32_t kGrowGranularityBytes = 8 * 1024;
+  constexpr uint32_t kStep =
+      (kGrowGranularityBytes / sizeof(T)) > 0 ? static_cast<uint32_t>(kGrowGranularityBytes / sizeof(T)) : 1u;
+  constexpr uint32_t kCapMax = static_cast<uint32_t>(static_cast<CapT>(-1));
+
+  // ⚠️ 只有【配置本身 ≥ 8KB】才取整。小陣列（kern class 上限 256 個位元組）取整會變成
+  //    為了 256 bytes 配 8KB，兩個就浪費 16KB —— 而小配置本來就不是碎片化的來源。
+  //    這一條是桌面對拍抓到的：第一版無條件取整，kern 的容量直接跳到 8,192。
+  uint32_t grown = needed;
+  const bool worthRounding = static_cast<uint64_t>(needed) * sizeof(T) >= kGrowGranularityBytes;
+  if (worthRounding && needed <= kCapMax - (kStep - 1)) {  // 取整不會溢位才做
+    grown = ((needed + kStep - 1) / kStep) * kStep;
+  }
+  if (grown > kCapMax) grown = kCapMax;
+  if (grown < needed) return false;               // needed 本身就超過 CapT 能表示：誠實失敗
+
+  delete[] buf;
+  buf = new (std::nothrow) T[grown > 0 ? grown : 1];
+  capacity = buf ? static_cast<CapT>(grown) : 0;
+  return buf != nullptr;
+}
+
 }  // namespace
+
+char SdCardFont::lastAllocFail[96] = {0};
+void (*SdCardFont::buildProbeHook_)(uint8_t) = nullptr;
+uint32_t SdCardFont::advanceMissCount_ = 0;
+uint32_t SdCardFont::advanceSdReadCount_ = 0;
+uint32_t SdCardFont::advanceRejectCount_ = 0;
+uint32_t SdCardFont::advanceEvictCount_ = 0;
+uint8_t SdCardFont::advanceSdProbeDepth_ = 0;
+
+void SdCardFont::resetAdvanceDiag() {
+  advanceMissCount_ = 0;
+  advanceSdReadCount_ = 0;
+  advanceRejectCount_ = 0;
+  advanceEvictCount_ = 0;
+}
+
+void SdCardFont::setAdvanceSdProbe(bool on) {
+  // v192：巢狀深度，進 +1 出 -1；布林旗標會讓內層提早清成 false。
+  if (on) {
+    if (advanceSdProbeDepth_ < 255) ++advanceSdProbeDepth_;
+  } else if (advanceSdProbeDepth_ > 0) {
+    --advanceSdProbeDepth_;
+  }
+}
+
+void SdCardFont::noteAllocFail(const char* what, unsigned bytes, unsigned defMax, unsigned defFree) {
+  if (lastAllocFail[0] != '\0') return;  // 先到先得
+  snprintf(lastAllocFail, sizeof(lastAllocFail), "%s bytes=%u defMax=%u defFree=%u", what, bytes, defMax, defFree);
+}
+
+void SdCardFont::setBuildProbeHook(void (*fn)(uint8_t)) { buildProbeHook_ = fn; }
 
 SdCardFont::~SdCardFont() { freeAll(); }
 
 // --- Per-style free/cleanup ---
 
 void SdCardFont::freeStyleMiniData(PerStyle& s) {
-  s.miniBitmapBytes = 0;
-  s.miniAllocCount = 0;
+  delete[] s.miniDropped;
+  s.miniDropped = nullptr;
+  s.miniDroppedCount = 0;
+  s.miniDroppedCapacity = 0;
   delete[] s.miniIntervals;
   s.miniIntervals = nullptr;
   delete[] s.miniGlyphs;
@@ -86,9 +188,47 @@ void SdCardFont::freeStyleMiniData(PerStyle& s) {
   s.miniBitmap = nullptr;
   s.miniIntervalCount = 0;
   s.miniGlyphCount = 0;
+  s.miniIntervalCapacity = 0;
+  s.miniGlyphCapacity = 0;
+  s.miniBitmapCapacity = 0;
+  s.miniBitmapUsed = 0;
+  s.miniUnderuseRuns = 0;
   freeStyleMiniKern(s);
   memset(&s.miniData, 0, sizeof(s.miniData));
   s.epdFont.data = &s.stubData;
+}
+
+void SdCardFont::resetStyleMiniData(PerStyle& s, const bool heapTight) {
+  // Retention is a bet that the next scope needs similar data. Don't hold it
+  // when the heap is tight: the arenas are rebuildable for one page's worth of
+  // allocations, and this floor keeps retained fonts out of the way of section
+  // builds and the render path's own floors.
+  if (heapTight) {
+    freeStyleMiniData(s);
+    return;
+  }
+  // Underuse hysteresis, on the bitmap arena (the dominant allocation): an
+  // outlier page (e.g. three styles cramped together) would otherwise pin its
+  // high-water arena for the rest of the book. Keep while the page used at
+  // least 3/4 of capacity; release only after several consecutive rebuilds
+  // below that, so alternating dense/sparse pages never thrash. Evaluated at
+  // most once per rebuild (a scope both constructs and destructs through here,
+  // and subset hits load nothing new to judge).
+  if (s.miniHysteresisPending && s.miniBitmapCapacity > 0 && s.miniBitmapUsed > 0) {
+    s.miniHysteresisPending = false;
+    if (s.miniBitmapUsed < s.miniBitmapCapacity - s.miniBitmapCapacity / 4) {
+      if (++s.miniUnderuseRuns >= MINI_UNDERUSE_RUNS_BEFORE_FREE) {
+        LOG_DBG("SDCF", "mini release (underuse): used=%u cap=%u", s.miniBitmapUsed, s.miniBitmapCapacity);
+        freeStyleMiniData(s);
+        return;
+      }
+    } else {
+      s.miniUnderuseRuns = 0;
+    }
+  }
+  // Data (intervals/glyphs/bitmaps/kern) deliberately survives the scope: the
+  // next prewarm subset-checks against it, which is what lets the idle prewarm
+  // of page N+1 serve the actual page turn with zero SD reads.
 }
 
 void SdCardFont::freeStyleKernLigatureData(PerStyle& s) {
@@ -112,13 +252,13 @@ void SdCardFont::freeStyleMiniKern(PerStyle& s) {
   s.miniKernRightEntryCount = 0;
   s.miniKernLeftClassCount = 0;
   s.miniKernRightClassCount = 0;
+  s.miniKernLeftCapacity = 0;
+  s.miniKernRightCapacity = 0;
+  s.miniKernMatrixCapacity = 0;
 }
 
 void SdCardFont::freeStyleAll(PerStyle& s) {
   freeStyleMiniData(s);
-  delete[] s.prevCodepoints;  // v59 量測用;刻意【不】在 freeStyleMiniData 釋放——
-  s.prevCodepoints = nullptr;  // 它要跨頁存活,而 mini 資料每次 render 都被 clearCache 清掉
-  s.prevCodepointCount = 0;
   delete[] s.fullIntervals;
   s.fullIntervals = nullptr;
   delete[] s.bmpIntervals;
@@ -141,7 +281,9 @@ bool SdCardFont::ensureFileOpen() {
 }
 
 void SdCardFont::freeAll() {
-  sharedFile_ = HalFile{};  // 關閉共用檔柄(移動指派會讓舊的解構→close)
+  delete[] cpScratch_;
+  cpScratch_ = nullptr;
+  sharedFile_ = HalFile{};  // 關閉共用檔柄（移動指派讓舊的解構→close）
   clearOverflow();
   clearPersistentCache();
   for (uint8_t i = 0; i < MAX_STYLES; i++) {
@@ -280,9 +422,22 @@ static uint8_t miniLookupKernClass(const EpdKernClassEntry* entries, uint16_t co
 // on this page simply returns class 0 (no kerning), which was the pre-existing
 // behavior for any codepoint outside the kern classes.
 bool SdCardFont::buildMiniKernMatrix(PerStyle& s, const uint32_t* codepoints, uint32_t cpCount) {
-  freeStyleMiniKern(s);
+  // No freeStyleMiniKern here: it zeroed the capacities, which forced the
+  // ensureArrayCapacity calls below to reallocate every page and defeated the
+  // buffer reuse. prewarmStyle is the only caller and the success path
+  // overwrites the contents and all four counts, so keeping the buffers is
+  // safe. The early returns zero the counts (buffers kept) so a page with no
+  // applicable kern pairs kerns as none instead of through the previous
+  // page's tables.
+  const auto resetMiniKernCounts = [&s]() {
+    s.miniKernLeftEntryCount = 0;
+    s.miniKernRightEntryCount = 0;
+    s.miniKernLeftClassCount = 0;
+    s.miniKernRightClassCount = 0;
+  };
   if (!s.kernLeftClasses || !s.kernRightClasses || s.header.kernLeftEntryCount == 0 ||
       s.header.kernRightEntryCount == 0) {
+    resetMiniKernCounts();
     return true;  // font has no kern classes — nothing to build
   }
 
@@ -316,6 +471,7 @@ bool SdCardFont::buildMiniKernMatrix(PerStyle& s, const uint32_t* codepoints, ui
     }
   }
   if (numLeft == 0 || numRight == 0) {
+    resetMiniKernCounts();
     return true;  // no kern pairs applicable on this page
   }
 
@@ -328,13 +484,13 @@ bool SdCardFont::buildMiniKernMatrix(PerStyle& s, const uint32_t* codepoints, ui
     if (miniLookupKernClass(s.kernRightClasses, s.header.kernRightEntryCount, codepoints[i]) != 0) miniRightCount++;
   }
 
-  // Step 4: allocate the three mini buffers. The matrix is <1KB in practice
-  // (<30 × <30 × 1 byte) so fragmentation is a non-issue.
+  // Step 4: size the three mini buffers (reused across pages when they fit; the
+  // per-page sizes vary by a few entries, which as free+realloc churn was punching
+  // non-coalescing holes in the heap every page turn).
   const uint32_t matrixBytes = static_cast<uint32_t>(numLeft) * numRight;
-  s.miniKernLeftClasses = new (std::nothrow) EpdKernClassEntry[miniLeftCount];
-  s.miniKernRightClasses = new (std::nothrow) EpdKernClassEntry[miniRightCount];
-  s.miniKernMatrix = new (std::nothrow) int8_t[matrixBytes];
-  if (!s.miniKernLeftClasses || !s.miniKernRightClasses || !s.miniKernMatrix) {
+  if (!ensureArrayCapacity(s.miniKernLeftClasses, s.miniKernLeftCapacity, miniLeftCount) ||
+      !ensureArrayCapacity(s.miniKernRightClasses, s.miniKernRightCapacity, miniRightCount) ||
+      !ensureArrayCapacity(s.miniKernMatrix, s.miniKernMatrixCapacity, matrixBytes)) {
     LOG_ERR("SDCF", "Failed to allocate mini kern (%u+%u+%u bytes)", miniLeftCount * 3u, miniRightCount * 3u,
             matrixBytes);
     freeStyleMiniKern(s);
@@ -365,14 +521,12 @@ bool SdCardFont::buildMiniKernMatrix(PerStyle& s, const uint32_t* codepoints, ui
   // Step 6: read the full matrix's rows for each used left class, keep only
   // columns for used right classes. One SD seek + one read per used left class;
   // a row is kernRightClassCount bytes (~200 for Literata).
-  // v57:同 prewarmStyle,改用共用檔柄(這支只由 prewarmStyle 在其自身的讀取迴圈【結束後】
-  // 呼叫,不會在依賴檔案位置連續性的迴圈中間插入,所以共用位置是安全的)。
-  if (!ensureFileOpen()) {
+  HalFile file;
+  if (!Storage.openFileForRead("SDCF", filePath_, file)) {
     LOG_ERR("SDCF", "Failed to open .cpfont for mini kern: %s", filePath_);
     freeStyleMiniKern(s);
     return false;
   }
-  HalFile& file = sharedFile_;
 
   std::unique_ptr<int8_t[]> rowBuf(new (std::nothrow) int8_t[s.header.kernRightClassCount]);
   if (!rowBuf) {
@@ -421,6 +575,14 @@ void SdCardFont::applyGlyphMissCallback(uint8_t styleIdx) {
   auto& s = styles_[styleIdx];
   s.stubData.glyphMissHandler = &SdCardFont::onGlyphMiss;
   s.stubData.glyphMissCtx = &overflowCtx_[styleIdx];
+  s.stubData.coverageHandler = &SdCardFont::onCoverageQuery;
+}
+
+bool SdCardFont::onCoverageQuery(void* ctx, const uint32_t codepoint) {
+  const auto* octx = static_cast<OverflowContext*>(ctx);
+  const PerStyle& s = octx->self->styles_[octx->styleIdx];
+  if (!s.fullIntervals && !s.bmpIntervals) return false;  // coverage index freed/never loaded
+  return octx->self->findGlobalGlyphIndex(s, codepoint) >= 0;
 }
 
 // --- Compute per-style file offsets from a base data offset ---
@@ -676,11 +838,8 @@ int32_t SdCardFont::findGlobalGlyphIndex(const PerStyle& s, uint32_t codepoint) 
 
 // --- Prewarm ---
 
-int SdCardFont::prewarm(const char* utf8Text, uint8_t styleMask, bool metadataOnly, bool (*shouldAbort)(void*),
-                        void* abortCtx) {
-  // v110 複審修正:自身的兩條硬失敗(未載入 / 碼位緩衝配不到)也走 PREWARM_FAILED。
-  // 原本的 -1 落進 FontCacheManager 的 "missed > 0 才記 log,其餘一律成功" ⇒ 空快取被採用。
-  if (!loaded_) return PREWARM_FAILED;
+int SdCardFont::prewarm(const char* utf8Text, uint8_t styleMask, bool metadataOnly) {
+  if (!loaded_) return -1;
   styleMask = resolveStyleMask(styleMask);
   if (styleMask == 0) return 0;
 
@@ -695,7 +854,7 @@ int SdCardFont::prewarm(const char* utf8Text, uint8_t styleMask, bool metadataOn
   std::unique_ptr<uint32_t[]> codepoints(new (std::nothrow) uint32_t[MAX_PAGE_GLYPHS]);
   if (!codepoints) {
     LOG_ERR("SDCF", "Failed to allocate codepoint buffer (%u bytes)", MAX_PAGE_GLYPHS * 4);
-    return PREWARM_FAILED;
+    return -1;
   }
   uint32_t cpCount = 0;
 
@@ -774,37 +933,55 @@ int SdCardFont::prewarm(const char* utf8Text, uint8_t styleMask, bool metadataOn
 
   // Prewarm each requested style
   int totalMissed = 0;
-  bool failed = false;
   for (uint8_t si = 0; si < MAX_STYLES; si++) {
     if (!(styleMask & (1 << si)) || !styles_[si].present) continue;
-    // v110:中止由 prewarmStyle 自己回報(PREWARM_ABORTED),不靠事後再問述詞來推斷——
-    // 述詞可能在兩次詢問之間翻回 false,那樣中止會被誤認成「缺了 N 個字」的成功。
-    const int r = prewarmStyle(si, codepoints.get(), cpCount, metadataOnly, shouldAbort, abortCtx);
-    if (r == PREWARM_ABORTED) return PREWARM_ABORTED;
-    // v110 複審修正:硬失敗【不提早返回】,其餘字面照常預載完 —— v109 的失敗路徑
-    // (回 cpCount 然後繼續跑下一個字面)就是這個形狀,這裡只改「回報什麼」不改「做什麼」。
-    // 也不併進 totalMissed:那是缺字數,失敗的字面沒有「缺了幾個字」這個答案。
-    if (r == PREWARM_FAILED) {
-      failed = true;
-      continue;
-    }
-    totalMissed += r;
-    // 這一次額外的詢問【不是】正確性的依靠,只是多一個便宜的中止點:上一個字面已經
-    // 完整載好了,但既然現在要中止,下一個字面整趟 SD 讀取就不必付。
-    if (shouldAbort && shouldAbort(abortCtx)) return PREWARM_ABORTED;
-    // 兩種中止路徑都跳過尾端的 stats 累計,與既有所有失敗 early-return 一致(不另外補寫)。
+    totalMissed += prewarmStyle(si, codepoints.get(), cpCount, metadataOnly);
   }
 
-  stats_.prewarmTotalMs += millis() - startMs;  // v54:一次 render 會逐字重呼叫多次,改累加
-  // v110 複審修正:任何字面硬失敗 ⇒ 整趟回報失敗。stats 仍照常累計(與 v109 相同:
-  // 失敗的那趟 SD 時間是真的花掉了),只有中止那兩條刻意跳過尾端統計。
-  if (failed) return PREWARM_FAILED;
+  stats_.prewarmTotalMs = millis() - startMs;
   return totalMissed;
 }
 
-int SdCardFont::prewarmStyle(uint8_t styleIdx, const uint32_t* codepoints, uint32_t cpCount, bool metadataOnly,
-                             bool (*shouldAbort)(void*), void* abortCtx) {
+int SdCardFont::prewarmStyle(uint8_t styleIdx, const uint32_t* codepoints, uint32_t cpCount, bool metadataOnly) {
   auto& s = styles_[styleIdx];
+
+  // Idle-prewarm hit: mini data persists across PrewarmScopes (resetStyleMiniData
+  // keeps it), so when the previous scope -- typically the idle prewarm of this
+  // exact page -- already loaded every requested codepoint the font covers, this
+  // page needs zero SD reads. A mini built metadata-only cannot serve a full
+  // request (no bitmaps). Any uncovered codepoint falls through to the rebuild.
+  if (s.miniGlyphCount > 0 && !(s.miniMetadataOnly && !metadataOnly)) {
+    bool covered = true;
+    int missedInMini = 0;
+    for (uint32_t i = 0; i < cpCount && covered; i++) {
+      const uint32_t cp = codepoints[i];
+      bool inMini = false;
+      for (uint32_t iv = 0; iv < s.miniIntervalCount; iv++) {
+        if (cp < s.miniIntervals[iv].first) break;  // intervals sorted ascending
+        if (cp <= s.miniIntervals[iv].last) {
+          inMini = true;
+          break;
+        }
+      }
+      if (inMini) continue;
+      // v154（codex P1-1）：被降級丟棄的碼位視為 covered —— 它已由 miss ring 承接，
+      // 重建整套 mini 也只會在同樣的堆積條件下再丟一次。二分搜尋（miniDropped 已排序）。
+      if (s.miniDroppedCount > 0) {
+        const uint32_t* lo = s.miniDropped;
+        const uint32_t* hi = s.miniDropped + s.miniDroppedCount;
+        const uint32_t* it = std::lower_bound(lo, hi, cp);
+        if (it != hi && *it == cp) continue;
+      }
+      if (findGlobalGlyphIndex(s, cp) < 0) {
+        missedInMini++;  // not in font coverage: the rebuild couldn't load it either
+      } else {
+        covered = false;
+      }
+    }
+    if (covered) {
+      return missedInMini;
+    }
+  }
 
   // Map codepoints to global glyph indices for this style
   struct CpGlyphMapping {
@@ -814,9 +991,7 @@ int SdCardFont::prewarmStyle(uint8_t styleIdx, const uint32_t* codepoints, uint3
   CpGlyphMapping* mappings = new (std::nothrow) CpGlyphMapping[cpCount];
   if (!mappings) {
     LOG_ERR("SDCF", "Failed to allocate mapping array for style %u", styleIdx);
-    // v110 複審修正:硬失敗一律回 PREWARM_FAILED,不再借用 cpCount 這個「缺字數」通道。
-    // (以下每一處 early-return 同理;唯一保留正值的是下方 validCount==0 的缺字路徑。)
-    return PREWARM_FAILED;
+    return static_cast<int>(cpCount);
   }
 
   uint32_t validCount = 0;
@@ -837,60 +1012,44 @@ int SdCardFont::prewarmStyle(uint8_t styleIdx, const uint32_t* codepoints, uint3
     return missed;
   }
 
-  // v59 量測:這一頁的字有幾個【上一次繪製也用過】= 跨頁快取會命中幾次。
-  // 兩份清單都依碼位遞增,所以走一次合併掃描 O(n+m)。只算真正要繪製的 prewarm
-  // (metadataOnly 是排版用的,算進來會混淆判讀)。
-  if (!metadataOnly) {
-    uint32_t hits = 0;
-    if (s.prevCodepoints != nullptr && s.prevCodepointCount > 0) {
-      uint32_t a = 0, b = 0;
-      while (a < validCount && b < s.prevCodepointCount) {
-        const uint32_t x = mappings[a].codepoint, y = s.prevCodepoints[b];
-        if (x == y) {
-          hits++;
-          a++;
-          b++;
-        } else if (x < y) {
-          a++;
-        } else {
-          b++;
-        }
-      }
-    }
-    stats_.prevPageGlyphHits += hits;
-    stats_.prevPageGlyphTotal += validCount;
+  // Build mini intervals from sorted codepoints. Reset counts and fall back to the
+  // stub until the rebuild completes, but KEEP the existing buffers (keep-if-fits
+  // reuse) — the free-and-realloc-per-page pattern here was a primary fragmenter.
+  s.miniIntervalCount = 0;
+  s.miniGlyphCount = 0;
+  s.miniKernLeftEntryCount = 0;
+  s.miniKernRightEntryCount = 0;
+  s.miniKernLeftClassCount = 0;
+  s.miniKernRightClassCount = 0;
+  memset(&s.miniData, 0, sizeof(s.miniData));
+  s.epdFont.data = &s.stubData;
+
+  if (!ensureArrayCapacity(s.miniIntervals, s.miniIntervalCapacity, validCount)) {
+    LOG_ERR("SDCF", "Failed to allocate mini intervals for style %u", styleIdx);
+    delete[] mappings;
+    return static_cast<int>(cpCount);
   }
 
-  freeStyleMiniData(s);
+  s.miniIntervalCount = 0;
+  uint32_t rangeStart = 0;
+  for (uint32_t i = 1; i <= validCount; i++) {
+    if (i == validCount || mappings[i].codepoint != mappings[i - 1].codepoint + 1) {
+      s.miniIntervals[s.miniIntervalCount].first = mappings[rangeStart].codepoint;
+      s.miniIntervals[s.miniIntervalCount].last = mappings[i - 1].codepoint;
+      s.miniIntervals[s.miniIntervalCount].offset = rangeStart;
+      s.miniIntervalCount++;
+      rangeStart = i;
+    }
+  }
 
-  // v55:順序改成【先讀 metadata → 決定 bitmap 預算 → 最後才建 interval】。
-  // 原本 interval 先建好,bitmap 單塊配置一失敗就只能整組 freeStyleMiniData 放棄,
-  // 連剛從 SD 讀進來的 ~2KB glyph metadata 一起丟掉——整頁每個字都退回 overflow ring
-  // 逐字重讀,那正是 25 秒翻頁的最後一段。改成「配不下就丟掉最占空間的幾個字」:
-  // 被丟的字不寫進 miniIntervals,自然由既有的 glyphMissHandler 走 ring 補畫,
-  // 其餘的字照常走 prewarm 快路徑。不新增任何 bitmap 指標運算(渲染路徑零改動)。
-  s.miniGlyphCount = validCount;
-  s.miniAllocCount = validCount;  // 降級只縮 miniGlyphCount,陣列本身不重配(見 residentBytes)
-  s.miniGlyphs = new (std::nothrow) EpdGlyph[validCount];
-  if (!s.miniGlyphs) {
+  // Mini glyph array (reused across pages when it fits)
+  if (!ensureArrayCapacity(s.miniGlyphs, s.miniGlyphCapacity, validCount)) {
     LOG_ERR("SDCF", "Failed to allocate mini glyphs for style %u", styleIdx);
     delete[] mappings;
     freeStyleMiniData(s);
-    return PREWARM_FAILED;
+    return static_cast<int>(cpCount);
   }
-
-  // interval 表【現在】就配好(容量取壓縮前的 validCount,必為上界),但要等 bitmap 預算
-  // 決定、壓縮完成之後才填值。複查抓到的自我擊敗:若把配置也排到 bitmap 之後,等於在剛把
-  // 最大連續塊吃到只剩邊際的那一刻才去要這 validCount*12 位元組——降級路徑最需要它的那一頁,
-  // 反而最可能配不到,於是整組放棄,正是本版要消滅的災難。
-  s.miniIntervals = new (std::nothrow) EpdUnicodeInterval[validCount];
-  if (!s.miniIntervals) {
-    LOG_ERR("SDCF", "Failed to allocate mini intervals for style %u", styleIdx);
-    delete[] mappings;
-    freeStyleMiniData(s);
-    return PREWARM_FAILED;
-  }
-  s.miniIntervalCount = 0;
+  s.miniGlyphCount = validCount;
 
   // Build sorted read order for sequential I/O
   uint32_t* readOrder = new (std::nothrow) uint32_t[validCount];
@@ -898,22 +1057,18 @@ int SdCardFont::prewarmStyle(uint8_t styleIdx, const uint32_t* codepoints, uint3
     LOG_ERR("SDCF", "Failed to allocate read order for style %u", styleIdx);
     delete[] mappings;
     freeStyleMiniData(s);
-    return PREWARM_FAILED;
+    return static_cast<int>(cpCount);
   }
   for (uint32_t i = 0; i < validCount; i++) readOrder[i] = i;
   std::sort(readOrder, readOrder + validCount,
             [&](uint32_t a, uint32_t b) { return mappings[a].globalIndex < mappings[b].globalIndex; });
 
-  // v57:改用整段閱讀共用的檔柄。原本每個字面每頁都自己開一次 .cpfont,而 SdFat 的
-  // openFileForRead 內部先 exists() 再 open()(exists 本身就是一次完整 open),等於把路徑
-  // 從根目錄線性掃兩遍——這台實測 12-18ms。v55 已經為 glyph miss 建好這條共用路徑,
-  // 但 prewarm 這邊一直沒接上;混排 R+B 的頁每頁因此白付兩次開檔。
+  // v154：共用檔柄 —— 每頁 prewarm 省一次 12–18ms 的開檔。
   if (!ensureFileOpen()) {
-    LOG_ERR("SDCF", "Failed to reopen .cpfont for prewarm (style %u)", styleIdx);
     delete[] readOrder;
     delete[] mappings;
     freeStyleMiniData(s);
-    return PREWARM_FAILED;
+    return static_cast<int>(cpCount);
   }
   HalFile& file = sharedFile_;
 
@@ -928,20 +1083,6 @@ int SdCardFont::prewarmStyle(uint8_t styleIdx, const uint32_t* codepoints, uint3
   // containing that codepoint beyond page width).
   int32_t lastReadIndex = INT32_MIN;
   for (uint32_t i = 0; i < validCount; i++) {
-    // v110:每 8 個字問一次要不要中止。清理與下方 seek 失敗那組【逐字相同】——
-    // 特別是【不碰共用檔柄】(sharedFile_ 只由 freeAll 關閉),也不在這裡寫 stats。
-    // ⚠️ 但【回傳值不同】:中止回 PREWARM_ABORTED,讀取失敗回 PREWARM_FAILED,兩者都不
-    // 借用「缺了 N 個字」那個正值通道。理由(複查抓到):若靠呼叫端事後再問一次述詞來翻譯,
-    // 而述詞在兩次詢問之間由 true 翻回 false(Task 5 的述詞是「有沒有待處理的 render」,
-    // render 一開始就會清掉,它【會】翻回去),中止就會被當成「缺了 N 個字」的成功 →
-    // 呼叫端替一份已經被 freeStyleMiniData 釋放掉的快取蓋上 valid 身分 → 無聲的 v54 級降速。
-    // (硬失敗走的是完全相同的路,最終複審才把它一起補上,見 PREWARM_FAILED 的宣告。)
-    if (shouldAbort && (i & 7) == 0 && shouldAbort(abortCtx)) {
-      delete[] readOrder;
-      delete[] mappings;
-      freeStyleMiniData(s);
-      return PREWARM_ABORTED;
-    }
     uint32_t mapIdx = readOrder[i];
     int32_t gIdx = mappings[mapIdx].globalIndex;
 
@@ -949,10 +1090,10 @@ int SdCardFont::prewarmStyle(uint8_t styleIdx, const uint32_t* codepoints, uint3
     if (gIdx != lastReadIndex + 1) {
       if (!file.seekSet(fileOff)) {
         LOG_ERR("SDCF", "Prewarm: failed to seek to glyph %d (style %u)", gIdx, styleIdx);
-        delete[] readOrder;  // v57:共用檔柄,不在此關閉(只由 freeAll 關)
+        delete[] readOrder;
         delete[] mappings;
         freeStyleMiniData(s);
-        return PREWARM_FAILED;
+        return static_cast<int>(cpCount);
       }
       seekCount++;
     }
@@ -961,91 +1102,90 @@ int SdCardFont::prewarmStyle(uint8_t styleIdx, const uint32_t* codepoints, uint3
       delete[] readOrder;
       delete[] mappings;
       freeStyleMiniData(s);
-      return PREWARM_FAILED;
+      return static_cast<int>(cpCount);
     }
     lastReadIndex = gIdx;
-  }
-
-  // v110:metadata 與 bitmap 兩段之間的中止點。bitmap 那段會做整塊大配置,
-  // 已經不想要的頁不值得付那個峰值。
-  if (shouldAbort && shouldAbort(abortCtx)) {
-    delete[] readOrder;
-    delete[] mappings;
-    freeStyleMiniData(s);
-    return PREWARM_ABORTED;
   }
 
   uint32_t totalBitmapSize = 0;
 
   if (!metadataOnly) {
+    s.miniDroppedCount = 0;  // v154：每次重建重新決定 dropped 集合（ladder 會再填）
     // Compute total bitmap size
     for (uint32_t i = 0; i < validCount; i++) {
       totalBitmapSize += s.miniGlyphs[i].dataLength;
     }
 
-    // v53 量測:在【配置前】記錄嘗試的單塊大小——配置失敗時 early return,
-    // 若只在成功後記錄,最想抓的事件(撞到連續區塊天花板)在 diag.log 反而毫無痕跡。
-    if (totalBitmapSize > stats_.maxSingleBitmapAlloc) stats_.maxSingleBitmapAlloc = totalBitmapSize;
-    // v55:把「這一頁需要幾個字」搬到配置【之前】——原本統計全在函式尾端,配置失敗
-    // early-return 就整組跳過,失敗頁在 diag.log 只剩 max_single、其餘全 0
-    // (v54 那兩次 25 秒事件正是如此,完全看不出那頁有多密)。
-    // sdTime/seekCount 要等下方的 bitmap 讀取迴圈才算得出來,維持在尾端。
-    stats_.uniqueGlyphs += validCount;
-    s.miniBitmap = new (std::nothrow) uint8_t[totalBitmapSize > 0 ? totalBitmapSize : 1];
-
-    if (!s.miniBitmap && totalBitmapSize == 0) {
-      // 連 1 byte 的佔位配置都失敗 = 真的沒記憶體了。這條若不擋,下面的降級區塊
-      // (條件含 totalBitmapSize > 0)會整個跳過,讓 miniData.bitmap 帶著 nullptr 進渲染路徑。
-      LOG_ERR("SDCF", "Failed to allocate placeholder mini bitmap for style %u", styleIdx);
-      delete[] readOrder;
-      delete[] mappings;
-      freeStyleMiniData(s);
-      return PREWARM_FAILED;
-    }
-
-    if (!s.miniBitmap) {
-      // 降級而非放棄:丟掉「最占空間」的字(丟越少個越好),剩下的字仍然走快路徑。
-      // 每輪都重問一次當下最大連續區塊——第一次失敗後堆可能已被別處動過。
+    if (!ensureArrayCapacity(s.miniBitmap, s.miniBitmapCapacity, totalBitmapSize)) {
+      // v154（P1 效能止血①）：miniBitmap 降級階梯 —— 搬回舊樹（v55 系）的作法。
+      //
+      // 原本這裡整段放棄（freeStyleMiniData + return cpCount）＝整頁的字全走
+      // glyph-miss ring（8 格）→ 每個字每一趟灰階都從 SD 讀。實機 v153 量到的帳單：
+      //   SEG tiled lsb=12,630 msb=11,872 total=26,787  （27 秒一頁）
+      //   SDCFFAIL mini-bitmap bytes=33,190 defMax=14,324
+      // 而 v130（舊樹）同一本書順暢 —— 差的就是這個階梯。
+      //
+      // 作法：丟掉「最占空間」的字（丟越少個越好），剩下的字仍走快路徑。
+      // 排版不受影響 —— advanceX 走獨立的 advanceTable_，這裡只關 render。
+      // 被丟的字由 glyph-miss ring 承接（OVERFLOW_CAPACITY 本版一併 8→32，
+      // 帳本記過兩者是配套：ring 太小時被丟的字每一趟都重新 miss）。
+      const unsigned dm0 = heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT);
       stats_.bitmapAllocFailures++;
-      std::sort(readOrder, readOrder + validCount, [&](uint32_t a, uint32_t b) {
-        return s.miniGlyphs[a].dataLength > s.miniGlyphs[b].dataLength;
-      });
+      noteAllocFail("mini-bitmap", totalBitmapSize, dm0,
+                    static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_DEFAULT)));
+
+      // 依 bitmap 大小遞減排序（readOrder 此刻的 glyph-index 排序已用完，可以重用；
+      // 下面讀 bitmap 前反正會再按 dataOffset 重排）。
+      std::sort(readOrder, readOrder + validCount,
+                [&](uint32_t a, uint32_t b) { return s.miniGlyphs[a].dataLength > s.miniGlyphs[b].dataLength; });
+
+      // dropped 標記借用 mappings[].globalIndex（metadata 已讀完，它不再被使用）。
+      static constexpr uint32_t BITMAP_BUDGET_MARGIN = 4096;  // TLSF 取整律：貼上限配必失敗
+      // codex P2：ensureArrayCapacity 對 >=8KB 的配置會取整到 8KB 級距 —— 預算必須比較
+      // 【量化後】的實配大小，否則「看似符合、實配仍失敗」-> 白白多砍 25%、多丟字，
+      // 正好把 dropped 數推過 miss ring 的容量臨界點。
+      const auto quantized = [](uint32_t n) -> uint32_t {
+        return n >= 8 * 1024 ? ((n + 8 * 1024 - 1) / (8 * 1024)) * (8 * 1024) : n;
+      };
       uint32_t dropCursor = 0;
       uint32_t remaining = totalBitmapSize;
-      for (uint8_t attempt = 0; attempt < 4 && !s.miniBitmap; attempt++) {
-        const size_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-        uint32_t budget = largest > BITMAP_BUDGET_MARGIN ? static_cast<uint32_t>(largest - BITMAP_BUDGET_MARGIN) : 0;
-        // 堆說「夠大」但實配失敗(TLSF 標頭/對齊吃掉邊際)→ 強制再砍 25% 才有進展。
-        if (budget >= remaining) budget = remaining - remaining / 4;
-        while (remaining > budget && dropCursor < validCount) {
+      bool bitmapOk = false;
+      for (uint8_t attempt = 0; attempt < 4 && !bitmapOk; attempt++) {
+        const size_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT);
+        while (dropCursor < validCount &&
+               (largest <= BITMAP_BUDGET_MARGIN ||
+                quantized(remaining) + BITMAP_BUDGET_MARGIN > static_cast<uint32_t>(largest))) {
           const uint32_t idx = readOrder[dropCursor++];
+          // dataLength==0 的字（空格等）不佔 bitmap，丟了只是白佔 ring —— 跳過。
+          if (s.miniGlyphs[idx].dataLength == 0) continue;
           remaining -= s.miniGlyphs[idx].dataLength;
-          mappings[idx].globalIndex = -1;  // 標記丟棄;globalIndex 在 metadata 讀完後已無用途
+          mappings[idx].globalIndex = -1;  // 丟棄標記
         }
-        if (remaining == 0) break;
-        s.miniBitmap = new (std::nothrow) uint8_t[remaining];
+        if (dropCursor >= validCount && quantized(remaining) + BITMAP_BUDGET_MARGIN > largest) break;
+        bitmapOk = ensureArrayCapacity(s.miniBitmap, s.miniBitmapCapacity, remaining > 0 ? remaining : 1);
       }
 
-      if (!s.miniBitmap) {
-        // 連降級都配不到:需要 bitmap 的字全走 ring,但【保留 metadata】。
-        // dataLength==0 的字(空格等)本來就不需要 bitmap,留在快路徑不花任何空間——
-        // 把它們一起推去 ring 只是白白佔用 32 格的其中幾格。
+      if (!bitmapOk) {
+        LOG_ERR("SDCF", "mini bitmap ladder exhausted (%u bytes) style %u", totalBitmapSize, styleIdx);
+        delete[] readOrder;
+        delete[] mappings;
+        freeStyleMiniData(s);
+        return static_cast<int>(cpCount);
+      }
+
+      // 就地壓縮 mappings/miniGlyphs（保持碼位遞增 —— mappings 本來就按碼位序），
+      // 再重建 intervals：被丟的字從 mini 消失 → render 時 interval 查不到 → 走 miss ring。
+      // 壓縮會就地搬移，先把「哪些碼位被丟」快照下來（壓縮後就讀不到了）。
+      const uint32_t validCountOrig = validCount;
+      // 借 readOrder 前段當快照緩衝不行（它還要重建）—— 用臨時 VLA 風格 new。
+      uint32_t* origCp = new (std::nothrow) uint32_t[validCount];
+      uint8_t* origDropFlag = new (std::nothrow) uint8_t[validCount];
+      if (origCp && origDropFlag) {
         for (uint32_t i = 0; i < validCount; i++) {
-          if (s.miniGlyphs[i].dataLength > 0) mappings[i].globalIndex = -1;
-        }
-        remaining = 0;
-        s.miniBitmap = new (std::nothrow) uint8_t[1];
-        if (!s.miniBitmap) {
-          LOG_ERR("SDCF", "Failed to allocate mini bitmap (%u bytes) for style %u", totalBitmapSize, styleIdx);
-          delete[] readOrder;
-          delete[] mappings;
-          freeStyleMiniData(s);
-          return PREWARM_FAILED;
+          origCp[i] = mappings[i].codepoint;
+          origDropFlag[i] = mappings[i].globalIndex < 0 ? 1 : 0;
         }
       }
-
-      // 就地壓縮 mappings/miniGlyphs(保持碼位遞增),讓後續 interval 與 bitmap 讀取
-      // 只看得到留下來的字。
       uint32_t kept = 0;
       for (uint32_t i = 0; i < validCount; i++) {
         if (mappings[i].globalIndex < 0) continue;
@@ -1055,31 +1195,55 @@ int SdCardFont::prewarmStyle(uint8_t styleIdx, const uint32_t* codepoints, uint3
         }
         kept++;
       }
-      LOG_ERR("SDCF", "Mini bitmap degraded (style %u): %u/%u glyphs to overflow, %u->%u bytes", styleIdx,
-              validCount - kept, validCount, totalBitmapSize, remaining);
-      stats_.bitmapGlyphsDropped += (validCount - kept);
+      const uint32_t dropped = validCount - kept;
+      // codex P1-1：把被丟的碼位記成排序集合（mappings 原本就按碼位序，被丟的挑出來
+      // 仍是遞增），coverage 檢查據此不再重建。codex P3：**不**把 dropped 算進 missed ——
+      // 它們仍會由 miss ring 畫出來，不是「字型沒有」。
+      if (origCp && origDropFlag &&
+          ensureArrayCapacity(s.miniDropped, s.miniDroppedCapacity, dropped > 0 ? dropped : 1)) {
+        uint16_t dc = 0;
+        for (uint32_t i = 0; i < validCountOrig; i++) {
+          if (origDropFlag[i]) s.miniDropped[dc++] = origCp[i];
+        }
+        s.miniDroppedCount = dc;
+        stats_.bitmapGlyphsDropped += dropped;
+      } else {
+        stats_.bitmapGlyphsDropped += dropped;
+        s.miniDroppedCount = 0;  // 記不下就退回「每次重建」的舊行為，不是錯誤
+      }
       validCount = kept;
-      s.miniGlyphCount = kept;
-      totalBitmapSize = remaining;
-    }
+      s.miniGlyphCount = validCount;
 
-    // Read bitmap data sorted by file offset.
-    // v55:必須先重填 0..validCount-1——降級路徑既重排過 readOrder 又壓縮過陣列,
-    // 沿用舊內容會拿到已經不存在的索引。
-    for (uint32_t i = 0; i < validCount; i++) readOrder[i] = i;
+      delete[] origCp;
+      delete[] origDropFlag;
+
+      s.miniIntervalCount = 0;
+      uint32_t rs = 0;
+      for (uint32_t i = 1; i <= validCount; i++) {
+        if (i == validCount || mappings[i].codepoint != mappings[i - 1].codepoint + 1) {
+          s.miniIntervals[s.miniIntervalCount].first = mappings[rs].codepoint;
+          s.miniIntervals[s.miniIntervalCount].last = mappings[i - 1].codepoint;
+          s.miniIntervals[s.miniIntervalCount].offset = rs;
+          s.miniIntervalCount++;
+          rs = i;
+        }
+      }
+      totalBitmapSize = remaining;
+      // ⚠️ 壓縮讓 readOrder 裡的舊索引全部失效（陣列已就地搬移）——下面的 bitmap 讀取
+      // 迴圈會拿它按 dataOffset 重排。必須重建成 0..validCount-1，否則讀進錯的格子
+      // = 字形錯置（畫錯字、不當機、不留 log —— 最陰險的那種）。
+      for (uint32_t i = 0; i < validCount; i++) readOrder[i] = i;
+      LOG_ERR("SDCF", "mini bitmap degraded: kept=%u dropped=%u bytes=%u style %u", kept, dropped, remaining, styleIdx);
+    }
+    s.miniBitmapUsed = totalBitmapSize;  // underuse-hysteresis signal for resetStyleMiniData
+
+    // Read bitmap data sorted by file offset
     std::sort(readOrder, readOrder + validCount,
               [&](uint32_t a, uint32_t b) { return s.miniGlyphs[a].dataOffset < s.miniGlyphs[b].dataOffset; });
 
     uint32_t miniBitmapOffset = 0;
     uint32_t lastBitmapEnd = UINT32_MAX;
     for (uint32_t i = 0; i < validCount; i++) {
-      // v110:同上,每 8 個字一次,清理與下方 seek 失敗那組逐字相同,回傳 PREWARM_ABORTED。
-      if (shouldAbort && (i & 7) == 0 && shouldAbort(abortCtx)) {
-        delete[] readOrder;
-        delete[] mappings;
-        freeStyleMiniData(s);
-        return PREWARM_ABORTED;
-      }
       uint32_t mapIdx = readOrder[i];
       EpdGlyph& glyph = s.miniGlyphs[mapIdx];
 
@@ -1092,10 +1256,10 @@ int SdCardFont::prewarmStyle(uint8_t styleIdx, const uint32_t* codepoints, uint3
       if (fileOff != lastBitmapEnd) {
         if (!file.seekSet(fileOff)) {
           LOG_ERR("SDCF", "Prewarm: failed to seek to bitmap (style %u)", styleIdx);
-          delete[] readOrder;  // v57:共用檔柄,不在此關閉(只由 freeAll 關)
+          delete[] readOrder;
           delete[] mappings;
           freeStyleMiniData(s);
-          return PREWARM_FAILED;
+          return static_cast<int>(cpCount);
         }
         seekCount++;
       }
@@ -1104,7 +1268,7 @@ int SdCardFont::prewarmStyle(uint8_t styleIdx, const uint32_t* codepoints, uint3
         delete[] readOrder;
         delete[] mappings;
         freeStyleMiniData(s);
-        return PREWARM_FAILED;
+        return static_cast<int>(cpCount);
       }
       lastBitmapEnd = fileOff + glyph.dataLength;
 
@@ -1114,48 +1278,8 @@ int SdCardFont::prewarmStyle(uint8_t styleIdx, const uint32_t* codepoints, uint3
   }
 
   uint32_t sdTime = millis() - sdStart;
-
-  // Build mini intervals from the (possibly compacted) sorted codepoints.
-  // v55:移到這裡才建——上面若因記憶體不足丟掉了幾個字,那些碼位就不該出現在
-  // interval 表裡,EpdFont 查不到才會轉呼叫 glyphMissHandler 走 ring。
-  if (validCount > 0) {
-    uint32_t rangeStart = 0;
-    for (uint32_t i = 1; i <= validCount; i++) {
-      if (i == validCount || mappings[i].codepoint != mappings[i - 1].codepoint + 1) {
-        s.miniIntervals[s.miniIntervalCount].first = mappings[rangeStart].codepoint;
-        s.miniIntervals[s.miniIntervalCount].last = mappings[i - 1].codepoint;
-        s.miniIntervals[s.miniIntervalCount].offset = rangeStart;
-        s.miniIntervalCount++;
-        rangeStart = i;
-      }
-    }
-  }
-
-  // v59:記下本頁的碼位供【下一頁】比對。放在 delete[] mappings 之前;
-  // 容量一次配滿 PREV_CP_CAP 就地重用,不隨頁數成長搬遷。
-  if (!metadataOnly) {
-    if (s.prevCodepoints == nullptr) {
-      s.prevCodepoints = new (std::nothrow) uint32_t[PREV_CP_CAP];
-    }
-    if (s.prevCodepoints != nullptr) {
-      const uint32_t n = validCount < PREV_CP_CAP ? validCount : PREV_CP_CAP;
-      for (uint32_t i = 0; i < n; i++) s.prevCodepoints[i] = mappings[i].codepoint;
-      s.prevCodepointCount = static_cast<uint16_t>(n);
-    }
-  }
-
   delete[] readOrder;
   delete[] mappings;
-
-  // v110:最後一個中止點。buildMiniKernMatrix 內部【刻意不加】中止(它的 SD 成本有界,
-  // 而它自己就有多處配置與 early-return,插進去等於在最危險的地方多開幾條路徑),
-  // 所以只在進去之前問一次。
-  // ⚠️ 這裡的清理與上面三處【不同】:readOrder/mappings 剛剛已經 delete 過
-  //(見上方兩行),不能再刪一次。回傳值與上面三處相同(PREWARM_ABORTED)。
-  if (shouldAbort && shouldAbort(abortCtx)) {
-    freeStyleMiniData(s);
-    return PREWARM_ABORTED;
-  }
 
   // Full render prewarm: load the persistent kern classes + ligatures (one-time
   // per style, small — the big matrix is NOT loaded here) and then build the
@@ -1170,6 +1294,10 @@ int SdCardFont::prewarmStyle(uint8_t styleIdx, const uint32_t* codepoints, uint3
   }
 
   // Populate miniData and swap
+  s.miniMetadataOnly = metadataOnly;
+  // codex P2：降級的 mini（capacity 是 8K 取整、used 是砍過的量）會被 underuse 判定
+  // 誤殺 -> 反覆釋放重建。降級這輪跳過 hysteresis。
+  s.miniHysteresisPending = !metadataOnly && s.miniDroppedCount == 0;
   memset(&s.miniData, 0, sizeof(s.miniData));
   s.miniData.bitmap = s.miniBitmap;
   s.miniData.glyph = s.miniGlyphs;
@@ -1184,44 +1312,17 @@ int SdCardFont::prewarmStyle(uint8_t styleIdx, const uint32_t* codepoints, uint3
   }
   s.miniData.glyphMissHandler = &SdCardFont::onGlyphMiss;
   s.miniData.glyphMissCtx = &overflowCtx_[styleIdx];
+  s.miniData.coverageHandler = &SdCardFont::onCoverageQuery;
 
   s.epdFont.data = &s.miniData;
 
   // Accumulate stats
   stats_.sdReadTimeMs += sdTime;
   stats_.seekCount += seekCount;
-  stats_.bitmapBytes += totalBitmapSize;  // uniqueGlyphs 已在配置前記錄(見上)
-  s.miniBitmapBytes = totalBitmapSize;    // v55 residentBytes 用(降級後 = 實際留下的量;metadataOnly 時為 0)
+  stats_.uniqueGlyphs += validCount;
+  stats_.bitmapBytes += totalBitmapSize;
 
   return missed;
-}
-
-size_t SdCardFont::residentBytes() const {
-  size_t total = 0;
-  for (uint8_t i = 0; i < MAX_STYLES; i++) {
-    const auto& s = styles_[i];
-    if (!s.present) continue;
-    if (s.fullIntervals) total += static_cast<size_t>(s.header.intervalCount) * sizeof(EpdUnicodeInterval);
-    if (s.bmpIntervals) total += static_cast<size_t>(s.header.intervalCount) * sizeof(PerStyle::BmpInterval16);
-    if (s.kernLeftClasses) total += static_cast<size_t>(s.header.kernLeftEntryCount) * sizeof(EpdKernClassEntry);
-    if (s.kernRightClasses) total += static_cast<size_t>(s.header.kernRightEntryCount) * sizeof(EpdKernClassEntry);
-    if (s.ligaturePairs) total += static_cast<size_t>(s.header.ligaturePairCount) * sizeof(EpdLigaturePair);
-    // 用【實配】筆數,不用降級後縮小的 miniGlyphCount(見 miniAllocCount 的註解)
-    total += static_cast<size_t>(s.miniAllocCount) * (sizeof(EpdUnicodeInterval) + sizeof(EpdGlyph));
-    total += s.miniBitmapBytes;
-    if (s.miniKernLeftClasses) total += static_cast<size_t>(s.miniKernLeftEntryCount) * sizeof(EpdKernClassEntry);
-    if (s.miniKernRightClasses) total += static_cast<size_t>(s.miniKernRightEntryCount) * sizeof(EpdKernClassEntry);
-    if (s.miniKernMatrix) {
-      total += static_cast<size_t>(s.miniKernLeftClassCount) * static_cast<size_t>(s.miniKernRightClassCount);
-    }
-    // advance 快取 v55 起一律配滿 ADVANCE_CACHE_LIMIT(就地合併,不再成長搬遷)
-    if (advanceTable_[i]) total += static_cast<size_t>(ADVANCE_CACHE_LIMIT) * sizeof(AdvanceEntry);
-  }
-  // overflow ring:陣列本身 + 每格已載入的 bitmap。v55 把格數從 8 提到 32,滿載時是真的常駐量;
-  // 漏算會讓「值不值得卸字型」的門檻低報。glyph.dataLength 即該格 bitmap 的實配大小。
-  total += sizeof(overflow_);
-  for (uint32_t i = 0; i < overflowCount_; i++) total += overflow_[i].glyph.dataLength;
-  return total;
 }
 
 // --- Cache management ---
@@ -1231,11 +1332,38 @@ void SdCardFont::clearCache() {
   // Note: advance table is intentionally preserved here. It persists across
   // layout passes so repeated section indexing amortizes SD reads. Use
   // clearPersistentCache() to wipe it.
+  // 一次量完（heap walk 持有 heap 鎖，別每個字面各走一趟）。
+  const bool heapTight = ESP.getFreeHeap() < MINI_RETAIN_MIN_FREE_HEAP ||
+                         heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT) < MINI_RETAIN_MIN_MAXBLOCK;
   for (uint8_t i = 0; i < MAX_STYLES; i++) {
     if (!styles_[i].present) continue;
-    freeStyleMiniData(styles_[i]);
+    resetStyleMiniData(styles_[i], heapTight);
     applyGlyphMissCallback(i);
   }
+}
+
+size_t SdCardFont::releaseMiniData() {
+  clearOverflow();
+  size_t bytes = 0;
+  for (uint8_t i = 0; i < MAX_STYLES; i++) {
+    PerStyle& s = styles_[i];
+    if (!s.present) continue;
+    bytes += static_cast<size_t>(s.miniBitmapCapacity) + static_cast<size_t>(s.miniGlyphCapacity) * sizeof(s.miniGlyphs[0]) +
+             static_cast<size_t>(s.miniIntervalCapacity) * sizeof(s.miniIntervals[0]);
+    freeStyleMiniData(s);
+    applyGlyphMissCallback(i);
+  }
+  return bytes;
+}
+
+size_t SdCardFont::retainedMiniBitmapCapacity() const {
+  size_t best = 0;
+  for (uint8_t i = 0; i < MAX_STYLES; i++) {
+    const PerStyle& s = styles_[i];
+    if (!s.present || !s.miniBitmap) continue;
+    if (s.miniBitmapCapacity > best) best = s.miniBitmapCapacity;
+  }
+  return best;
 }
 
 // --- Advance table ---
@@ -1246,6 +1374,16 @@ void SdCardFont::clearPersistentCache() {
     advanceTable_[i] = nullptr;
     advanceTableSize_[i] = 0;
   }
+}
+
+uint32_t SdCardFont::resetAdvanceTables() {
+  // v193：一次配滿 768 格之後就地重用；只把 size 歸零，下一章直接往同一塊寫。
+  uint32_t used = 0;
+  for (uint8_t i = 0; i < MAX_STYLES; i++) {
+    used += advanceTableSize_[i];
+    advanceTableSize_[i] = 0;
+  }
+  return used;
 }
 
 bool SdCardFont::advanceTableLookup(uint8_t styleIdx, uint32_t codepoint, uint16_t* outAdvance) const {
@@ -1271,18 +1409,32 @@ bool SdCardFont::advanceTableLookup(uint8_t styleIdx, uint32_t codepoint, uint16
 void SdCardFont::mergeIntoAdvanceTable(uint8_t styleIdx, const AdvanceEntry* sortedNew, uint32_t newCount) {
   if (newCount == 0) return;
   uint32_t oldSize = advanceTableSize_[styleIdx];
-  if (oldSize >= ADVANCE_CACHE_LIMIT) return;  // already full
+  if (oldSize >= ADVANCE_CACHE_LIMIT) {
+    // v192：表滿拒收整批新項（newCount>0 才走到這裡）；不是擠掉舊項。
+    ++advanceRejectCount_;
+    return;
+  }
 
-  // v55:一次配足終局大小,之後【原地】反向合併——不再「配新的→複製→刪舊的」。
+  // v55：一次配足終局大小，之後【原地】反向合併 —— 不再「配新的 → 複製 → 刪舊的」。
   //
-  // 為什麼:舊寫法每次成長都要一塊更大的連續空間,新配置永遠不可能重用剛釋放的舊洞,
-  // 於是一路往堆積前方走。閱讀穩態下主池最大塊只有 ~3.7KB,所以表長到 3.7KB 之後每次
-  // 成長都落進【備援池】,長到 768 筆上限後就永遠不再重配也不釋放 —— 一塊約 9KB 的長壽
-  // 殘骸卡在備援池中段,把最大連續塊從 115,616 砍到 42,312(v54 實機實測,整個 session
-  // 數值一字不變)。而每頁字圖需要 45,350 → 必然失敗 → 整頁字型降級 → 25 秒翻頁。
+  // 為什麼：舊寫法每次成長都要一塊更大的連續空間，新配置永遠不可能重用剛釋放的舊洞，
+  // 於是一路往堆積前方走。閱讀穩態下主池最大塊只有約 3.7KB，所以表長到 3.7KB 之後每次
+  // 成長都落進【備援池 p2】，長到 768 筆上限後就永遠不再重配也不釋放 —— 一塊約 9KB 的
+  // 長壽殘骸卡在 p2 中段，把最大連續塊【從 115,616 砍到 42,312】（v54 實機實測，
+  // 整個 session 數值一字不變；v58/v59/v60/v126 四份 POOL 傾印佐證修後為「兩顆約 6,400B
+  // 的表靠在池頭、無楔子」）。而每頁字圖需要 45,350 → 必然失敗 → 整頁字型降級 → 25 秒翻頁。
   //
-  // 一次配足 6,144B 峰值不變(那本來就是終局值,只是提前到位),但配置只發生一次、
-  // 位置固定,不再製造遞增的洞。
+  // 一次配足 6,144B 峰值不變（那本來就是終局值，只是提前到位），但配置只發生一次、
+  // 位置固定，不再製造遞增的洞。
+  //
+  // ⚠️⚠️ 【這兩半必須同時存在】只搬「原地反向合併」而不搬「一次配滿 ADVANCE_CACHE_LIMIT」，
+  //    就會在 mergedCap > oldSize 時寫出配置範圍外 —— 堆積越界寫，與殺掉第一台機器的
+  //    v131 同型（那次也是「配置大小」與「寫入大小」的隱含前提脫鉤）。
+  //
+  // 2026-08-25 實機 crash 佐證（v137，中文 EPUB 讀約 95 秒後）：
+  //   [SDCF] buildAdvanceTable: failed to allocate codepoint buffer (16384 bytes)  ×6
+  //   接著 std::__new_allocator<FootnoteEntry>::allocate -> operator new -> terminate -> abort()
+  // 最大連續塊已掉到 16KB 以下。上游用的正是被 v55 否決掉的成長搬遷寫法。
   if (!advanceTable_[styleIdx]) {
     advanceTable_[styleIdx] = new (std::nothrow) AdvanceEntry[ADVANCE_CACHE_LIMIT];
     if (!advanceTable_[styleIdx]) {
@@ -1297,11 +1449,12 @@ void SdCardFont::mergeIntoAdvanceTable(uint8_t styleIdx, const AdvanceEntry* sor
   uint32_t mergedCap = oldSize + newCount;
   if (mergedCap > ADVANCE_CACHE_LIMIT) mergedCap = ADVANCE_CACHE_LIMIT;
 
-  // 反向合併:兩個來源都已排序,從尾端往前寫進同一塊緩衝。寫入位置 k-1 恆 >= 讀取位置 i-1
-  // (k >= i 在整個迴圈都成立),所以不會覆寫還沒讀到的舊資料——原地合併成立的關鍵不變量。
+  // 反向合併：兩個來源都已排序，從尾端往前寫進同一塊緩衝。寫入位置 k-1 恆 >= 讀取位置 i-1
+  // （k >= i 在整個迴圈都成立），所以不會覆寫還沒讀到的舊資料 —— 原地合併成立的關鍵不變量。
   //
-  // 超過上限時【丟棄尾端】,與舊實作逐位元組等價(桌面對拍 7,000 組含重複碼位全同):
-  // 反向填充天然保留「最大的 mergedCap 個」,故要先空轉跳過最大的 drop 個。
+  // 超過上限時【丟棄尾端】，與上游的前向實作逐位元組等價（桌面對拍 7,000 組含重複碼位全同）：
+  // 前向填充從最小的開始、填滿即停 => 保留最小的 mergedCap 個；
+  // 反向填充天然保留「最大的 mergedCap 個」，故要先空轉跳過最大的 drop 個。
   uint32_t i = oldSize;
   uint32_t j = newCount;
   uint32_t k = mergedCap;
@@ -1309,8 +1462,10 @@ void SdCardFont::mergeIntoAdvanceTable(uint8_t styleIdx, const AdvanceEntry* sor
   while (drop > 0 && (i > 0 || j > 0)) {
     if (i > 0 && (j == 0 || tbl[i - 1].codepoint > sortedNew[j - 1].codepoint)) {
       --i;
+      ++advanceEvictCount_;  // v192：超量合併丟掉既有高碼位項；與表滿拒收（areject）不是同一條路
     } else {
       --j;
+      ++advanceRejectCount_;  // v192：超量合併丟掉新項目，同樣是新字進不去
     }
     --drop;
   }
@@ -1321,7 +1476,7 @@ void SdCardFont::mergeIntoAdvanceTable(uint8_t styleIdx, const AdvanceEntry* sor
       tbl[--k] = sortedNew[--j];
     }
   }
-  // 來源總數 < mergedCap 時 k>0,前 k 格是未使用的殘留,把有效資料往前搬齊。
+  // 來源總數 < mergedCap 時 k>0，前 k 格是未使用的殘留，把有效資料往前搬齊。
   if (k > 0) {
     for (uint32_t m = k; m < mergedCap; m++) tbl[m - k] = tbl[m];
     mergedCap -= k;
@@ -1338,7 +1493,10 @@ bool SdCardFont::hasAdvanceTable() const {
 
 uint16_t SdCardFont::getAdvance(uint32_t codepoint, uint8_t style) const {
   style &= (MAX_STYLES - 1);
-  if (!advanceTable_[style]) return 0;
+  if (!advanceTable_[style]) {
+    ++advanceMissCount_;  // v192：量測路徑沒命中才可能去打 SD
+    return 0;
+  }
   const AdvanceEntry* table = advanceTable_[style];
   const uint32_t size = advanceTableSize_[style];
   // Binary search sorted by codepoint
@@ -1354,6 +1512,7 @@ uint16_t SdCardFont::getAdvance(uint32_t codepoint, uint8_t style) const {
   if (lo < size && table[lo].codepoint == codepoint) {
     return table[lo].advanceX;
   }
+  ++advanceMissCount_;
   return 0;
 }
 
@@ -1369,7 +1528,15 @@ int SdCardFont::fetchAdvancesForCodepoints(uint32_t* codepoints, uint32_t cpCoun
     // Stop fetching once the cache is full — further inserts would be dropped
     // by the merge anyway. The renderer fast path tolerates missing entries
     // (returns 0); the slow path is still correct for those codepoints.
-    if (advanceTableSize_[si] >= ADVANCE_CACHE_LIMIT) continue;
+    if (advanceTableSize_[si] >= ADVANCE_CACHE_LIMIT) {
+      for (uint32_t i = 0; i < cpCount; i++) {
+        if (advanceTableLookup(si, codepoints[i], nullptr)) continue;
+        // v192：確定有新碼位要插、表滿插不進才算；整批早已在表裡不准假陽性。
+        ++advanceRejectCount_;
+        break;
+      }
+      continue;
+    }
 
     // For each codepoint in `codepoints`, skip those already cached, then
     // resolve to a glyph index. Build a parallel array sorted by glyph index
@@ -1445,6 +1612,9 @@ int SdCardFont::fetchAdvancesForCodepoints(uint32_t* codepoints, uint32_t cpCoun
       staged[fetched].codepoint = mappings[i].codepoint;
       staged[fetched].advanceX = tempGlyph.advanceX;
       fetched++;
+      // v191：打點必須在 seek+read 【之後】——打在迴圈開頭時，單一 glyph 的那次讀取（以及每批最後一個）
+      // 沒有後續 site 7 收尾，空窗會被下一個字寬探針收走而繼續誤報成 gapsite=2，儀器目的落空（複查抓到）。
+      if (buildProbeHook_) buildProbeHook_(7);
     }
     file.close();
 
@@ -1473,9 +1643,26 @@ int SdCardFont::buildAdvanceTableRange(Iter begin, Iter end, bool includeSpace, 
 
   // +2 reserved slots for space and hyphen injected after the main scan.
   static constexpr uint32_t MAX_UNIQUE_CODEPOINTS = 4096;
-  uint32_t* codepoints = new (std::nothrow) uint32_t[MAX_UNIQUE_CODEPOINTS + 2];
+  // v164：常駐化（v55「一次配滿、就地重用」手法）。原本每次呼叫都 new/delete 16KB —— 
+  // 實機 diag（v161/162 段 12 次 SDCFFAIL codepoint-buf）證明建置視窗裡這顆 16KB 連續塊
+  // 常常賭輸（最緊時 defMax 只剩 3,060），輸了整頁 advance 表就退回逐字 SD 慢路徑。
+  // 改成第一次成功配置後就留著（freeAll 釋放）：配置時機在開書早期、堆積寬鬆，
+  // 之後建置視窗裡不再有這顆反覆出現的峰值。UI 備援字型不做版面量測，永遠不配。
+  if (!cpScratch_) {
+    cpScratch_ = new (std::nothrow) uint32_t[MAX_UNIQUE_CODEPOINTS + 2];
+  }
+  uint32_t* codepoints = cpScratch_;
   if (!codepoints) {
-    LOG_ERR("SDCF", "buildAdvanceTable: failed to allocate codepoint buffer (%u bytes)", MAX_UNIQUE_CODEPOINTS * 4);
+    // v150：附上【失敗當下】的堆積數字。三次實機（v141/v148/v149）都出現「量測點顯示
+    // p2 有 26–80KB，274–450ms 後這個 16KB 配置卻失敗」—— 只有失敗現場的數字能分辨
+    // 「瞬時被吃光」與「這個配置根本用不到 p2」兩個假說。
+    {
+      const unsigned dm = heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT);
+      const unsigned df = heap_caps_get_free_size(MALLOC_CAP_DEFAULT);
+      LOG_ERR("SDCF", "buildAdvanceTable: failed to allocate codepoint buffer (%u bytes) maxAlloc=%u free=%u",
+              MAX_UNIQUE_CODEPOINTS * 4, dm, df);
+      noteAllocFail("codepoint-buf", MAX_UNIQUE_CODEPOINTS * 4, dm, df);
+    }
     return -1;
   }
   uint32_t cpCount = 0;
@@ -1499,8 +1686,7 @@ int SdCardFont::buildAdvanceTableRange(Iter begin, Iter end, bool includeSpace, 
   }
   std::sort(codepoints, codepoints + cpCount);
   int totalMissed = fetchAdvancesForCodepoints(codepoints, cpCount, styleMask);
-  delete[] codepoints;
-  stats_.prewarmTotalMs += millis() - startMs;  // v54:一次 render 會逐字重呼叫多次,改累加
+  stats_.prewarmTotalMs = millis() - startMs;
   return totalMissed;
 }
 
@@ -1508,7 +1694,7 @@ int SdCardFont::buildAdvanceTable(const char* utf8Text, uint8_t styleMask, const
   return buildAdvanceTableRange(&utf8Text, &utf8Text + 1, false, false, styleMask, extraText);
 }
 
-int SdCardFont::buildAdvanceTable(const std::vector<std::string>& words, bool includeHyphen, uint8_t styleMask,
+int SdCardFont::buildAdvanceTable(const std::deque<std::string>& words, bool includeHyphen, uint8_t styleMask,
                                   const char* extraText) {
   return buildAdvanceTableRange(words.begin(), words.end(), words.size() > 1, includeHyphen, styleMask, extraText);
 }
@@ -1589,22 +1775,26 @@ const EpdGlyph* SdCardFont::onGlyphMiss(void* ctx, uint32_t codepoint) {
   uint32_t slot = self->overflowNext_;
   bool wasAtCapacity = (self->overflowCount_ == OVERFLOW_CAPACITY);
 
-  // Read glyph metadata into temporary.
-  // v55:改用整段閱讀共用的檔柄——原本每次 miss 都重開檔,而 SdFat 的 exists() 本身
-  // 就是一次完整 open,兩次路徑線性掃描實測 12-18ms/字(是 25 秒翻頁的主成本)。
+  // Read glyph metadata into temporary
+  // v154：共用檔柄 —— miss 路徑原本每個字開一次檔（12–18ms），
+  // 降級階梯丟出來的字全走這裡，這是 27 秒頁的第二半。
+  if (advanceSdProbeDepth_ > 0) {
+    ++advanceSdReadCount_;  // v192：計嘗試次數，讀失敗也算；繪製 miss／overflow 命中不算
+  }
+
   if (!self->ensureFileOpen()) {
     LOG_ERR("SDCF", "Overflow: failed to open .cpfont");
     return nullptr;
   }
-  HalFile& file = self->sharedFile_;
 
   EpdGlyph tempGlyph = {};
   uint32_t glyphFileOff = s.glyphsFileOffset + static_cast<uint32_t>(globalIdx) * sizeof(EpdGlyph);
-  if (!file.seekSet(glyphFileOff)) {
+  if (!self->sharedFile_.seekSet(glyphFileOff)) {
     LOG_ERR("SDCF", "Overflow: failed to seek to glyph for U+%04X style %u", codepoint, styleIdx);
-    return nullptr;  // v55:共用檔柄,不在此關閉
+    
+    return nullptr;
   }
-  if (file.read(reinterpret_cast<uint8_t*>(&tempGlyph), sizeof(EpdGlyph)) != sizeof(EpdGlyph)) {
+  if (self->sharedFile_.read(reinterpret_cast<uint8_t*>(&tempGlyph), sizeof(EpdGlyph)) != sizeof(EpdGlyph)) {
     LOG_ERR("SDCF", "Overflow: failed to read glyph metadata for U+%04X style %u", codepoint, styleIdx);
     return nullptr;
   }
@@ -1612,17 +1802,27 @@ const EpdGlyph* SdCardFont::onGlyphMiss(void* ctx, uint32_t codepoint) {
   // Read bitmap data into temporary (if any)
   uint8_t* tempBitmap = nullptr;
   if (tempGlyph.dataLength > 0) {
+    // v167（crash_report166 定案）：事前檢查，不能只靠 nothrow —— libstdc++ 的 nothrow
+    // 版是「呼叫丟例外版再 catch」，堆積低到連 130B 的例外物件都配不出來時，
+    // __cxa_allocate_exception 直接 terminate（v93 實測教訓）。miss ring 在渲染最缺
+    // 記憶體的時刻每個字都要進來一次，這裡是全機最高頻的輪盤。512B 餘裕給例外機制。
+    if (heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT) <
+        static_cast<size_t>(tempGlyph.dataLength) + 512) {
+      LOG_ERR("SDCF", "Overflow: heap floor, skip U+%04X (%u bytes)", codepoint, tempGlyph.dataLength);
+      return nullptr;
+    }
     tempBitmap = new (std::nothrow) uint8_t[tempGlyph.dataLength];
     if (!tempBitmap) {
       LOG_ERR("SDCF", "Overflow: failed to allocate %u bytes for U+%04X bitmap", tempGlyph.dataLength, codepoint);
       return nullptr;
     }
-    if (!file.seekSet(s.bitmapFileOffset + tempGlyph.dataOffset)) {
+    if (!self->sharedFile_.seekSet(s.bitmapFileOffset + tempGlyph.dataOffset)) {
       LOG_ERR("SDCF", "Overflow: failed to seek to bitmap for U+%04X", codepoint);
       delete[] tempBitmap;
-      return nullptr;  // v55:共用檔柄,不在此關閉
+      
+      return nullptr;
     }
-    if (file.read(tempBitmap, tempGlyph.dataLength) != static_cast<int>(tempGlyph.dataLength)) {
+    if (self->sharedFile_.read(tempBitmap, tempGlyph.dataLength) != static_cast<int>(tempGlyph.dataLength)) {
       LOG_ERR("SDCF", "Overflow: failed to read bitmap for U+%04X", codepoint);
       delete[] tempBitmap;
       return nullptr;

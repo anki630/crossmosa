@@ -1,5 +1,7 @@
 #include "TxtReaderActivity.h"
 
+#include "ReaderFontSizes.h"
+
 #include <BidiUtils.h>
 #include <EpdFontData.h>  // v118:fp4::toPixel(單趟斷行的定點累加)
 #include <FontCacheManager.h>
@@ -528,12 +530,16 @@ void TxtReaderActivity::loop() {
 
   // v119:短按確認鍵開閱讀選單。這正是公開 repo 的 issue #1 —— 在此之前 txt 閱讀器
   // 從頭到尾沒有查詢過 Button::Confirm,使用者按下去不是「選單壞了」,是根本沒人在聽。
-  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm) || ReaderUtils::isTouchMenuGesture(mappedInput)) {
     openReaderMenu();
     return;
   }
 
-  const auto [prevTriggered, nextTriggered, fromTilt] = ReaderUtils::detectPageTurn(mappedInput);
+  // v161：觸控翻頁區（新樹能力，照 XtcReaderActivity 的 OR 合併形狀；左 1/3=上一頁、右 2/3=下一頁）
+  const auto touch = ReaderUtils::detectTouchPageTurn(renderer, mappedInput);
+  auto [prevTriggered, nextTriggered, fromTilt] = ReaderUtils::detectPageTurn(mappedInput);
+  prevTriggered = prevTriggered || touch.prev;
+  nextTriggered = nextTriggered || touch.next;
   if (!prevTriggered && !nextTriggered) {
     return;
   }
@@ -680,7 +686,7 @@ void TxtReaderActivity::renderStatusBar(const size_t offset) const {
   const size_t fileSize = txt->getFileSize();
   const float progress = fileSize != 0 ? static_cast<float>(static_cast<double>(offset) * 100.0 / fileSize) : 0.0f;
   std::string title;
-  if (SETTINGS.statusBarTitle != CrossPointSettings::STATUS_BAR_TITLE::HIDE_TITLE) {
+  if (SETTINGS.statusBarSpec().showsTitle()) {
     title = txt->getTitle();
   }
   // v122:txt 預設【不顯示頁數】—— 它是用平均頁長外推的估計值,對長文沒有意義;
@@ -819,7 +825,9 @@ void TxtReaderActivity::openReaderMenu() {
       fileSize != 0 ? static_cast<float>(static_cast<double>(pageStartOffset_) * 100.0 / fileSize) : 0.0f;
 
   startActivityForResult(
-      std::make_unique<TxtReaderMenuActivity>(renderer, mappedInput, txt->getTitle(), pct, SETTINGS.orientation),
+      std::make_unique<TxtReaderMenuActivity>(
+          renderer, mappedInput, txt->getTitle(), pct, SETTINGS.orientation,
+          readerFontPointSizes(&sdFontSystem.registry(), SETTINGS.sdFontFamilyName)),
       [this](const ActivityResult& result) {
         const auto& menu = std::get<MenuResult>(result.data);
 
@@ -831,15 +839,20 @@ void TxtReaderActivity::openReaderMenu() {
           ReaderUtils::applyOrientation(renderer, SETTINGS.orientation);
           geometryChanged = true;
         }
-        if (menu.fontSize != SETTINGS.fontSize) {
-          SETTINGS.fontSize = menu.fontSize;
+        bool fontChanged = false;
+        if (menu.fontSize != 0 && menu.fontSize != SETTINGS.fontPointSize) {
+          SETTINGS.fontPointSize = menu.fontSize;  // v161：點數制（upstream 1.5），非 enum 槽位
           SETTINGS.saveToFile();
+          fontChanged = true;
           geometryChanged = true;
         }
         if (geometryChanged) {
           // v121:比照 EpubReaderActivity::applyOrientation —— 改 renderer 方向與重算幾何
           // 必須持 RenderLock,否則 render task 可能正拿著舊幾何在畫。
           RenderLock lock(*this);
+          // v161：字級變更要實際重載 .cpfont（釋放並替換 render task 可能正在讀的
+          // SdCardFont，所以必須在鎖內 —— TextSettingsActivity::applySize 同紀律）
+          if (fontChanged) sdFontSystem.ensureLoaded(renderer);
           // v118 買到的東西在這裡兌現:位元組位移不是字型的函數,所以改字級或轉方向
           // 只要重算幾何、用同一個位移重排當前頁 —— 不必重建索引(舊版是 73 分鐘),
           // 閱讀位置也不會漂掉(舊版存頁碼,總頁數一變就錯位)。

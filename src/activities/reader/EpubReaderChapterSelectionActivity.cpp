@@ -31,7 +31,15 @@ void EpubReaderChapterSelectionActivity::loop() {
   const int pageItems = UITheme::getInstance().getNumberOfItemsPerPage(renderer, true, false, true, false);
   const int totalItems = getTotalItems();
 
-  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+  if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
+    ActivityResult result;
+    result.isCancelled = true;
+    setResult(std::move(result));
+    finish();
+    return;
+  }
+
+  auto selectChapter = [this] {
     const auto tocItem = epub->getTocItem(selectorIndex);
     if (tocItem.spineIndex == -1) {
       ActivityResult result;
@@ -42,11 +50,36 @@ void EpubReaderChapterSelectionActivity::loop() {
       setResult(ChapterResult{tocItem.spineIndex, tocItem.anchor});
       finish();
     }
-  } else if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
-    ActivityResult result;
-    result.isCancelled = true;
-    setResult(std::move(result));
-    finish();
+  };
+
+  auto metrics = UITheme::getInstance().getMetrics();
+  Rect screen = UITheme::getInstance().getScreenSafeArea(renderer, true, false);
+  const int contentTop = screen.y + metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
+  const int contentHeight = screen.height - contentTop - metrics.verticalSpacing;
+  switch (handleListTouch(selectorIndex, totalItems, contentTop, contentHeight, false)) {
+    case ListTouchResult::Activated:
+      selectChapter();
+      return;
+    case ListTouchResult::Consumed:
+      return;
+    case ListTouchResult::None:
+      break;
+  }
+
+  const auto swipe = mappedInput.wasSwipe();
+  if (swipe == MappedInputManager::SwipeDir::Up) {
+    selectorIndex = ButtonNavigator::nextPageIndexClamped(selectorIndex, totalItems, pageItems);
+    requestUpdate();
+    return;
+  }
+  if (swipe == MappedInputManager::SwipeDir::Down) {
+    selectorIndex = ButtonNavigator::previousPageIndexClamped(selectorIndex, totalItems, pageItems);
+    requestUpdate();
+    return;
+  }
+
+  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+    selectChapter();
   }
 
   buttonNavigator.onNextRelease([this, totalItems] {
@@ -76,16 +109,11 @@ void EpubReaderChapterSelectionActivity::render(RenderLock&&) {
   auto metrics = UITheme::getInstance().getMetrics();
   Rect screen = UITheme::getInstance().getScreenSafeArea(renderer, true, false);
 
-  // 頁碼副標(pageItems 與 loop :31 同式)
-  const std::string pageText = UITheme::pageIndicatorText(
-      selectorIndex, getTotalItems(), UITheme::getInstance().getNumberOfItemsPerPage(renderer, true, false, true, false));
   GUI.drawHeader(renderer, Rect{screen.x, screen.y + metrics.topPadding, screen.width, metrics.headerHeight},
-                 tr(STR_SELECT_CHAPTER), pageText.empty() ? nullptr : pageText.c_str());
+                 tr(STR_SELECT_CHAPTER));
 
   const int contentTop = screen.y + metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
-  // 相對 screen.y 計算,不重複扣除 safeArea 位移(原式在直向 180° 時 40px 被扣兩次 →
-  // 實際列數 12 但翻頁步距/頁碼算 13,頁碼與畫面不一致 + 長按每頁跳過 1 項;v38 複查抓到)
-  const int contentHeight = screen.height - (contentTop - screen.y) - metrics.verticalSpacing;
+  const int contentHeight = screen.height - contentTop - metrics.verticalSpacing;
 
   const int totalItems = getTotalItems();
   GUI.drawList(renderer, Rect{screen.x, contentTop, screen.width, contentHeight}, totalItems, selectorIndex,

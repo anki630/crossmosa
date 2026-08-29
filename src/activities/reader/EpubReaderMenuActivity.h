@@ -15,15 +15,15 @@ class EpubReaderMenuActivity final : public Activity {
   enum class MenuAction {
     SELECT_CHAPTER,
     FOOTNOTES,
+    TEXT_SETTINGS,
     GO_TO_PERCENT,
     AUTO_PAGE_TURN,
     ROTATE_SCREEN,
     BOOKMARKS,
     TOGGLE_BOOKMARK,
-    FONT_SIZE,
-    LINE_SPACING,
-    BOLD_TEXT,
+    SCREENSHOT,
     DISPLAY_QR,
+    GO_HOME,
     DELETE_CACHE
   };
 
@@ -35,6 +35,7 @@ class EpubReaderMenuActivity final : public Activity {
   void onExit() override;
   void loop() override;
   void render(RenderLock&&) override;
+  bool handleHomeGesture() override;
 
  private:
   struct MenuItem {
@@ -43,6 +44,7 @@ class EpubReaderMenuActivity final : public Activity {
   };
 
   static std::vector<MenuItem> buildMenuItems(bool hasFootnotes, bool hasBookmarks);
+  void closeCancelled();
 
   // Fixed menu layout
   const std::vector<MenuItem> menuItems;
@@ -51,18 +53,16 @@ class EpubReaderMenuActivity final : public Activity {
 
   ButtonNavigator buttonNavigator;
   OptionPopup optionPopup;
+  // True while the button press that closed the popup is still held; its release
+  // must not fall through to the menu's own Back/Confirm handlers.
+  bool popupClosing = false;
   std::string title = "Reader Menu";
   uint8_t pendingOrientation = 0;
   uint8_t selectedPageTurnOption = 0;
-  uint8_t pendingFontSize = 0;
-  uint8_t pendingLineSpacing = 0;
-  uint8_t pendingBoldBody = 0;
-  const std::vector<StrId> orientationLabels = {StrId::STR_PORTRAIT, StrId::STR_LANDSCAPE_CW,
-                                                StrId::STR_ORIENTATION_INVERTED, StrId::STR_LANDSCAPE_CCW};
-  const std::vector<StrId> fontSizeLabels = {StrId::STR_SMALL, StrId::STR_MEDIUM, StrId::STR_LARGE,
-                                             StrId::STR_X_LARGE};
-  const std::vector<StrId> lineSpacingLabels = {StrId::STR_TIGHT, StrId::STR_NORMAL, StrId::STR_WIDE};
-  const std::vector<StrId> boldTextLabels = {StrId::STR_STATE_OFF, StrId::STR_STATE_ON};
+  const std::vector<StrId> clearCacheLabels = {StrId::STR_CLEAR_CACHE_KEEP_PROGRESS,
+                                               StrId::STR_CLEAR_CACHE_RESET_PROGRESS};
+  const std::vector<StrId> orientationLabels = {StrId::STR_PORTRAIT, StrId::STR_LANDSCAPE_CW, StrId::STR_INVERTED,
+                                                StrId::STR_LANDSCAPE_CCW};
   const std::vector<const char*> pageTurnLabels = {I18N.get(StrId::STR_STATE_OFF), "1", "3", "6", "12"};
   int currentPage = 0;
   int totalPages = 0;

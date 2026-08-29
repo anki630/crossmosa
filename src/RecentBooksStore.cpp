@@ -5,6 +5,7 @@
 #include <FsHelpers.h>
 #include <HalStorage.h>
 #include <Logging.h>
+#include <Xtc.h>
 
 #include <algorithm>
 #include <iterator>
@@ -16,8 +17,8 @@ void RecentBooksStore::toJson(JsonDocument& doc) const {
     obj["path"] = book.path;
     obj["title"] = book.title;
     obj["author"] = book.author;
-    obj["coverBmpPath"] = book.coverBmpPath;
     obj["progress"] = book.progressPercent;
+    obj["coverBmpPath"] = book.coverBmpPath;
   }
 }
 
@@ -25,29 +26,34 @@ bool RecentBooksStore::fromJson(JsonVariantConst doc) {
   // Tolerate a missing/invalid 'books' key (treat as empty list); only a
   // JSON parse error is fatal. A null JsonArray iterates zero times.
   recentBooks.clear();
+  bool healed = false;
   JsonArrayConst arr = doc["books"].as<JsonArrayConst>();
   recentBooks.reserve(std::min(arr.size(), static_cast<size_t>(MAX_RECENT_BOOKS)));
   for (JsonObjectConst obj : arr) {
     if (getCount() >= MAX_RECENT_BOOKS) break;
     RecentBook book;
     book.path = obj["path"] | "";
-    // XTC support was removed; drop stale entries so the list heals itself on first load
-    if (FsHelpers::hasXtcExtension(book.path)) continue;
     book.title = obj["title"] | "";
     book.author = obj["author"] | "";
-    book.coverBmpPath = obj["coverBmpPath"] | "";
-    // v36: heal cover paths persisted before the /.crosspoint -> /.crossmosa
-    // migration (stored verbatim; the thumb file itself moved with the
-    // rename). Same self-heal-on-load pattern as the .xtc drop above. No-op
-    // when still running on the legacy dir after a failed migration.
-    constexpr const char* LEGACY_PREFIX = "/.crosspoint/";
-    constexpr size_t LEGACY_PREFIX_LEN = 13;
-    if (book.coverBmpPath.rfind(LEGACY_PREFIX, 0) == 0) {
-      book.coverBmpPath = std::string(DataDir::path()) + "/" + book.coverBmpPath.substr(LEGACY_PREFIX_LEN);
-    }
     book.progressPercent = obj["progress"] | 0;
+    book.coverBmpPath = obj["coverBmpPath"] | "";
+    // v36/v186: heal cover paths persisted before the /.crosspoint -> /.crossmosa
+    // migration (stored verbatim; the thumb file itself moved with the rename).
+    {
+      constexpr const char* LEGACY_PREFIX = "/.crosspoint/";
+      constexpr size_t LEGACY_PREFIX_LEN = 13;
+      if (book.coverBmpPath.rfind(LEGACY_PREFIX, 0) == 0) {
+        std::string fixed = std::string(DataDir::path()) + "/" + book.coverBmpPath.substr(LEGACY_PREFIX_LEN);
+        if (fixed != book.coverBmpPath) {  // 仍在舊目錄上跑（遷移失敗）時字串相同，別每次開機重寫
+          book.coverBmpPath = std::move(fixed);
+          healed = true;
+        }
+      }
+    }
     recentBooks.push_back(book);
   }
+
+  if (healed) requestResave();  // 把治好的路徑寫回去，別每次開機都靠這段自癒
 
   LOG_DBG("RBS", "Recent books loaded from file (%d entries)", getCount());
   return true;
@@ -58,19 +64,15 @@ void RecentBooksStore::addBook(const std::string& path, const std::string& title
   // Drop stale entries first so a new add can't evict a valid book in their stead.
   pruneMissing();
 
-  // Remove existing entry if present. Progress belongs to the book, not the entry:
-  // carry it across the move-to-front reinsert, or every reopen would zero the stored
-  // percent (and any exit path that skips setProgress would then lose it for good).
-  uint8_t previousProgress = 0;
+  // Remove existing entry if present
   auto it =
       std::find_if(recentBooks.begin(), recentBooks.end(), [&](const RecentBook& book) { return book.path == path; });
   if (it != recentBooks.end()) {
-    previousProgress = it->progressPercent;
     recentBooks.erase(it);
   }
 
   // Add to front
-  recentBooks.insert(recentBooks.begin(), {path, title, author, coverBmpPath, previousProgress});
+  recentBooks.insert(recentBooks.begin(), {path, title, author, coverBmpPath});
 
   // Trim to max size
   if (recentBooks.size() > MAX_RECENT_BOOKS) {
@@ -94,8 +96,8 @@ void RecentBooksStore::updateBook(const std::string& path, const std::string& ti
 }
 
 void RecentBooksStore::setProgress(const std::string& path, const uint8_t progressPercent) {
-  auto it =
-      std::find_if(recentBooks.begin(), recentBooks.end(), [&](const RecentBook& book) { return book.path == path; });
+  auto it = std::find_if(recentBooks.begin(), recentBooks.end(),
+                         [&](const RecentBook& b) { return b.path == path; });
   if (it != recentBooks.end() && it->progressPercent != progressPercent) {
     it->progressPercent = progressPercent;
     saveToFile();
@@ -153,6 +155,12 @@ RecentBook RecentBooksStore::getDataFromBook(std::string path) const {
     Epub epub(path, DataDir::path());
     epub.load(false, true);
     return RecentBook{path, epub.getTitle(), epub.getAuthor(), epub.getThumbBmpPath()};
+  } else if (FsHelpers::hasXtcExtension(lastBookFileName)) {
+    // Handle XTC file
+    Xtc xtc(path, DataDir::path());
+    if (xtc.load()) {
+      return RecentBook{path, xtc.getTitle(), xtc.getAuthor(), xtc.getThumbBmpPath()};
+    }
   } else if (FsHelpers::hasTxtExtension(lastBookFileName) || FsHelpers::hasMarkdownExtension(lastBookFileName)) {
     return RecentBook{path, lastBookFileName, "", ""};
   }

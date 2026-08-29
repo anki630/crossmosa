@@ -5,6 +5,8 @@
 #include <JPEGDEC.h>
 #include <Logging.h>
 #include <Memory.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 
 #include <cstdio>
 #include <cstring>
@@ -14,6 +16,10 @@
 // ============================================================================
 // IMAGE PROCESSING OPTIONS - Toggle these to test different configurations
 // ============================================================================
+// v174：失敗原因鏡像（見 .h）。
+static char sJpgLastErr[64] = "";
+const char* JpegToBmpConverter::lastError() { return sJpgLastErr; }
+
 constexpr bool USE_8BIT_OUTPUT = false;  // true: 8-bit grayscale (no quantization), false: 2-bit (4 levels)
 // Dithering method selection (only one should be true, or all false for simple quantization):
 constexpr bool USE_ATKINSON = true;          // Atkinson dithering (cleaner than F-S, less error diffusion)
@@ -169,11 +175,22 @@ constexpr uint32_t FP_ONE = 1UL << 16;
 // Static file pointer for JPEGDEC open callback.
 // Safe in single-threaded embedded context; never accessed concurrently.
 static HalFile* s_jpegFile = nullptr;
+static uint8_t s_jpegIoSinceYield = 0;
+
+static void yieldToIdle() { vTaskDelay(1); }
+
+static void yieldDuringJpegIo() {
+  if (++s_jpegIoSinceYield < 4) return;
+  s_jpegIoSinceYield = 0;
+  yieldToIdle();
+}
 
 void* bmpJpegOpen(const char* /*filename*/, int32_t* size) {
   if (!s_jpegFile || !*s_jpegFile) return nullptr;
+  s_jpegIoSinceYield = 0;
   s_jpegFile->seek(0);
   *size = static_cast<int32_t>(s_jpegFile->size());
+  yieldDuringJpegIo();
   return s_jpegFile;
 }
 
@@ -187,6 +204,7 @@ int32_t bmpJpegRead(JPEGFILE* pFile, uint8_t* pBuf, int32_t len) {
   int32_t n = f->read(pBuf, len);
   if (n < 0) n = 0;
   pFile->iPos += n;
+  yieldDuringJpegIo();
   return n;
 }
 
@@ -194,6 +212,7 @@ int32_t bmpJpegSeek(JPEGFILE* pFile, int32_t pos) {
   auto* f = reinterpret_cast<HalFile*>(pFile->fHandle);
   if (!f || !f->seek(pos)) return -1;
   pFile->iPos = pos;
+  yieldDuringJpegIo();
   return pos;
 }
 
@@ -236,8 +255,22 @@ struct BmpConvertCtx {
   std::unique_ptr<FloydSteinbergDitherer> fsDitherer;
   std::unique_ptr<Atkinson1BitDitherer> atkinson1BitDitherer;
 
+  uint8_t rowsSinceYield;
+  uint8_t blocksSinceYield;
   bool error;
 };
+
+static void yieldDuringDecode(BmpConvertCtx* ctx) {
+  if (++ctx->rowsSinceYield < 8) return;
+  ctx->rowsSinceYield = 0;
+  yieldToIdle();
+}
+
+static void yieldDuringDecodeBlock(BmpConvertCtx* ctx) {
+  if (++ctx->blocksSinceYield < 16) return;
+  ctx->blocksSinceYield = 0;
+  yieldToIdle();
+}
 
 // Write a fully-assembled output row (grayscale bytes, length outWidth) to BMP
 static void writeOutputRow(BmpConvertCtx* ctx, const uint8_t* srcRow, int outY) {
@@ -274,6 +307,7 @@ static void writeOutputRow(BmpConvertCtx* ctx, const uint8_t* srcRow, int outY) 
   }
 
   ctx->bmpOut->write(ctx->bmpRow.get(), ctx->bytesPerRow);
+  yieldDuringDecode(ctx);
 }
 
 // Matches the progressive-JPEG smoothing used by JpegToFramebufferConverter, but stays
@@ -396,6 +430,7 @@ static void flushScaledRow(BmpConvertCtx* ctx) {
 
   ctx->bmpOut->write(ctx->bmpRow.get(), ctx->bytesPerRow);
   ctx->currentOutY++;
+  yieldDuringDecode(ctx);
 }
 
 // JPEGDEC draw callback — receives one MCU-width × MCU-height block at a time,
@@ -405,6 +440,7 @@ static void flushScaledRow(BmpConvertCtx* ctx) {
 int bmpDrawCallback(JPEGDRAW* pDraw) {
   auto* ctx = reinterpret_cast<BmpConvertCtx*>(pDraw->pUser);
   if (!ctx || ctx->error) return 0;
+  yieldDuringDecodeBlock(ctx);
 
   const uint8_t* pixels = reinterpret_cast<uint8_t*>(pDraw->pPixels);
   const int stride = pDraw->iWidth;
@@ -481,10 +517,12 @@ int bmpDrawCallback(JPEGDRAW* pDraw) {
 // Internal implementation with configurable target size and bit depth
 bool JpegToBmpConverter::jpegFileToBmpStreamInternal(HalFile& jpegFile, Print& bmpOut, int targetWidth,
                                                      int targetHeight, bool oneBit, bool crop) {
+  sJpgLastErr[0] = '\0';
   LOG_DBG("JPG", "Converting JPEG to %s BMP (target: %dx%d)", oneBit ? "1-bit" : "2-bit", targetWidth, targetHeight);
 
   if (ESP.getFreeHeap() < MIN_FREE_HEAP) {
     LOG_ERR("JPG", "Not enough heap for JPEG decoder (%u free, need %u)", ESP.getFreeHeap(), MIN_FREE_HEAP);
+    snprintf(sJpgLastErr, sizeof(sJpgLastErr), "heap %u<%u", static_cast<unsigned>(ESP.getFreeHeap()), static_cast<unsigned>(MIN_FREE_HEAP));
     return false;
   }
 
@@ -493,12 +531,14 @@ bool JpegToBmpConverter::jpegFileToBmpStreamInternal(HalFile& jpegFile, Print& b
   const auto jpeg = makeUniqueNoThrow<JPEGDEC>();
   if (!jpeg) {
     LOG_ERR("JPG", "OOM: JPEG decoder");
+    snprintf(sJpgLastErr, sizeof(sJpgLastErr), "oom:%s", "JPEG decoder");
     return false;
   }
 
   int rc = jpeg->open("", bmpJpegOpen, bmpJpegClose, bmpJpegRead, bmpJpegSeek, bmpDrawCallback);
   if (rc != 1) {
     LOG_ERR("JPG", "JPEG open failed (err=%d)", jpeg->getLastError());
+    snprintf(sJpgLastErr, sizeof(sJpgLastErr), "open err=%d", jpeg->getLastError());
     return false;
   }
 
@@ -599,6 +639,8 @@ bool JpegToBmpConverter::jpegFileToBmpStreamInternal(HalFile& jpegFile, Print& b
   ctx.smoothScaleY_fp = interpolationStep(ctx.srcHeight, outHeight);
   ctx.smoothNextOutY = 0;
   ctx.smoothPrevY = -1;
+  ctx.rowsSinceYield = 0;
+  ctx.blocksSinceYield = 0;
   ctx.error = false;
 
   // MCU row buffer: MAX_MCU_HEIGHT rows × decoded srcWidth columns of grayscale
@@ -612,6 +654,7 @@ bool JpegToBmpConverter::jpegFileToBmpStreamInternal(HalFile& jpegFile, Print& b
   ctx.bmpRow = makeUniqueNoThrow<uint8_t[]>(bytesPerRow);
   if (!ctx.bmpRow) {
     LOG_ERR("JPG", "OOM: BMP row buffer");
+    snprintf(sJpgLastErr, sizeof(sJpgLastErr), "oom:%s", "BMP row buffer");
     return false;
   }
 
@@ -621,6 +664,7 @@ bool JpegToBmpConverter::jpegFileToBmpStreamInternal(HalFile& jpegFile, Print& b
     ctx.smoothRows = makeUniqueNoThrow<uint8_t[]>(smoothRowsBytes);
     if (!ctx.smoothRows) {
       LOG_ERR("JPG", "OOM: progressive smoothing buffers");
+    snprintf(sJpgLastErr, sizeof(sJpgLastErr), "oom:%s", "progressive smoothing buffers");
       return false;
     }
     ctx.smoothPrevRow = ctx.smoothRows.get();
@@ -633,6 +677,7 @@ bool JpegToBmpConverter::jpegFileToBmpStreamInternal(HalFile& jpegFile, Print& b
     ctx.rowCount = makeUniqueNoThrow<uint32_t[]>(outWidth);
     if (!ctx.rowAccum || !ctx.rowCount) {
       LOG_ERR("JPG", "OOM: scaling buffers");
+    snprintf(sJpgLastErr, sizeof(sJpgLastErr), "oom:%s", "scaling buffers");
       return false;
     }
     ctx.nextOutY_srcStart = scaleY_fp;
@@ -640,22 +685,29 @@ bool JpegToBmpConverter::jpegFileToBmpStreamInternal(HalFile& jpegFile, Print& b
 
   if (oneBit) {
     ctx.atkinson1BitDitherer = makeUniqueNoThrow<Atkinson1BitDitherer>(outWidth);
+    // v194：物件配到但 error row 沒配到 → 當失敗、退回無抖動量化，封面仍畫得出來。
     if (!ctx.atkinson1BitDitherer || !ctx.atkinson1BitDitherer->ok()) {
-      LOG_ERR("JPG", "OOM: Atkinson1BitDitherer");
-      return false;
+      const size_t bytes =
+          sizeof(Atkinson1BitDitherer) + (static_cast<size_t>(outWidth) + 4) * sizeof(int16_t) * 3;
+      noteDitherAllocFail("Atkinson1BitDitherer:JpegToBmp", bytes);
+      ctx.atkinson1BitDitherer.reset();
     }
   } else if (!USE_8BIT_OUTPUT) {
     if (USE_ATKINSON) {
       ctx.atkinsonDitherer = makeUniqueNoThrow<AtkinsonDitherer>(outWidth);
       if (!ctx.atkinsonDitherer || !ctx.atkinsonDitherer->ok()) {
-        LOG_ERR("JPG", "OOM: AtkinsonDitherer");
-        return false;
+        const size_t bytes =
+            sizeof(AtkinsonDitherer) + (static_cast<size_t>(outWidth) + 4) * sizeof(int16_t) * 3;
+        noteDitherAllocFail("AtkinsonDitherer:JpegToBmp", bytes);
+        ctx.atkinsonDitherer.reset();
       }
     } else if (USE_FLOYD_STEINBERG) {
       ctx.fsDitherer = makeUniqueNoThrow<FloydSteinbergDitherer>(outWidth);
       if (!ctx.fsDitherer || !ctx.fsDitherer->ok()) {
-        LOG_ERR("JPG", "OOM: FloydSteinbergDitherer");
-        return false;
+        const size_t bytes =
+            sizeof(FloydSteinbergDitherer) + (static_cast<size_t>(outWidth) + 2) * sizeof(int16_t) * 2;
+        noteDitherAllocFail("FloydSteinbergDitherer:JpegToBmp", bytes);
+        ctx.fsDitherer.reset();
       }
     }
   }
@@ -671,6 +723,7 @@ bool JpegToBmpConverter::jpegFileToBmpStreamInternal(HalFile& jpegFile, Print& b
 
   if (rc != 1 || ctx.error) {
     LOG_ERR("JPG", "JPEG decode failed (rc=%d, err=%d)", rc, jpeg->getLastError());
+    snprintf(sJpgLastErr, sizeof(sJpgLastErr), "decode rc=%d err=%d %dx%d", rc, jpeg->getLastError(), srcWidth, srcHeight);
     return false;
   }
 

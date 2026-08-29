@@ -37,6 +37,9 @@ class Epub {
   void discoverCssFilesFromZip();
   void parseCssFiles() const;
 
+  // v174：generateThumbBmp 最近一次失敗的出口（靜態字串），給主畫面 THUMBFAIL 診斷行用。
+  mutable const char* thumbFailReason_ = "";
+
  public:
   explicit Epub(std::string filepath, const std::string& cacheDir) : filepath(std::move(filepath)) {
     // create a cache key based on the filepath
@@ -57,9 +60,13 @@ class Epub {
   std::string getThumbBmpPath() const;
   std::string getThumbBmpPath(int height) const;
   bool generateThumbBmp(int height) const;
+  const char* thumbFailReason() const { return thumbFailReason_; }
   uint8_t* readItemContentsToBytes(const std::string& itemHref, size_t* size = nullptr,
                                    bool trailingNullByte = false) const;
-  bool readItemContentsToStream(const std::string& itemHref, Print& out, size_t chunkSize) const;
+  bool readItemContentsToStream(const std::string& itemHref, Print& out, size_t chunkSize,
+                                bool allowEarlyStop = false) const;
+  // Extract an item to a file on SD. On failure the partial file is removed.
+  bool extractItemToFile(const std::string& itemHref, const std::string& destPath) const;
   bool getItemSize(const std::string& itemHref, size_t* size) const;
   BookMetadataCache::SpineEntry getSpineItem(int spineIndex) const;
   BookMetadataCache::TocEntry getTocItem(int tocIndex) const;

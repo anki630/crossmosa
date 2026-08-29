@@ -58,6 +58,10 @@ class HalGPIO {
   // Inline device type helpers for cleaner downstream checks
   inline bool deviceIsX3() const { return _deviceType == DeviceType::X3; }
   inline bool deviceIsX4() const { return _deviceType == DeviceType::X4; }
+  // v186: which X3 panel controller begin() resolved (UC8279d = newer batch;
+  // false = UC8253 or not an X3). Diagnostics + per-panel policy only.
+  bool displayIsUc8279() const;
+  bool isXteinkDevice() const;
 
   // Start button GPIO and setup SPI for screen and SD card
   void begin();
@@ -69,8 +73,27 @@ class HalGPIO {
   bool wasAnyPressed() const;
   bool wasReleased(uint8_t buttonIndex) const;
   bool wasAnyReleased() const;
+  // v189：【原始】按鍵電平——直接採樣 ADC／power 腳位，不碰去彈跳與邊緣狀態（那些只在 update()
+  // 改）。給持 RenderLock 的背景建置在 parseStep 之間問「使用者是不是正按著什麼」用：
+  // 主任務的 update() 在 tick 期間跑不到，這是唯一能在按下去的那一步就把鎖還出去的辦法。
+  // 非 const：InputManager::getState() 會順路跑 touch 狀態機（X3 無 touch，直接回 0）。
+  bool anyButtonDownRaw();
+  // v189：「使用者的手還在按鍵上」——原始電平為真，【或】去彈跳尚未收斂（放開之後 5ms 內
+  // currentState 仍是按著的）。複查抓到：只看原始電平，放開的那一瞬間電平已經是 0，tick 會照跑
+  // 整頁，release 邊緣要等它跑完才被 update() 認列——放開觸發的動作多等一個 tick、而且
+  // getHeldTime() 被灌水（短按讀成長按＝跳章）。isDebouncePending ＋ 已認列的按著狀態補上這一段。
+  bool inputActive();
   unsigned long getHeldTime() const;
   unsigned long getPowerButtonHeldTime() const;
+  bool hasTouch() const;
+  bool wasTouchTap(float& nx, float& ny) const;
+  bool wasTouchDown(float& nx, float& ny) const;
+  bool isTouchTapCandidate(float& nx, float& ny, unsigned long& heldMs) const;
+  bool isTouchHeldAt(float& nx, float& ny) const;
+  unsigned long lastTouchHeldMs() const;
+  bool wasSwipe(float& nxStart, float& nyStart, float& nxEnd, float& nyEnd) const;
+  bool wasTouchActivity() const;
+  void setSharedConfirmPowerShortPressEmitsPower(bool enabled);
 
   // Verify power button was held long enough after wakeup.
   // Returns true if verification succeeded, false if device should return to sleep.
@@ -86,10 +109,6 @@ class HalGPIO {
   enum class WakeupReason { PowerButton, AfterFlash, AfterUSBPower, Other };
 
   WakeupReason getWakeupReason() const;
-
-  // Route for synthetic button sources (the BLE remote). A thin passthrough so
-  // app code stays on the HAL instead of reaching into the SDK's InputManager.
-  static void setButtonHook(InputManager::ButtonHook hook) { InputManager::setButtonHook(hook); }
 
   // Button indices
   static constexpr uint8_t BTN_BACK = 0;

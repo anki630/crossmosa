@@ -34,6 +34,8 @@ struct JpegContext {
   int dstWidth{0};
   int dstHeight{0};
 
+  uint32_t lastYieldMs{0};  // yieldDuringDecode() 的節流狀態
+
   // Fine scale in 16.16 fixed-point (ESP32-C3 has no FPU).
   // X and Y axes use separate scale factors: the aspect ratio of the output (dstWidth/dstHeight)
   // may differ from the source (srcWidth/srcHeight) due to integer rounding of displayHeight.
@@ -51,8 +53,14 @@ struct JpegContext {
 // File I/O callbacks use pFile->fHandle to access the HalFile*,
 // avoiding the need for global file state.
 void* jpegOpen(const char* filename, int32_t* size) {
-  HalFile* f = new HalFile();
-  if (!Storage.openFileForRead("JPG", std::string(filename), *f)) {
+  // v194：throwing new HalFile 在 -fno-exceptions 下 OOM 會 abort。失敗不呼叫 close()。
+  HalFile* f = new (std::nothrow) HalFile();
+  if (!f) {
+    HalStorage::noteAllocFail("HalFile:jpegOpen", sizeof(HalFile));
+    return nullptr;
+  }
+  // v194：HalStorage 已有 const char* 多載。std::string(filename) 在 nothrow 守衛之後仍會 abort。
+  if (!Storage.openFileForRead("JPG", filename, *f)) {
     delete f;
     return nullptr;
   }
@@ -121,6 +129,8 @@ constexpr int32_t FP_MASK = FP_ONE - 1;
 int jpegDrawCallback(JPEGDRAW* pDraw) {
   JpegContext* ctx = reinterpret_cast<JpegContext*>(pDraw->pUser);
   if (!ctx || !ctx->config || !ctx->renderer) return 0;
+
+  ImageToFramebufferDecoder::yieldDuringDecode(ctx->lastYieldMs);
 
   // In EIGHT_BIT_GRAYSCALE mode, pPixels contains 8-bit grayscale values
   // Buffer is densely packed: stride = pDraw->iWidth, valid columns = pDraw->iWidthUsed
@@ -360,16 +370,18 @@ bool JpegToFramebufferConverter::getDimensionsStatic(const std::string& imagePat
   // from the layout/build path so an image is never dropped from a chapter's
   // cached layout under memory pressure (see the PNG counterpart for the full
   // rationale). The pixel decode still uses JPEGDEC and its own heap check.
+  //
+  // ⚠️ v145 移植註記：這裡原本帶著 v125 的 noteFailure() 儀器，而那一套（FAIL_OPEN_DIM /
+  //    FAIL_NO_SOI / FAIL_BAD_DIM / FAIL_NO_SOF）還沒搬回新樹，所以先拿掉。
+  //    帳本已記：v125 的圖片失敗儀器要補 —— 沒有它，這幾個出口在這台機器上等於沒有紀錄。
   HalFile file;
   if (!Storage.openFileForRead("JPG", imagePath, file)) {
-    noteFailure(FAIL_OPEN_DIM, 0);
     LOG_ERR("JPG", "Failed to open JPEG for dimensions: %s", imagePath.c_str());
     return false;
   }
 
   uint8_t soi[2];
   if (file.read(soi, 2) != 2 || soi[0] != 0xFF || soi[1] != 0xD8) {  // Start Of Image
-    noteFailure(FAIL_NO_SOI, 0);
     LOG_ERR("JPG", "Not a valid JPEG (no SOI): %s", imagePath.c_str());
     return false;
   }
@@ -404,14 +416,10 @@ bool JpegToFramebufferConverter::getDimensionsStatic(const std::string& imagePat
       if (file.read(sof, 5) != 5) break;
       const uint32_t height = (static_cast<uint32_t>(sof[1]) << 8) | sof[2];
       const uint32_t width = (static_cast<uint32_t>(sof[3]) << 8) | sof[4];
-      if (width == 0 || height == 0 ||
-          static_cast<uint64_t>(width) * height > static_cast<uint64_t>(MAX_SOURCE_PIXELS)) {
-        noteFailure(FAIL_BAD_DIM, static_cast<int>(width));
+      if (!validateAndStoreDimensions(width, height, out, "JPEG", /*applyPixelCap=*/false)) {
         LOG_ERR("JPG", "Invalid JPEG dimensions %ux%u: %s", width, height, imagePath.c_str());
         return false;
       }
-      out.width = static_cast<int16_t>(width);
-      out.height = static_cast<int16_t>(height);
       LOG_DBG("JPG", "Image dimensions: %dx%d", out.width, out.height);
       return true;
     }
@@ -420,7 +428,6 @@ bool JpegToFramebufferConverter::getDimensionsStatic(const std::string& imagePat
     if (!file.seek(file.position() + static_cast<size_t>(segLen - 2))) break;
   }
 
-  noteFailure(FAIL_NO_SOF, 0);
   LOG_ERR("JPG", "No SOF marker found: %s", imagePath.c_str());
   return false;
 }
@@ -431,15 +438,15 @@ bool JpegToFramebufferConverter::decodeToFramebuffer(const std::string& imagePat
 
   size_t freeHeap = ESP.getFreeHeap();
   if (freeHeap < MIN_FREE_HEAP_FOR_JPEG) {
-    noteFailure(FAIL_LOW_HEAP, static_cast<int>(freeHeap));
     LOG_ERR("JPG", "Not enough heap for JPEG decoder (%u free, need %u)", freeHeap, MIN_FREE_HEAP_FOR_JPEG);
+    setLastError(true, "jpg-heap %u<%u", static_cast<unsigned>(freeHeap), static_cast<unsigned>(MIN_FREE_HEAP_FOR_JPEG));
     return false;
   }
 
   std::unique_ptr<JPEGDEC> jpeg(new (std::nothrow) JPEGDEC());
   if (!jpeg) {
-    noteFailure(FAIL_ALLOC_DEC, 0);
     LOG_ERR("JPG", "Failed to allocate JPEG decoder");
+    setLastError(true, "jpg-alloc-decoder");
     return false;
   }
 
@@ -452,22 +459,15 @@ bool JpegToFramebufferConverter::decodeToFramebuffer(const std::string& imagePat
   int rc = jpeg->open(imagePath.c_str(), jpegOpen, jpegClose, jpegRead, jpegSeek, jpegDrawCallback);
   const ScopedCleanup cleanup{[&jpeg]() { jpeg->close(); }};
   if (rc != 1) {
-    noteFailure(FAIL_OPEN_DEC, jpeg->getLastError());
     LOG_ERR("JPG", "Failed to open JPEG (err=%d): %s", jpeg->getLastError(), imagePath.c_str());
+    setLastError(false, "jpg-open err=%d", jpeg->getLastError());
     return false;
   }
 
-  int srcWidth = jpeg->getWidth();
-  int srcHeight = jpeg->getHeight();
-
-  if (srcWidth <= 0 || srcHeight <= 0) {
-    LOG_ERR("JPG", "Invalid JPEG dimensions: %dx%d", srcWidth, srcHeight);
-    return false;
-  }
-
-  if (!validateImageDimensions(srcWidth, srcHeight, "JPEG")) {
-    return false;
-  }
+  ImageDimensions sourceDimensions;
+  if (!validateAndStoreDimensions(jpeg->getWidth(), jpeg->getHeight(), sourceDimensions, "JPEG")) return false;
+  const int srcWidth = sourceDimensions.width;
+  const int srcHeight = sourceDimensions.height;
 
   bool isProgressive = jpeg->getJPEGType() == JPEG_MODE_PROGRESSIVE;
   if (isProgressive) {
@@ -508,6 +508,7 @@ bool JpegToFramebufferConverter::decodeToFramebuffer(const std::string& imagePat
   if (destWidth <= 0 || destHeight <= 0) {
     LOG_ERR("JPG", "Degenerate output dimensions %dx%d for %s, skipping render", destWidth, destHeight,
             imagePath.c_str());
+    setLastError(false, "jpg-degenerate");
     return false;
   }
 
@@ -541,11 +542,13 @@ bool JpegToFramebufferConverter::decodeToFramebuffer(const std::string& imagePat
   }
 
   unsigned long decodeStart = millis();
+  ctx.lastYieldMs = decodeStart;
   rc = jpeg->decode(0, 0, jpegScaleOption);
   unsigned long decodeTime = millis() - decodeStart;
 
   if (rc != 1) {
     LOG_ERR("JPG", "Decode failed (rc=%d, lastError=%d)", rc, jpeg->getLastError());
+    setLastError(false, "jpg-decode rc=%d err=%d", rc, jpeg->getLastError());
     if (ctx.caching) ctx.cache.abort();
     return false;
   }

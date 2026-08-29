@@ -1,12 +1,11 @@
 #include "HttpDownloader.h"
 
+#include <cstdio>  // snprintf -- lastError
+
 #include <Arduino.h>
 #include <Logging.h>
-
-#include "util/DiagLog.h"
 #include <Memory.h>
 #include <base64.h>
-#include <cstdio>  // snprintf -- lastError
 
 #include <functional>
 #include <string>
@@ -15,12 +14,12 @@
 #include <SecureHttpClient.h>
 
 extern "C" void wolfSSL_Arduino_Serial_Print(const char* const msg) { LOG_DBG("WOLFSSL", "%s", msg); }
-
-char HttpDownloader::lastError[80] = "";
 #else
 #include <esp_crt_bundle.h>
 #include <esp_http_client.h>
 #endif
+
+char HttpDownloader::lastError[80] = "";
 
 namespace {
 #if !defined(FREEINK_NET_WOLFSSL)
@@ -61,10 +60,13 @@ HttpDownloader::DownloadError runGetWolf(const std::string& startUrl, const std:
     http.setInsecure();
     if (!http.begin(url)) {
       LOG_ERR("HTTP", "wolfSSL bad URL: %s", url.c_str());
-    snprintf(HttpDownloader::lastError, sizeof(HttpDownloader::lastError), "wolfSSL bad URL: %s", url.c_str());
+      snprintf(HttpDownloader::lastError, sizeof(HttpDownloader::lastError), "wolfSSL bad URL: %s", url.c_str());
       return HttpDownloader::HTTP_ERROR;
     }
-    http.addHeader("User-Agent", "CrossMosa-ESP32-" CROSSPOINT_VERSION);
+    // setUserAgent replaces SecureHttpClient's built-in UA; addHeader would
+    // append a second User-Agent header, which strict servers reject (aiohttp
+    // answers 400 "Duplicate 'User-Agent' header found").
+    http.setUserAgent("CrossMosa-ESP32-" CROSSPOINT_VERSION);
     if (!username.empty() && !password.empty()) {
       const std::string credentials = username + ":" + password;
       const String encoded = base64::encode(credentials.c_str());
@@ -86,33 +88,33 @@ HttpDownloader::DownloadError runGetWolf(const std::string& startUrl, const std:
     if (http.aborted()) return HttpDownloader::ABORTED;
     if (status < 0) {
       LOG_ERR("HTTP", "wolfSSL request failed: %s", url.c_str());
-    snprintf(HttpDownloader::lastError, sizeof(HttpDownloader::lastError), "wolfSSL request failed: %s", url.c_str());
+      snprintf(HttpDownloader::lastError, sizeof(HttpDownloader::lastError), "wolfSSL request failed: %s", url.c_str());
       return HttpDownloader::HTTP_ERROR;
     }
     if (isRedirect(status)) {
       const std::string location = http.getHeader("location");
       if (location.empty() || !freeink::SecureHttpClient::resolveUrl(url, location, url)) {
         LOG_ERR("HTTP", "wolfSSL bad redirect: %d", status);
-    snprintf(HttpDownloader::lastError, sizeof(HttpDownloader::lastError), "wolfSSL bad redirect: %d", status);
+        snprintf(HttpDownloader::lastError, sizeof(HttpDownloader::lastError), "wolfSSL bad redirect: %d", status);
         return HttpDownloader::HTTP_ERROR;
       }
       continue;
     }
     if (status != 200) {
       LOG_ERR("HTTP", "wolfSSL unexpected status: %d", status);
-    snprintf(HttpDownloader::lastError, sizeof(HttpDownloader::lastError), "wolfSSL unexpected status: %d", status);
+      snprintf(HttpDownloader::lastError, sizeof(HttpDownloader::lastError), "wolfSSL unexpected status: %d", status);
       return HttpDownloader::HTTP_ERROR;
     }
     if (http.callbackAborted()) return HttpDownloader::FILE_ERROR;
     if (!http.responseComplete()) {
       LOG_ERR("HTTP", "wolfSSL incomplete: got %zu of %zu bytes", sink.downloaded, sink.total);
-    snprintf(HttpDownloader::lastError, sizeof(HttpDownloader::lastError), "wolfSSL incomplete: got %zu of %zu bytes", sink.downloaded, sink.total);
+      snprintf(HttpDownloader::lastError, sizeof(HttpDownloader::lastError), "wolfSSL incomplete: got %zu of %zu bytes", sink.downloaded, sink.total);
       return HttpDownloader::HTTP_ERROR;
     }
     return HttpDownloader::OK;
   }
   LOG_ERR("HTTP", "too many redirects");
-    snprintf(HttpDownloader::lastError, sizeof(HttpDownloader::lastError), "too many redirects");
+  snprintf(HttpDownloader::lastError, sizeof(HttpDownloader::lastError), "too many redirects");
   return HttpDownloader::HTTP_ERROR;
 }
 #endif
@@ -172,7 +174,7 @@ HttpDownloader::DownloadError runGet(const std::string& url, const std::string& 
     err = esp_http_client_open(client, 0);
     if (err != ESP_OK) {
       LOG_ERR("HTTP", "redirect open failed: %s", esp_err_to_name(err));
-    snprintf(HttpDownloader::lastError, sizeof(HttpDownloader::lastError), "redirect open failed: %s", esp_err_to_name(err));
+      snprintf(HttpDownloader::lastError, sizeof(HttpDownloader::lastError), "redirect open failed: %s", esp_err_to_name(err));
       esp_http_client_cleanup(client);
       return HttpDownloader::HTTP_ERROR;
     }
@@ -207,7 +209,7 @@ HttpDownloader::DownloadError runGet(const std::string& url, const std::string& 
     const int read = esp_http_client_read(client, buf.get(), READ_CHUNK);
     if (read < 0) {
       LOG_ERR("HTTP", "read error after %zu bytes", sink.downloaded);
-    snprintf(HttpDownloader::lastError, sizeof(HttpDownloader::lastError), "read error after %zu bytes", sink.downloaded);
+      snprintf(HttpDownloader::lastError, sizeof(HttpDownloader::lastError), "read error after %zu bytes", sink.downloaded);
       esp_http_client_cleanup(client);
       return HttpDownloader::HTTP_ERROR;
     }

@@ -1,5 +1,7 @@
 #include "TxtReaderMenuActivity.h"
 
+#include "ReaderFontSizes.h"
+
 #include <GfxRenderer.h>
 #include <I18n.h>
 
@@ -12,13 +14,21 @@
 
 TxtReaderMenuActivity::TxtReaderMenuActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
                                              const std::string& title, const float bookProgressPercent,
-                                             const uint8_t currentOrientation)
+                                             const uint8_t currentOrientation, std::vector<uint8_t> pointSizes)
     : Activity("TxtReaderMenu", renderer, mappedInput),
       menuItems(buildMenuItems()),
       title(title),
       pendingOrientation(currentOrientation),
-      pendingFontSize(SETTINGS.fontSize),
-      bookProgressPercent(bookProgressPercent) {}
+      bookProgressPercent(bookProgressPercent),
+      pointSizes_(std::move(pointSizes)) {
+  // 目前字級吸附到本家族實際可選的點數（TextSettingsActivity 同法）
+  pendingFontSize = snapToNearestPointSize(pointSizes_, SETTINGS.fontPointSize);
+  fontSizeLabels_.reserve(pointSizes_.size());
+  for (const uint8_t pt : pointSizes_) {
+    // "pt" 是排版單位符號，各語言寫法相同，刻意不翻譯（同 TextSettingsActivity）
+    fontSizeLabels_.push_back(std::to_string(pt) + " pt");
+  }
+}
 
 std::vector<TxtReaderMenuActivity::MenuItem> TxtReaderMenuActivity::buildMenuItems() {
   std::vector<MenuItem> items;
@@ -67,18 +77,21 @@ void TxtReaderMenuActivity::loop() {
       return;
     }
     if (selectedAction == MenuAction::FONT_SIZE) {
-      optionPopup.show(StrId::STR_FONT_SIZE, fontSizeLabels.data(), static_cast<int>(fontSizeLabels.size()),
-                       pendingFontSize, [this](int idx) {
-                         pendingFontSize = static_cast<uint8_t>(idx);
-                         requestUpdate();
-                       });
+      int currentIdx = 0;
+      for (size_t i = 0; i < pointSizes_.size(); i++) {
+        if (pointSizes_[i] == pendingFontSize) currentIdx = static_cast<int>(i);
+      }
+      optionPopup.show(StrId::STR_FONT_SIZE, fontSizeLabels_, currentIdx, [this](int idx) {
+        if (idx >= 0 && idx < static_cast<int>(pointSizes_.size())) pendingFontSize = pointSizes_[idx];
+        requestUpdate();
+      });
       requestUpdate();
       return;
     }
 
     // 沿用既有的 MenuResult(ActivityResult.h),不新增變體型別 —— 呼叫端會依自己的
     // enum 解讀 action。未使用的欄位保持 0。
-    setResult(MenuResult{static_cast<int>(selectedAction), pendingOrientation, 0, pendingFontSize, 0, 0});
+    setResult(MenuResult{static_cast<int>(selectedAction), pendingOrientation, 0, pendingFontSize});
     finish();
     return;
   }
@@ -86,7 +99,7 @@ void TxtReaderMenuActivity::loop() {
   if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
     ActivityResult result;
     result.isCancelled = true;
-    result.data = MenuResult{-1, pendingOrientation, 0, pendingFontSize, 0, 0};
+    result.data = MenuResult{-1, pendingOrientation, 0, pendingFontSize};
     setResult(std::move(result));
     finish();
   }
@@ -125,7 +138,10 @@ void TxtReaderMenuActivity::render(RenderLock&&) {
           return I18N.get(orientationLabels[pendingOrientation]);
         }
         if (value == MenuAction::FONT_SIZE) {
-          return I18N.get(fontSizeLabels[pendingFontSize]);
+          for (size_t i = 0; i < pointSizes_.size(); i++) {
+            if (pointSizes_[i] == pendingFontSize) return fontSizeLabels_[i].c_str();
+          }
+          return "";
         }
         return "";
       },

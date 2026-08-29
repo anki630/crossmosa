@@ -12,13 +12,12 @@ OVERRIDES = f"""
 #ifndef HAVE_FFDHE_2048
 #define HAVE_FFDHE_2048
 #endif
+/* MEMFIX-PORT: 8192 handles up to RSA-4096 keys (the public-CA maximum,
+   ISRG Root X1 included) with half the per-bignum heap of 16384: with
+   WOLFSSL_SMALL_STACK each fast-math temp is FP_MAX_BITS/8 * 2 bytes on the
+   heap, and TLS cert verification allocates dozens at once. */
 #undef FP_MAX_BITS
-#define FP_MAX_BITS 16384
-/* v25: 除錯字串從未在執行期開啟,#undef 回收 ~30KB flash(673 條 WOLFSSL_MSG 字串+呼叫碼) */
-/* v107: 查完了,#undef 放回來(v106 的追蹤已指名根因:EccMakeKey → -125 MEMORY_E)。
-   若日後 TLS 又出問題,重開的方法是把這行改成 #define DEBUG_WOLFSSL,並確認
-   HttpDownloader.cpp 有呼叫 wolfSSL_Debugging_ON() —— 光定義巨集不會輸出。 */
-#undef DEBUG_WOLFSSL
+#define FP_MAX_BITS 8192
 """
 
 

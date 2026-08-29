@@ -15,19 +15,11 @@ class HalDisplay {
     FULL_REFRESH,  // Full refresh with complete waveform
     HALF_REFRESH,  // Half refresh (1720ms) - balanced quality and speed
     FAST_REFRESH,  // Fast refresh using custom LUT
-    // v55:清殘影用的半刷,但【不要求控制器重新同步】。
-    //
-    // X3 上 HALF_REFRESH 會觸發 requestResync(1),驅動的 doFullSync 因此為真,走的是
-    // 【_full 波形 bank + 白底 DTM1 + condition pass + 事後 fast settle】——實測 3,192ms
-    // (一般翻頁 441ms)。不 resync 時走的是 _half bank(WW==BW、WB==BB:忽略 DTM1、
-    // 把【每個】像素驅到目標),清殘影的語意一樣達成,但少掉整條全同步鏈。
-    // ⚠️ 所以這不是「同波形」——是【不同 bank、同樣全像素驅動】。
-    //
-    // 對灰階的影響:兩條路徑結束時的控制器狀態相同(Uc8253X3Driver::display 尾端無條件
-    // 把 DTM1 同步成當前畫面、並清 lsbValid / 設 redRamSynced),所以後續 AA 的前提不變。
-    //
-    // 用途限定:閱讀器(EPUB/TXT/XTC 共用 ReaderUtils::displayWithRefreshCycle)的週期性
-    // 清殘影。封面/待機等轉場仍走 HALF_REFRESH——上游是靠那條全同步鏈修掉轉場 ghosting 的。
+    // v55（v185 移植回來）：送給驅動的仍是 Half，差別是呼叫端【不】requestResync ——
+    // 沒有那個旗標，X3 驅動才會走狀態驅動的 scrub bank（全像素朝目標態刷、不看舊態、
+    // 無反相閃黑），而不是被升級成 GC 全同步鏈。用途限定閱讀器的週期性清殘影
+    // （ReaderUtils::displayWithRefreshCycle）；封面／待機等轉場仍走 HALF_REFRESH。
+    // ⚠️ UC8279 上這條在 v185 是 bench 候選（/scrub.on），bank 未經實機驗證。
     HALF_REFRESH_SCRUB
   };
 
@@ -38,20 +30,6 @@ class HalDisplay {
   // counter; otherwise the first two paints get promoted to FULL
   // (~770ms each on X3).
   void begin(bool seamless = false);
-
-  // v85 measurement: reserve the framebuffer allocation EARLY, before the SD
-  // and JSON stores fragment the default heap pool. Only the allocation — no
-  // SPI, no panel traffic; begin() later is unaffected because the SDK guards
-  // its alloc with `if (!frameBuffer0)`.
-  //
-  // Why this exists: linking NimBLE costs 28,256 B of RAM, which shrinks the
-  // prio-0 pool from 140,992 to 112,736. By the time the normal
-  // setupDisplayAndFonts() runs, that pool no longer has a 52,272-byte hole,
-  // so the framebuffer spills into the prio-1 "retention" pool — the only pool
-  // that can supply the 40-55 KB contiguous blocks WiFi/OPDS/SMB need. Doing
-  // the allocation first keeps the framebuffer in prio-0 and leaves retention
-  // free. Measured effect is what this build is for.
-  bool reserveFrameBufferEarly();
 
   // Display dimensions
   static constexpr uint16_t DISPLAY_WIDTH = EInkDisplay::DISPLAY_WIDTH;
@@ -67,6 +45,17 @@ class HalDisplay {
                             bool fromProgmem = false) const;
 
   void displayBuffer(RefreshMode mode = RefreshMode::FAST_REFRESH, bool turnOffScreen = false);
+  // Non-blocking refresh (shadow-free): starts the panel waveform and returns
+  // while the panel refreshes on its own. The framebuffer must stay untouched
+  // until waitRefreshComplete(), and the caller must rebuild the differential
+  // baseline before the next differential update (the tiled grayscale cleanup
+  // does). Panels without deferral fall back to a blocking refresh.
+  void displayBufferAsync(RefreshMode mode = RefreshMode::FAST_REFRESH);
+  // Block until a pending deferred refresh completes (no-op when none is).
+  void waitRefreshComplete();
+  // True when displayBufferAsync() genuinely overlaps (panel driver defers);
+  // false where it falls back to a blocking refresh.
+  bool supportsAsyncRefresh() const;
   void refreshDisplay(RefreshMode mode = RefreshMode::FAST_REFRESH, bool turnOffScreen = false);
 
   // Power management
@@ -90,23 +79,6 @@ class HalDisplay {
   void preconditionGrayscale();
   void preconditionGrayscale(uint16_t x, uint16_t y, uint16_t w, uint16_t h);
 
-  // v56:取消 SDK 在冷開機時預備的【第二次】強制全同步,並把【下一次 FAST 繪製】升級成
-  // HALF_REFRESH_SCRUB。
-  //
-  // 背景:SDK 開機時 _initialFullSyncsRemaining = 2 —— 開機動畫吃掉第一次,之後第一個
-  // 走全同步的畫面吃掉第二次,實測 disp=2,991ms。第一次是必要的(冷開機後面板電荷狀態
-  // 未知,差分刷新無基準);第二次則是保險。開機動畫畫完後 DTM1 已同步成動畫畫面,
-  // 所以下一次其實可以走差分——但那會把熊 logo 的殘影留在畫面上,這正是第二次全同步在防的。
-  // scrub 兩者兼顧:全像素驅動(不留 logo 殘影)+ 只要一次刷新(約 723ms)。
-  //
-  // 「下一次 FAST 繪製」未必是書的第一頁——也可能是「建立索引中」彈窗或圖片頁的佔位框。
-  // 這是【對的】:v56 之前那第二次強制全同步落在的正是同一格(driver 的 doFullSync 不看
-  // 呼叫端要求什麼模式),而那些過場畫面都是全螢幕的,logo 一樣被刷掉,殘影不會漏到後面。
-  //
-  // ⚠️ 只在 X3 生效,且只升級 FAST_REFRESH;若下一次本來就是 HALF/FULL,旗標只被消耗掉、
-  // 不會把較強的刷新【降級】。
-  void skipInitialResyncAndScrubNext();
-
   // Display the framebuffer as the base frame for a grayscale overlay that
   // follows. On X3, HALF fallback first requests a resync to match
   // displayBuffer(HALF); FAST fallback keeps the OEM differential base waveform
@@ -118,7 +90,19 @@ class HalDisplay {
   void copyGrayscaleMsbBuffers(const uint8_t* msbBuffer);
   void cleanupGrayscaleBuffers(const uint8_t* bwBuffer);
 
-  void displayGrayBuffer(bool turnOffScreen = false);
+  // absolute=true：X3 走驅動的「絕對四階」通道（UC8279 = 原廠 XTH4 表；平面直接編碼
+  // 四階、不需要先畫 B/W 底）。v185 待機壁紙 bench（/wall4.on）用，其他面板忽略。
+  void displayGrayBuffer(bool turnOffScreen = false, bool absolute = false);
+  // v185 bench：選 UC8279 的灰階推力表（0 = 正式；1..N 見 Uc8279X3Luts.h）。其他面板 no-op。
+  void setGrayscaleVariant(uint8_t variant);
+  // v185 bench 證人：最近一次 B/W 刷新選到的 bank（0 無 / 1 GC / 2 DU / 3 scrub）。
+  uint8_t lastRefreshBank() const;
+  // 只有 UC8279 X3 的 factoryMode 是真的絕對四階（XTH4）；其他面板對 factoryMode 另有語意，
+  // 餵階碼平面會畫出垃圾。SleepActivity 的 /wall4.on 分支以此閘門。
+  bool supportsAbsoluteGrayscale() const;
+  // v186：面板驅動擔保「不 resync 的 Half」是實證過的週期清殘影（UC8253 X3 的 _half，v55–v130）。
+  // UC8279 的 scrub bank 仍是 bench（/scrub.on）→ 回 false，預設走 GC。
+  bool prefersScrubClean() const;
 
   // Tiled grayscale: stream one band of a plane (lsbPlane selects LSB/MSB RAM)
   // straight to the controller; supportsStripGrayscale() gates the path. See
@@ -134,7 +118,6 @@ class HalDisplay {
 
  private:
   EInkDisplay einkDisplay;
-  bool scrubNextFastPaint_ = false;  // v56 一次性旗標,見 skipInitialResyncAndScrubNext()
 };
 
 extern HalDisplay display;

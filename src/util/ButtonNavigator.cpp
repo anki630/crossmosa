@@ -125,18 +125,14 @@ int ButtonNavigator::previousPageIndex(const int currentIndex, const int totalIt
 
 int ButtonNavigator::nextPageIndexClamped(const int currentIndex, const int totalItems, const int itemsPerPage) {
   if (totalItems <= 0 || itemsPerPage <= 0) return 0;
-
-  // Advance to the start of the next page; if that overshoots the list, stop at the last item
-  // (the bottom) instead of wrapping to the top -- PageDown semantics.
+  // 前進到下一頁的頁首；超出清單就停在最後一項（PageDown 語意），不環繞。
   const int nextPageStart = (currentIndex / itemsPerPage + 1) * itemsPerPage;
   return nextPageStart >= totalItems ? totalItems - 1 : nextPageStart;
 }
 
 int ButtonNavigator::previousPageIndexClamped(const int currentIndex, const int totalItems, const int itemsPerPage) {
   if (totalItems <= 0 || itemsPerPage <= 0) return 0;
-
-  // Retreat to the start of the previous page; on the first page stay at the top (index 0)
-  // instead of wrapping to the end -- PageUp semantics.
-  const int currentPageIndex = currentIndex / itemsPerPage;
-  return currentPageIndex > 0 ? (currentPageIndex - 1) * itemsPerPage : 0;
+  // 退回上一頁的頁首；已在第一頁就停在頂端（index 0），不環繞。
+  const int currentPageStart = (currentIndex / itemsPerPage) * itemsPerPage;
+  return currentPageStart == 0 ? 0 : currentPageStart - itemsPerPage;
 }

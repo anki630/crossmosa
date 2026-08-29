@@ -37,20 +37,9 @@ void reclaim() {
 }
 
 uint8_t* claim(const size_t minLen, size_t* lenOut) {
-  if (!block) {
-    lastClaim = 'A';  // absent: no framebuffer lent (no active loan)
-    return nullptr;
-  }
-  if (blockLen < minLen) {
-    lastClaim = 'S';  // present but smaller than the requested scratch
-    return nullptr;
-  }
+  if (!block || blockLen < minLen) return nullptr;
   bool expected = false;
-  if (!claimed.compare_exchange_strong(expected, true)) {
-    lastClaim = 'C';  // already claimed by another consumer
-    return nullptr;
-  }
-  lastClaim = 'K';  // handed out
+  if (!claimed.compare_exchange_strong(expected, true)) return nullptr;
   if (lenOut) *lenOut = blockLen;
   return block;
 }

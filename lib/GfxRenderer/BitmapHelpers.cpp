@@ -1,9 +1,24 @@
 #include "BitmapHelpers.h"
 
+#include <Arduino.h>
+#include <Logging.h>
+
 #include <cstdint>
+#include <cstdio>
 #include <cstring>  // Added for memset
 
 #include "Bitmap.h"
+
+char ditherLastAllocFail[96] = {0};
+
+void noteDitherAllocFail(const char* where, size_t bytes) {
+  // v194：沒有序列埠＝寫進 lastAllocFail，否則 LOG_ERR 等於丟掉。
+  LOG_ERR("DTH", "ALLOCFAIL where=%s bytes=%u max=%u", where, static_cast<unsigned>(bytes),
+          static_cast<unsigned>(ESP.getMaxAllocHeap()));
+  if (ditherLastAllocFail[0] != '\0') return;
+  snprintf(ditherLastAllocFail, sizeof(ditherLastAllocFail), "where=%s bytes=%u max=%u", where,
+           static_cast<unsigned>(bytes), static_cast<unsigned>(ESP.getMaxAllocHeap()));
+}
 
 // Brightness/Contrast adjustments:
 constexpr bool USE_BRIGHTNESS = false;       // true: apply brightness/gamma adjustments

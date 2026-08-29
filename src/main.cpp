@@ -1,6 +1,9 @@
+#include "util/DiagLog.h"
 #include <Arduino.h>
+#include <BoardConfig.h>
 #include <DataDir.h>
 #include <Epub.h>
+#include <Epub/ParsedText.h>
 #include <FontCacheManager.h>
 #include <FontDecompressor.h>
 #include <GfxRenderer.h>
@@ -16,12 +19,13 @@
 #include <SPI.h>
 #include <WiFi.h>
 #include <builtinFonts/all.h>
-#include <esp_system.h>  // v85: esp_reset_reason() for the BOOT diag line
 
+#include <cstdio>
 #include <cstring>
 
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
+#include "KOReaderCredentialStore.h"
 #include "MappedInputManager.h"
 #include "OpdsServerStore.h"
 #include "RecentBooksStore.h"
@@ -29,13 +33,12 @@
 #include "activities/Activity.h"
 #include "activities/ActivityManager.h"
 #include "activities/settings/SdFirmwareUpdateActivity.h"
-#include "ble/BleRemoteManager.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "images/LoadingIcon.h"
+#include "util/BenchFlags.h"
+#include "util/BootRecovery.h"
 #include "util/ButtonNavigator.h"
-#include "util/DiagLog.h"
-#include "util/SdDateTime.h"
 #include "util/ScreenshotUtil.h"
 
 GfxRenderer renderer(display);
@@ -48,11 +51,11 @@ static unsigned long allowSleepAt = 0;
 
 // Fonts
 //
-// NOTE (繁中自訂版 / Traditional Chinese custom build):
-// notoserif 家族已從 builtinFonts/all.h 移除，騰出的 ~794 KB flash 用來讓 UI 字型
-// (ubuntu_10/12) 容納 5,413 個繁體漢字，讓檔名與 OPDS 書名能正常顯示中文。
-// 下面的 notoserif* 物件名稱保留不動（設定邏輯、enum、switch 全部照舊），只是資料
-// 來源改指向對應的 notosans_*，因此設定中的「Serif」會以黑體呈現。
+// CrossMosa（繁體中文自訂版）：
+// notoserif 全家族已從 builtinFonts/all.h 移除，騰出的 flash 讓 UI 字型容納繁體漢字。
+// 下面的 notoserif* 物件【名稱保留不動】（設定邏輯、enum、switch 全部照舊），只是資料
+// 來源改指向對應的 notosans_*，因此設定裡的「Serif」會以黑體呈現。
+// 斜體也一併移除：SD 中文字型只有正體與粗體，斜體本來就會 fallback。
 // 內建閱讀字型本來就不含任何漢字，中文書仍需使用 SD 卡字型。
 EpdFont notoserif14RegularFont(&notosans_14_regular);
 EpdFont notoserif14BoldFont(&notosans_14_bold);
@@ -80,7 +83,6 @@ EpdFontFamily notosans16FontFamily(&notosans16RegularFont, &notosans16BoldFont);
 EpdFont notosans18RegularFont(&notosans_18_regular);
 EpdFont notosans18BoldFont(&notosans_18_bold);
 EpdFontFamily notosans18FontFamily(&notosans18RegularFont, &notosans18BoldFont);
-
 #endif  // OMIT_FONTS
 
 EpdFont smallFont(&notosans_8_regular);
@@ -90,8 +92,7 @@ EpdFont ui10RegularFont(&ubuntu_10_regular);
 EpdFont ui10BoldFont(&ubuntu_10_bold);
 EpdFontFamily ui10FontFamily(&ui10RegularFont, &ui10BoldFont);
 
-// UI_12_FONT_ID 現在承載 14px 字面（清單主文字/標題放大用）。變數名保留 ui12 以免動
-// insertFont 與所有呼叫點；資料指向 ubuntu_14。10px（ui10）維持給狀態列/副標等窄處。
+// CrossMosa：物件名 ui12* 保留（UI_12_FONT_ID 與所有呼叫端不動），資料指向 14px。
 EpdFont ui12RegularFont(&ubuntu_14_regular);
 EpdFont ui12BoldFont(&ubuntu_14_bold);
 EpdFontFamily ui12FontFamily(&ui12RegularFont, &ui12BoldFont);
@@ -123,26 +124,6 @@ enum class BootResume : uint8_t {
 // device back up against the user's sleep gesture. Never cleared:
 // startDeepSleep() does not return, so a set latch only ends at the wakeup reset.
 static bool deepSleepInProgress = false;
-
-// v85: names for esp_reset_reason(), for the BOOT line in diag.log. Only PANIC
-// and CPU_LOCKUP produce /crash_report.txt, so every other value here is a
-// reboot cause this device previously had no way to report.
-static const char* resetReasonName(esp_reset_reason_t reason) {
-  switch (reason) {
-    case ESP_RST_POWERON: return "POWERON";
-    case ESP_RST_EXT: return "EXT";
-    case ESP_RST_SW: return "SW";  // ESP.restart(), e.g. our own silentRestart()
-    case ESP_RST_PANIC: return "PANIC";
-    case ESP_RST_INT_WDT: return "INT_WDT";
-    case ESP_RST_TASK_WDT: return "TASK_WDT";
-    case ESP_RST_WDT: return "WDT";
-    case ESP_RST_DEEPSLEEP: return "DEEPSLEEP";
-    case ESP_RST_BROWNOUT: return "BROWNOUT";
-    case ESP_RST_SDIO: return "SDIO";
-    case ESP_RST_CPU_LOCKUP: return "CPU_LOCKUP";
-    default: return "OTHER";
-  }
-}
 
 void silentRestart() {
   if (deepSleepInProgress) return;  // sleeping supersedes the heap-defrag reboot
@@ -176,7 +157,7 @@ void waitForPowerRelease() {
   }
 }
 
-// v36: hangs off the boot-resolved data dir; built on first use — always
+// v36/v186: hangs off the boot-resolved data dir; built on first use — always
 // after DataDir::resolve() (first caller is enterDeepSleep / quick-resume
 // boot, both well past Storage.begin()).
 static const char* sleepFrameFile() {
@@ -192,11 +173,14 @@ static void saveSleepFrameBuffer() {
   file.close();
 }
 
-static bool loadSleepFrameBuffer() {
+// v193：bytesReadOut 只給證人用，成功／失敗語意不變。
+static bool loadSleepFrameBuffer(size_t* bytesReadOut = nullptr) {
+  if (bytesReadOut) *bytesReadOut = 0;
   HalFile file;
   if (!Storage.openFileForRead("SLP", sleepFrameFile(), file)) return false;
   const size_t bufferSize = display.getBufferSize();
   const size_t bytesRead = file.read(display.getFrameBuffer(), bufferSize);
+  if (bytesReadOut) *bytesReadOut = bytesRead;
   file.close();
   if (bytesRead != bufferSize) {
     Storage.remove(sleepFrameFile());
@@ -209,6 +193,8 @@ static bool loadSleepFrameBuffer() {
 // Enter deep sleep mode
 void enterDeepSleep(bool fromTimeout = false) {
   HalPowerManager::Lock powerLock;  // Ensure we are at normal CPU frequency for sleep preparation
+  // v185 證人：分清「睡著醒來回主畫面」與「重置回主畫面」——兩者在 log 上原本都只有一行 BOOT。
+  DiagLog::line("SLEEP timeout=%d mode=%d", static_cast<int>(fromTimeout), static_cast<int>(WiFi.getMode()));
   APP_STATE.lastSleepFromReader = activityManager.isReaderActivity();
 
   const bool isQuickResumeSleep =
@@ -234,8 +220,6 @@ void enterDeepSleep(bool fromTimeout = false) {
     WiFi.disconnect(true);
     WiFi.mode(WIFI_OFF);
   }
-
-  BLE_REMOTE.shutdownForSleep();
 
   halTiltSensor.deepSleep();
   display.deepSleep();
@@ -278,6 +262,26 @@ void setupDisplayAndFonts(bool seamless = false) {
 }
 
 void setup() {
+  BoardConfig::holdPowerRails();
+
+  // ⛔ 緊接在 holdPowerRails() 之後，這是逃生口。見 util/BootRecovery.h。
+  // 這台沒有 USB 資料線，bootloader 也讀不到按鍵 —— 按住 Back+Up 退回上一版這件事，
+  // 只能由真的開起來的這份韌體自己完成。2026-08-17 就是因為沒有它而永久失去一台機器
+  // （v131 死在下面 setupDisplayAndFonts()，比這裡晚 100 行以上）。
+  // 沒按組合鍵時它立即返回、不寫任何東西。
+  //
+  // ⚠️ 為什麼【不】放在 holdPowerRails() 之前：本檢查要輪詢 ADC ladder（約 96ms，
+  //    固定約 96ms，不隨按鍵狀態變動），而 holdPowerRails() 是拉住電源閂鎖的
+  //    （X4 profile 用 GPIO13 當 latch0，而雙機種 binary 開機時 ACTIVE 就是 X4）。
+  //    在它之前插入延遲，最壞情況是放開電源鍵就斷電。
+  //    不要為了「更早一點」把它移回去。
+  //
+  // ⚠️⚠️ 這裡【不是】零成本，原本的註解寫錯了。下面第 316 行的 verifyPowerButtonWakeup()
+  //    失敗會直接 startDeepSleep()，而它問的是「此刻電源鍵還按著嗎」（HalGPIO.cpp:217-231）。
+  //    在這裡多停留 N 毫秒，就是把那個檢查往後推 N 毫秒。checkBootCombo() 為此把延長
+  //    正因如此，checkBootCombo() 的窗口【不可以加大】—— 動它之前先讀 BootRecovery.cpp。
+  boot_recovery::checkBootCombo();
+
   t1 = millis();
 
 #ifdef ENABLE_SERIAL_LOG
@@ -288,23 +292,12 @@ void setup() {
   // worked without the delay because USB was already enumerated.
   delay(250);
   Serial.begin(115200);
+#if LOG_SERIAL_HAS_TX_TIMEOUT
   logSerial.setTxTimeoutMs(1);  // This is a load-bearing 1. Do not modify.
+#endif
 #endif
 
   HalSystem::begin();
-
-  // v85: reserve the framebuffer BEFORE anything else allocates. See
-  // HalDisplay::reserveFrameBufferEarly() for the full reasoning — in short,
-  // linking NimBLE shrinks the prio-0 pool by 28,256 B, and by the time
-  // setupDisplayAndFonts() runs there is no longer a 52,272-byte hole there,
-  // so the framebuffer spills into the one pool WiFi/OPDS/SMB depend on for
-  // large contiguous blocks. Allocation only; no SPI or panel traffic yet, and
-  // begin() below still works because the SDK guards its alloc on a null
-  // pointer. Failure is not fatal here: begin() will simply allocate later,
-  // exactly as it did before this line existed.
-  if (!display.reserveFrameBufferEarly()) {
-    LOG_ERR("MAIN", "Early framebuffer reservation failed; falling back to allocation in begin()");
-  }
 
   // Read-and-clear so a panic later in setup() doesn't loop into silent reboot.
   // Bound the target range too — RTC_NOINIT memory is uninitialized on cold boot.
@@ -319,42 +312,46 @@ void setup() {
   halTiltSensor.begin();
   halClock.begin();
 
-  LOG_INF("MAIN", "Hardware detect: %s", gpio.deviceIsX3() ? "X3" : "X4");
+  LOG_INF("MAIN", "Hardware detect: %s", gpio.deviceIsX3() ? (gpio.displayIsUc8279() ? "X3 (UC8279)" : "X3 (UC8253)") : "X4");
 
   // SD Card Initialization
   // We need 6 open files concurrently when parsing a new chapter
   if (!Storage.begin()) {
     LOG_ERR("MAIN", "SD card initialization failed");
     setupDisplayAndFonts(isSilentReboot);
-    // SD 掛時 SETTINGS 讀不到 → 語言 fallback EN(實機顯示英文);重點是畫面可按鍵脫困
-    activityManager.goToFullScreenMessage(tr(STR_SD_CARD_ERROR), EpdFontFamily::BOLD);
+    activityManager.goToFullScreenMessage("SD card error", EpdFontFamily::BOLD);
     return;
   }
 
-  // One-shot /.crosspoint -> /.crossmosa migration. Must run before ANY
-  // store/settings load or SD path is built (they all hang off
-  // DataDir::path()).
+  // v53/v57：診斷 log。**預設關閉**，靠 SD【根目錄】的空檔 `/diag.on` 開啟（放了要重開機）。
+  // 判定只在這裡做一次，之後不再碰 SD；關閉時 mem()/line()/dumpPools() 全在第一行就 return，
+  // 特別是【不做 heap_caps_walk】—— 那才是關掉之後省下的主要成本。
+  //
+  // ⚠️ 哨兵必須放【根目錄】，不可放資料目錄（/.crossmosa）—— 那裡已被 ProtectedPath 擋住，
+  //    網頁與 WebDAV 都傳不進去，使用者只能拔卡。（v186 起兩個理由都活著：DataDir::resolve() 會把
+  //    尚未遷移的卡上「手建的 /.crossmosa」當成失敗 rename 的殘骸處理；放根目錄就沒有這類互動。）
+  //    ⚠️ 名字不可改成 `.diag.on`（會撞 8.3 別名假設）。
+  //
+  // 必須在 Storage.begin() 成功之後呼叫。
+  // v36/v186：一次性 /.crosspoint → /.crossmosa 遷移。必須在【任何】store／設定載入或 SD 路徑
+  // 組出來之前（它們全掛在 DataDir::path() 上），也在 DiagLog::begin() 之前（log 住在資料目錄）。
+  // 原廠韌體就是 CrossPoint 的分支、也寫 /.crosspoint —— 從原廠直接刷過來的人，進度／書籤／WiFi
+  // 就是靠這一步搬過來的。FAT 目錄改名是 metadata-only；epub 快取 hash 不含目錄名，零重排。
   DataDir::resolve();
 
-  // v77: register SdFat's date/time callback if this boot already knows the
-  // date. ESP.restart() preserves the wall clock (the boot-time offset lives in
-  // RTC scratch), and silentRestart() is a common path in this firmware, so a
-  // synced session can survive into the next boot -- checking here rather than
-  // only in loop() means files created during setup() get real dates too.
-  //
-  // It also warms up newlib's lazy time-lock creation off the storage mutex.
-  SdDateTime::maybeRegister();
-
-  // v57:儀器總開關(預設關;SD 資料目錄放 diag.on 才啟用)。必須在 DataDir::resolve() 之後,
-  // 且在任何 DiagLog:: 呼叫之前——最早的呼叫點是下方的 mem("pre-route")。
   DiagLog::begin();
+  DiagLog::mem("boot");
+  BenchFlags::load();  // v185 bench 哨兵（同樣只在這裡讀一次 SD）
 
   HalSystem::checkPanic();
 
   SETTINGS.loadFromFile();
+  // v187：粗體閱讀是 ParsedText 的全域旗標，開機就跟設定對齊（否則從設定頁進文字設定的預覽會用錯字重）。
+  ParsedText::setBoldBodyText(SETTINGS.boldBodyText != 0);
   APP_STATE.loadFromFile();
   RECENT_BOOKS.loadFromFile();
   I18N.setLanguage(static_cast<Language>(SETTINGS.language));
+  KOREADER_STORE.loadFromFile();
   OPDS_STORE.loadFromFile();
   UITheme::getInstance().reload();
   ButtonNavigator::setMappedInputManager(mappedInputManager);
@@ -400,7 +397,7 @@ void setup() {
   }
 
   // First serial output only here to avoid timing inconsistencies for power button press duration verification
-  LOG_DBG("MAIN", "Starting CrossMosa version " CROSSPOINT_VERSION);
+  LOG_DBG("MAIN", "Starting CrossPoint version " CROSSPOINT_VERSION);
 
   // Resolve the single boot-presentation decision. Skipping the splash also
   // skips the panel-clearing pass and the X3 initial-full-sync arming (see
@@ -409,56 +406,59 @@ void setup() {
   const BootResume resume = isSilentReboot              ? BootResume::Silent
                             : !APP_STATE.showBootScreen ? BootResume::QuickResume
                                                         : BootResume::Splash;
+  bool allowFastInitialReaderRefresh = false;
+  // v185 證人：0=Splash 1=Silent 2=QuickResume；配上 BOOT 行的 rst= 就能分類每次開機。
+  // 前綴刻意不用 BOOT —— 那是 diag.log 的版本分段記號，多一行就把每段切成兩半。
+  DiagLog::line("RESUME kind=%d target=%u", static_cast<int>(resume), static_cast<unsigned>(snapshotTarget));
 
-  setupDisplayAndFonts(resume != BootResume::Splash);
-
-  // I4 fix (2026-08): BLE page-turner remote, no-op unless a remote is paired
-  // (settings). Moved here (was right after the wakeup-reason switch) so the
-  // 52,272B framebuffer and font caches -- the largest single allocations in
-  // the system -- land BEFORE NimBLE's own pools do; otherwise NimBLE's pools
-  // sit ahead of them in the heap and shrink the largest contiguous block
-  // available for the framebuffer (hard-limit-6). False wakes still never
-  // reach this line: every wakeup-reason branch that deep-sleeps
-  // (powerManager.startDeepSleep(gpio)) does so inside the switch above, well
-  // before this point, and never returns. All three boot-presentation paths
-  // (Splash / Silent / QuickResume, decided just above) still run through
-  // this same line before they diverge in the switch below -- deep-sleep wake
-  // is a full chip reset regardless of which path was taken.
-  BLE_REMOTE.begin();
-
-  // v53 量測:乾淨基準線——字型/顯示已就緒,但 activity 尚未路由(還沒載入 EPUB/section)。
-  // 這個點在所有開機路徑上都可互相比較(下方的 boot-reader/boot-home 則不可)。
-  DiagLog::mem("pre-route");
+  // v193：醒來路徑證人。完全沒有新的 BOOT 行＝面板凍住、韌體還活著。
+  const bool seamlessDisplay = resume != BootResume::Splash;
+  DiagLog::mem("wake-disp");
+  DiagLog::line("WAKE disp-begin seamless=%d", seamlessDisplay ? 1 : 0);
+  setupDisplayAndFonts(seamlessDisplay);
+  // v185 bench：驅動選好之後才套灰階推力候選；文字 AA 深灰旋鈕落在 renderer。
+  if (BenchFlags::grayVariant != 0) display.setGrayscaleVariant(BenchFlags::grayVariant);
+  renderer.setTextAaDarkOnly(BenchFlags::aaDark);
 
   switch (resume) {
     case BootResume::Silent:
       // Splash skipped: the routing block below picks the target activity; the
       // panel keeps showing the pre-reboot popup until that first paint lands.
       break;
-    case BootResume::QuickResume:
+    case BootResume::QuickResume: {
       // One-shot flag: re-arm the splash for the next non-quick-resume boot. Save
       // before any painting so a hang in the blocking paint path can't strand
       // us in a quick-resume-with-no-frame loop on the next boot.
       APP_STATE.showBootScreen = true;
       APP_STATE.saveToFile();
-      if (loadSleepFrameBuffer()) {
-        // Frame restored: swap the sleep moon for the loading icon.
+      size_t frameBytes = 0;
+      const bool frameOk = loadSleepFrameBuffer(&frameBytes);
+      // v193：frame 讀完立刻記，ok=0 也要有行，否則卡住時分不出是沒檔還是讀到一半。
+      DiagLog::line("WAKE frame ok=%d bytes=%u", frameOk ? 1 : 0, static_cast<unsigned>(frameBytes));
+      if (frameOk) {
+        const bool useDifferentialRefresh = gpio.deviceIsX3();
+        if (useDifferentialRefresh) {
+          // begin() clears the X3 controller RAM, so restore the saved frame as
+          // the baseline before replacing the moon with the loading icon.
+          renderer.cleanupGrayscaleWithFrameBuffer();
+        }
+
         const auto pageHeight = renderer.getScreenHeight();
         renderer.drawImage(LoadingIcon, 0, pageHeight - LOADINGICON_HEIGHT, LOADINGICON_WIDTH, LOADINGICON_HEIGHT);
-        renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+        if (useDifferentialRefresh) {
+          renderer.displayGrayscaleBase(HalDisplay::FAST_REFRESH);
+          allowFastInitialReaderRefresh = true;
+        } else {
+          renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+        }
+        DiagLog::line("WAKE painted");  // v193：畫面已推上面板
       } else {
         activityManager.goToBoot();  // frame file missing, fall back to the splash
       }
       break;
+    }
     case BootResume::Splash:
       activityManager.goToBoot();
-      // v56:開機動畫已經畫完(吃掉 SDK 預備的兩次強制全同步的第一次)。取消第二次,
-      // 改讓下一次 FAST 繪製走 scrub——省下約 2.3 秒,又不會留下熊 logo 的殘影。
-      // 放在 goToBoot() 之後:這條路徑上 currentActivity 必為 nullptr(唯一更早的
-      // goToFullScreenMessage 後面直接 return),所以 replaceActivity 會【立即】執行
-      // onEnter,回來時動畫已上畫面。即使哪天這個前提改變也不會出事:skip 與 scrub 是
-      // 同一次呼叫內原子完成的,下一次繪製一定是全像素驅動,不會出現無基準的差分。
-      display.skipInitialResyncAndScrubNext();
       break;
   }
 
@@ -471,6 +471,8 @@ void setup() {
     activityManager.goToCrashReport();
   } else if (resume == BootResume::Silent && snapshotTarget == SILENT_REBOOT_TARGET_READER &&
              !APP_STATE.openEpubPath.empty()) {
+    DiagLog::mem("wake-reader");  // v193：進閱讀器前的堆積；不印路徑本身（書名隱私）
+    DiagLog::line("WAKE toreader path-len=%u", static_cast<unsigned>(APP_STATE.openEpubPath.size()));
     activityManager.goToReader(APP_STATE.openEpubPath);
   } else if (resume == BootResume::Silent) {
     // target == home (or reader with no open book): land on home — don't fall
@@ -485,10 +487,12 @@ void setup() {
   } else {
     // Clear app state to avoid getting into a boot loop if the epub doesn't load
     const auto path = APP_STATE.openEpubPath;
+    DiagLog::mem("wake-reader");  // v193：進閱讀器前的堆積；不印路徑本身（書名隱私）
+    DiagLog::line("WAKE toreader path-len=%u", static_cast<unsigned>(path.size()));
     APP_STATE.openEpubPath = "";
     APP_STATE.readerActivityLoadCount++;
     APP_STATE.saveToFile();
-    activityManager.goToReader(path);
+    activityManager.goToReader(path, allowFastInitialReaderRefresh);
   }
 
   if (resume == BootResume::Silent) {
@@ -511,36 +515,16 @@ void setup() {
   // Ensure we're not still holding the power button before leaving setup
   waitForPowerRelease();
   allowSleepAt = millis() + 2000;
-
-  // v53 量測(暫時)。可證偽的預測——逐池 total 相加應約 274,000-277,000(int_total 同源);
-  // 若印出約 200,000,2026-07-26 研究報告的整個記憶體模型作廢,記憶體類提案全部撤回。
-  // 註:本取樣點在 activity 路由【之後】,走續讀路徑時 EPUB/section/SD 字型已載入,
-  // 與 Home 路徑不可直接相比——故一併記下實際落點(下方 tag)。
-  // v85: the reset reason is the only way this device can tell a panic from a
-  // brownout from a watchdog. /crash_report.txt only covers ESP_RST_PANIC and
-  // ESP_RST_CPU_LOCKUP (HalSystem.cpp:143-146), so "reboot with no crash report"
-  // has always been ambiguous here — the v84 BLE scan reboot is exactly that
-  // case. One line, no cost, permanently useful on a device with no serial port.
-  DiagLog::line("BOOT version=%s resume=%d reader=%d reset=%d(%s)", CROSSPOINT_VERSION, static_cast<int>(resume),
-                activityManager.isReaderActivity() ? 1 : 0, static_cast<int>(esp_reset_reason()),
-                resetReasonName(esp_reset_reason()));
-  DiagLog::mem(activityManager.isReaderActivity() ? "boot-reader" : "boot-home");
 }
 
 void loop() {
-  // v77: SNTP lands ASYNCHRONOUSLY, seconds after the connect path has already
-  // returned, so a one-shot check at connect time would miss it. One bool test
-  // once it has succeeded; at most one time() per second before that. Here
-  // rather than in the SMB activity so OPDS and Calibre downloads benefit too.
-  SdDateTime::maybeRegister();
-
   static unsigned long maxLoopDuration = 0;
   const unsigned long loopStartTime = millis();
   static unsigned long lastMemPrint = 0;
 
+  gpio.setSharedConfirmPowerShortPressEmitsPower(SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::SLEEP);
   gpio.update();
   halTiltSensor.update(SETTINGS.tiltPageTurn, SETTINGS.orientation, activityManager.isReaderActivity());
-  BLE_REMOTE.tick();
 
   renderer.setFadingFix(SETTINGS.fadingFix);
 
@@ -569,7 +553,7 @@ void loop() {
 
   // Check for any user activity (button press or release) or active background work
   static unsigned long lastActivityTime = millis();
-  if (gpio.wasAnyPressed() || gpio.wasAnyReleased() || halTiltSensor.hadActivity() ||
+  if (gpio.wasAnyPressed() || gpio.wasAnyReleased() || gpio.wasTouchActivity() || halTiltSensor.hadActivity() ||
       activityManager.preventAutoSleep()) {
     lastActivityTime = millis();         // Reset inactivity timer
     powerManager.setPowerSaving(false);  // Restore normal CPU frequency on user activity
@@ -622,8 +606,10 @@ void loop() {
   if (SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::FORCE_REFRESH &&
       mappedInputManager.wasReleased(MappedInputManager::Button::Power)) {
     LOG_DBG("MAIN", "Manual screen refresh triggered");
-    RenderLock lock;
-    renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+    if (!activityManager.handleForcedRefresh()) {
+      RenderLock lock;
+      renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+    }
   }
 
   // Refresh the battery icon when USB is plugged or unplugged.
@@ -651,28 +637,11 @@ void loop() {
     powerManager.setPowerSaving(false);  // Make sure we're at full performance when skipLoopDelay is requested
     yield();                             // Give FreeRTOS a chance to run tasks, but return immediately
   } else {
-    if (millis() - lastActivityTime >= HalPowerManager::IDLE_POWER_SAVING_MS && !BLE_REMOTE.isStackActive()) {
-      // If we've been inactive for a while, increase the delay to save power.
-      // v85: never while the BLE stack is up — LOW_POWER_FREQ is 10 MHz and the
-      // BLE controller cannot meet its radio deadlines there. This is the prime
-      // suspect for the v84 "reboots while scanning" report: scanning is exactly
-      // when the user stops pressing buttons, so the 3 s idle timer fires with
-      // the radio running. Nothing else in this firmware ever ran a real-time
-      // subsystem under the idle clock (the web server forces full speed via
-      // skipLoopDelay above), which is why this never bit us before.
-      // Cost, stated plainly: BLE on = no CPU power saving = shorter battery.
+    if (millis() - lastActivityTime >= HalPowerManager::IDLE_POWER_SAVING_MS) {
+      // If we've been inactive for a while, increase the delay to save power
       powerManager.setPowerSaving(true);  // Lower CPU frequency after extended inactivity
       delay(50);
     } else {
-      // v85: the guard above only stops us LOWERING the clock. If power saving
-      // was already engaged when the BLE stack came up, it would simply stay
-      // engaged — so raise it back explicitly. setPowerSaving() short-circuits
-      // when the state already matches (HalPowerManager.cpp:42-53), and it is
-      // the same call the WiFi/webserver path makes every loop, so this costs
-      // nothing when BLE is off.
-      if (BLE_REMOTE.isStackActive()) {
-        powerManager.setPowerSaving(false);
-      }
       // Short delay to prevent tight loop while still being responsive
       delay(10);
     }

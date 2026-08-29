@@ -1,14 +1,23 @@
 #include "DiagLog.h"
+#include <BitmapHelpers.h>
+#include <DataDir.h>
 #include <strings.h>  // strcasecmp -- isDiagnosticPath()
 
+#include "BootRecovery.h"
+
 #include <Arduino.h>
-#include <DataDir.h>
+#include <HalGPIO.h>
 #include <HalStorage.h>
 #include <Logging.h>
 #include <esp_heap_caps.h>
+#include <esp_system.h>
 
 #include <cstdio>
 #include <cstring>
+
+// v186：DataDir 搬回來了（維護者 2026-08-28 重啟：原廠韌體本身是 CrossPoint 分支、也寫 /.crosspoint，
+// 從原廠直接刷過來的人靠這一步保住進度）。資料目錄一律問 DataDir::path()；diagPath()/prevDiagPath()
+// 與 isDiagnosticPath() 用同一個函式，兩邊天然一致。
 
 namespace {
 // 檔案上限:超過就不再追加(避免長期使用把 SD 寫滿;量測版本用不到這麼多)。
@@ -30,6 +39,12 @@ inline bool active() { return enabled_ || forced_; }
 // 而 rmdir 在非空目錄上必定失敗 → 遷移被永久擋住。放根目錄就沒有這類互動。
 // ②對使用者也簡單得多:直接丟在卡的最上層,不用進隱藏資料夾。
 constexpr const char* SENTINEL_PATH = "/diag.on";
+
+// v186：BOOT 橫幅用的面板名。x3-8279 = 新批次 UC8279d；x3-8253 = 舊批次；x4。
+const char* panelName() {
+  if (!gpio.deviceIsX3()) return "x4";
+  return gpio.displayIsUc8279() ? "x3-8279" : "x3-8253";
+}
 
 const char* diagPath() {
   static char p[64] = {0};
@@ -82,8 +97,8 @@ void rotateIfNearCap() {
 
 // 追加一行(自帶換行)。每次開關檔:量測點已節流,FAT 成本可接受,
 // 且避免長期持有檔案控制代碼干擾其他 SD 存取。
-void append(const char* text) {
-  if (!Storage.ready()) return;
+bool append(const char* text) {
+  if (!Storage.ready()) return false;
 
   const char* path = diagPath();
   HalFile f = Storage.open(path, O_WRONLY | O_CREAT | O_APPEND);
@@ -94,13 +109,16 @@ void append(const char* text) {
     f = Storage.open(path, O_WRONLY | O_CREAT | O_APPEND);
     if (!f) {
       LOG_ERR("DIAG", "Cannot open %s", path);
-      return;
+      return false;
     }
   }
-  if (f.size() >= MAX_DIAG_BYTES) return;  // 上限保護(f 於 scope 結束自動關閉)
-  f.write(reinterpret_cast<const uint8_t*>(text), strlen(text));
-  f.write(reinterpret_cast<const uint8_t*>("\n"), 1);
+  if (f.size() >= MAX_DIAG_BYTES) return false;  // 上限保護(f 於 scope 結束自動關閉)
+  const size_t len = strlen(text);
+  // v194：寫入動作與先前相同（本文、換行、flush 都做）。只把成敗回傳給 line()。
+  const bool okBody = f.write(reinterpret_cast<const uint8_t*>(text), len) == len;
+  const bool okNl = f.write(reinterpret_cast<const uint8_t*>("\n"), 1) == 1;
   f.flush();
+  return okBody && okNl;
 }
 }  // namespace
 
@@ -148,6 +166,45 @@ void DiagLog::begin() {
   }
   enabled_ = Storage.exists(SENTINEL_PATH);
   if (enabled_) LOG_INF("DIAG", "Instrumentation ON (%s present)", SENTINEL_PATH);
+
+  // v165（使用者抓到的）：輪替原本只掛在 setForced()（網頁強制路徑）——哨兵路徑
+  // 【永不輪替】，檔案撞 192KB 後每次開機都無聲拒寫（v163/v164 兩版的診斷因此全丟）。
+  // 與 v151 的 CAPS 誤植同款：儀器要先證明自己會在【使用中的路徑】上執行（B-22）。
+  // 必須在下面的 BOOT/CAPS 橫幅之前跑，橫幅才會落在新檔。
+  rotateIfNearCap();
+
+  // v151：版本橫幅【必須在 begin()】—— 沒有它，append-only 的 diag.log 無法按版本分段
+  // （memory attribute-evidence-before-reasoning；v150 的 log 就是因此無法歸屬）。
+  // v178：帶重置原因（esp_reset_reason；1=poweron 3=sw 4=panic 5=int_wdt 6=task_wdt 7=wdt 8=deepsleep
+  //        9=brownout 12=jtag 15=cpu_lockup —— v185 更正：12 是 JTAG，cpu_lockup 是 15）
+  // v186：帶面板控制器（雙面板 binary 的第一個證人——同一顆韌體在 UC8253 與 UC8279 上都要能跑）。
+  line("BOOT version=%s rst=%d panel=%s", CROSSPOINT_VERSION, static_cast<int>(esp_reset_reason()), panelName());
+  // v186：資料目錄的決定是這台機器上唯一的 SD 格式變更；LOG_* 在 X3 上等於丟掉，所以寫進 log。
+  line("DATADIR active=%s outcome=%s", DataDir::path(), DataDir::outcomeName());
+  // v151：CAPS 探測 —— v150 誤植進 setForced()（codex 警告過，我確認錯了），整版沒取到證。
+  // boot 時 p2 是 pristine 的 ~115K：default_max 等於它 = p2 在 malloc 備援池裡；
+  // 等於 p3 的 ~102K = plain new 用不到 p2，CLAUDE.md 的池備援模型要作廢。
+  line("CAPS default_max=%u internal_max=%u default_free=%u",
+       static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT)),
+       static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL)),
+       static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_DEFAULT)));
+  // v194：逃生口在 DiagLog 之前，麵包屑住 RTC。只在儀器開啟時讀。
+  // peek → 寫 → 確認寫成功才清。寫失敗就把證據留在 RTC，下次再開 diag 還在。
+  if (active()) {
+    if (const char* why = boot_recovery::peekBootComboBreadcrumb()) {
+      if (line("BOOTCOMBO why=%s", why)) {
+        boot_recovery::consumeBootComboBreadcrumb();
+      }
+    }
+    if (HalStorage::lastAllocFail[0] != '\0') {
+      line("ALLOCFAIL %s", HalStorage::lastAllocFail);
+      HalStorage::lastAllocFail[0] = '\0';
+    }
+    if (ditherLastAllocFail[0] != '\0') {
+      line("ALLOCFAIL %s", ditherLastAllocFail);
+      ditherLastAllocFail[0] = '\0';
+    }
+  }
 }
 
 bool DiagLog::setForced(bool on, const char* reason) {
@@ -158,7 +215,7 @@ bool DiagLog::setForced(bool on, const char* reason) {
   // v65:輪替【不再】以「使用者沒放哨兵檔」為條件。
   //
   // v64 的理由是「哨兵檔是使用者自己放的,他知道那個檔在長大」。那個假設在真實
-  // 使用上不成立,而且代價是全部證據:使用者的卡上有 /diag.on,是 v59 那輪
+  // 使用上不成立,而且代價是全部證據:實機的卡上有 /diag.on,是 v59 那輪
   // 【我叫他放的】(為了量測跨頁字型重疊率),八個版本以來沒有理由再想起它。
   // 於是 diag.log 在 v62 期間長到 192 KB 上限就無聲停寫(append() 的第一行
   // 就 return),v63/v64 的每一行——包含 v64 特地為「第一次連線失敗」加的
@@ -175,7 +232,8 @@ bool DiagLog::setForced(bool on, const char* reason) {
   }
   // 刻意用跟 main.cpp 開機那行一模一樣的 `BOOT version=` 前綴:同一個 grep 就能把
   // append-only 檔案切成版本段落,不論那一段是開機記的還是 setForced 記的。
-  line("BOOT version=%s forced=%s", CROSSPOINT_VERSION, reason != nullptr ? reason : "forced");
+
+  line("BOOT version=%s forced=%s panel=%s", CROSSPOINT_VERSION, reason != nullptr ? reason : "forced", panelName());
   return previous;
 }
 
@@ -216,7 +274,28 @@ struct DumpCtx {
   uint32_t usedSum;  // 該池已用總量(含小塊)
   uint32_t freeLargest;
   uint32_t freeLargestAddr;
+
+  // v146：已用區塊的【大小直方圖】。
+  // 為什麼需要它：位址列表上限只有 16 筆，而 p3 實測是 `big=16+103` —— 列出來的 16 筆
+  // 全在池子最前段（偏移 944 起），那是【開機早期配的】，不是讀書累積的那 103 個。
+  // 換句話說位址列表看得到的永遠是最早那批，看不到兇手。而列 119 個位址也讀不完。
+  // 直方圖用固定的 8 個桶回答「有幾個、多大」，一行就夠，而且成本是常數。
+  //   桶：<=64 / <=128 / <=256 / <=512 / <=1K / <=4K / <=16K / >16K
+  uint16_t hist[8];
+  uint32_t histBytes[8];
 };
+
+// v146：把區塊大小對到直方圖的桶。
+inline int histBucket(size_t sz) {
+  if (sz <= 64) return 0;
+  if (sz <= 128) return 1;
+  if (sz <= 256) return 2;
+  if (sz <= 512) return 3;
+  if (sz <= 1024) return 4;
+  if (sz <= 4096) return 5;
+  if (sz <= 16384) return 6;
+  return 7;
+}
 
 bool dumpCb(walker_heap_into_t heap, walker_block_info_t block, void* userData) {
   auto* c = static_cast<DumpCtx*>(userData);
@@ -224,6 +303,9 @@ bool dumpCb(walker_heap_into_t heap, walker_block_info_t block, void* userData) 
   const auto addr = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(block.ptr));
   if (block.used) {
     c->usedSum += block.size;
+    const int b = histBucket(block.size);
+    if (c->hist[b] < 0xFFFF) c->hist[b]++;
+    c->histBytes[b] += static_cast<uint32_t>(block.size);
     if (block.size >= c->minBytes) {
       if (c->count < MAX_DUMP_BLOCKS) {
         c->addr[c->count] = addr;
@@ -269,11 +351,30 @@ void DiagLog::dumpPools(unsigned minBytes, const char* tag) {
     }
     append(buf);
     LOG_INF("DIAG", "%s", buf);
+
+    // v146：直方圖獨立一行。位址列表答不出「那 103 個沒列出來的是什麼大小」，這行可以。
+    // 格式：桶上限:個數/總位元組。看的是【哪一桶的個數在讀書之後暴增】。
+    static constexpr unsigned kBucketMax[8] = {64, 128, 256, 512, 1024, 4096, 16384, 0};
+    char hbuf[240];
+    int hn = snprintf(hbuf, sizeof(hbuf), "%lu HIST %-10s p@%08x |", static_cast<unsigned long>(millis()), tag,
+                      static_cast<unsigned>(c.poolStart));
+    for (int b = 0; b < 8 && hn > 0 && hn < static_cast<int>(sizeof(hbuf)) - 24; b++) {
+      if (c.hist[b] == 0) continue;
+      if (kBucketMax[b] == 0) {
+        hn += snprintf(hbuf + hn, sizeof(hbuf) - hn, " >16k:%u/%u", static_cast<unsigned>(c.hist[b]),
+                       static_cast<unsigned>(c.histBytes[b]));
+      } else {
+        hn += snprintf(hbuf + hn, sizeof(hbuf) - hn, " %u:%u/%u", kBucketMax[b], static_cast<unsigned>(c.hist[b]),
+                       static_cast<unsigned>(c.histBytes[b]));
+      }
+    }
+    append(hbuf);
+    LOG_INF("DIAG", "%s", hbuf);
   }
 }
 
-void DiagLog::line(const char* fmt, ...) {
-  if (!active()) return;
+bool DiagLog::line(const char* fmt, ...) {
+  if (!active()) return false;
   // v58:放大到 384。加了 reuse/cum_reuse 之後最壞情況已達 252 字元,對 256 只剩 4 bytes——
   // 而新欄位都在【行尾】,截斷會剛好吃掉要量的東西(這正是原註解警告的情況再次發生),
   // 且 cum_reuse 會隨閱讀時間變長。
@@ -285,8 +386,9 @@ void DiagLog::line(const char* fmt, ...) {
 
   char buf[416];  // body + "<millis> " 前綴
   snprintf(buf, sizeof(buf), "%lu %s", static_cast<unsigned long>(millis()), body);
-  append(buf);
+  const bool ok = append(buf);
   LOG_INF("DIAG", "%s", buf);
+  return ok;
 }
 
 bool DiagLog::isDiagnosticPath(const char* path) {

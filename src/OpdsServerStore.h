@@ -1,8 +1,7 @@
 #pragma once
-
-#include <DataDir.h>
-#include <cstdio>
 #include <ArduinoJson.h>
+#include <cstdio>
+#include <DataDir.h>
 #include <PersistableStore.h>
 
 #include <string>
@@ -32,8 +31,8 @@ class OpdsServerStore : public PersistableStore<OpdsServerStore> {
 
  public:
   static const char* getFilePath() {
-    // Built on first use — DataDir::resolve() has run by then (boot order).
-    static char p[32] = "";
+    // v36/v186：掛在開機解析出的資料目錄上；首用必在 DataDir::resolve() 之後（開機順序）。
+    static char p[40] = "";
     if (!p[0]) snprintf(p, sizeof(p), "%s/opds.json", DataDir::path());
     return p;
   }

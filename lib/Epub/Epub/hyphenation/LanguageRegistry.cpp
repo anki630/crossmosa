@@ -6,22 +6,24 @@
 #include "HyphenationCommon.h"
 #include "generated/hyph-en.trie.h"
 
-// 繁中自訂版的斷字表狀態(v122)：
-//   v11  砍掉 9 種非英文語言(de/ru/sv/uk/pl/es/fr/it/fi，約 323KB)—— 為了騰 flash 給中文字集。
-//   v27  連英文 trie(約 27KB)也砍了，理由是「使用者只讀中文」。
-//   v122 把英文加回來 —— 社群回報有人用這個韌體讀英文書，而 flash 還有約 590KB 餘裕。
-//        非英文的 9 種【維持移除】：它們合計 323KB，而且沒有實際使用者需求；
-//        generated/ 底下的 trie 原始檔全部留著，要哪一種就把 include 與 entry 加回來即可。
-// 中文不受影響：CJK 不斷字(斷字只作用在拉丁字母上，見 isLatinLetter)。
-
 namespace {
-// English hyphenation patterns (3/3 minimum prefix/suffix length)
+
+// CrossMosa L4：只保留英文斷字。中文不斷字，其餘語言的 trie 合計約 323 KB
+// （最大的 de 一個就 206,259 bytes），而我們的 flash 要留給漢字。
+// 英文那份【要留】——v122 因社群回報加回來的。
+//
+// ⚠️ 這裡原本是 `std::array<LanguageEntry, 10>`，大小【硬寫】。若只刪初始化列表的 9 筆
+//    而忘了改 10：編譯完全通過（std::array 初始化列表不足會 value-initialize 補齊），
+//    尾端 9 筆全是 {nullptr, nullptr, nullptr}。接著下面的
+//    `primaryTag == entry.primaryTag` 就是 std::string == (const char*)nullptr → strlen(nullptr)。
+//    而 Section.cpp:407 每次章節重排都無條件呼叫 setPreferredLanguage(epub->getLanguage())，
+//    中文書的 "zh" 匹配不到任何一筆 → find_if 掃到尾端 nullptr → 【開任何一本中文書必當機】，
+//    且與「斷字有沒有開」無關。
+//    → 改用 CTAD 推導大小，讓它在結構上不可能與內容脫鉤。不要改回寫死的數字。
 LanguageHyphenator englishHyphenator(en_patterns, isLatinLetter, toLowerLatin, 3, 3);
 
-using EntryArray = std::array<LanguageEntry, 1>;
-
-const EntryArray& entries() {
-  static const EntryArray kEntries = {{{"english", "en", &englishHyphenator}}};
+const auto& entries() {
+  static const std::array kEntries = {LanguageEntry{"english", "en", &englishHyphenator}};
   return kEntries;
 }
 

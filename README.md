@@ -58,12 +58,12 @@ Wi-Fi 連線當機**，這裡先修掉了（細節見 CHANGELOG 的 1.0.0 節）
 
 ## 這是什麼
 
-版本:`1.2.0`
+版本:`2.0.0-rc.1`（預發布／pre-release）
 
-> **1.2.0 修了什麼**:有些 EPUB 開起來直接顯示「全書完」。目次檔的元素名帶了命名空間前綴
-> （`<ns0:package>`,EPUB 規格允許但不常見），而解析器只認裸名，於是收到 0 筆章節。連帶修好書名作者消失、
-> 主畫面封面變空框。**中招的書刷完會自動復原，不必手動刪 SD 卡上的快取。**
-> 另外重整了閱讀選單（14 → 12 項）。完整說明見 [CHANGELOG](CHANGELOG.md)。
+> **2.0.0-rc.1 做了什麼**：新一批次 X3 換了面板控制器 **UC8279**，舊韌體刷上去畫面不會更新。
+> 這一版會在開機辨識控制器並驅動它，基底對齊 **CrossPoint 1.5.0**。
+> SMB 檔案分享與 BLE 翻頁遙控器已移除（原始碼也不再保留）。畫面已經正常的機器**沒必要刷**。
+> 完整說明見 [CHANGELOG](CHANGELOG.md)。
 
 CrossMosa 是原版 [CrossPoint](https://github.com/crosspoint-reader/crosspoint-reader)（本分支的來源專案，開發圈慣稱 upstream）的繁體中文分支。
 原版是通用的開源電子書系統，支援兩種機型、二十幾種介面語言、多種檔案格式。
@@ -74,6 +74,8 @@ CrossMosa 把範圍收窄，專心做三件事:
    凡是會讓翻頁掉字、讓長章節排不出來的東西，一律讓路（見「與原版的差異」）。
 3. **只針對 X3 調校**。原版同時支援 X3 與 X4;本分支的顯示波形時間、記憶體預算、
    字型尺寸全部照 X3 的 792×528 面板與這顆 ESP32-C3 實測而定。
+   X3 有兩種面板控制器：**UC8253**（舊批次）與 **UC8279**（新批次）。本版兩者皆會辨識；
+   **驗證主力是一台 UC8279 新批次 X3**，舊批次目前沒有實機可測。
 
 這是個人專案，不是產品。**沒有任何隸屬於 Xteink 或原版 CrossPoint 專案的關係。**
 
@@ -92,7 +94,7 @@ CrossMosa 把範圍收窄，專心做三件事:
 | **OPDS 中文書庫** | 已造訪頁存 SD 的上/下一頁堆疊、返回保留游標位置、長按翻頁一次一動作、下載完成直接開書 |
 | **圖片與灰階加速** | 有圖的書頁整頁 5,849 ms → 2,422 ms;抗鋸齒的兩個灰階平面合併成單趟走訪 |
 | **網頁傳檔** | 瀏覽器上傳書 / 字型 / 管理 SD 卡，不必拔卡(`http://crossmosa.local`) |
-| **介面重整** | 自訂的 Formosa 主題:圓角外框 + 左側豎條的統一選取語言、真頁籤形分頁列、e-ink 上不塗滿背景 |
+| **介面重整** | 可選主題：**Formosa**、**Formosa Extended**、**Formosa Pro**（Pro 為這一版新增）。圓角外框 + 左側豎條的統一選取語言、真頁籤形分頁列、e-ink 上不塗滿背景 |
 
 ![OPDS 中文書庫](docs/promo/photo-opds.jpg)
 
@@ -117,6 +119,11 @@ CrossMosa 是下班後的個人專案。如果它讓你的 X3 變好用了，幾
 
 以下把這套系統（技術上叫「韌體」）刷進機器。
 
+> **新批次 X3 與面板控制器。** 新一批次的 Xteink X3 換了螢幕驅動晶片 **UC8279**（舊批次是 **UC8253**）。
+> 1.x 在 UC8279 上畫面不會更新：刷完可能停在「更新已完成」，一個像素都不換，但 SD 卡上會出現資料目錄——機器還活著，只是舊韌體不會驅動新控制器。請刷本版。
+>
+> **畫面已經正常更新的機器沒必要刷。** 不必為了跟上版號而升級。這一版的驗證主力是一台 UC8279 新批次 X3；舊批次（UC8253）目前沒有實機可測。
+
 ### ⚠️ 一定要做兩件事，少做一件，中文書就是滿頁方塊
 
 刷韌體**只解決介面**。**書的內文字型不在韌體裡**，它在 SD 卡上。
@@ -126,8 +133,8 @@ CrossMosa 是下班後的個人專案。如果它讓你的 X3 變好用了，幾
 
 | 步驟 | 檔案 | 去哪 |
 |---|---|---|
-| **1. 刷韌體** | `crossmosa-1.2.0-firmware.zip` | 裝置的 flash |
-| **2. 複製字型** | `crossmosa-1.2.0-sd-fonts.zip` | SD 卡的 `/.fonts/` |
+| **1. 刷韌體** | `crossmosa-2.0.0-rc.1-firmware.zip` | 裝置的 flash |
+| **2. 複製字型** | `crossmosa-2.0.0-rc.1-sd-fonts.zip` | SD 卡的 `/.fonts/` |
 
 兩個檔案都在同一個 [Release](../../releases) 頁面。
 
@@ -179,7 +186,7 @@ esptool.py --chip esp32c3 --port /dev/ttyACM0 --baud 921600 \
 
 ### 步驟 2:複製 SD 卡字型
 
-解開 `crossmosa-1.2.0-sd-fonts.zip`，把**整個字型資料夾**複製到 SD 卡的 `/.fonts/` 底下:
+解開 `crossmosa-2.0.0-rc.1-sd-fonts.zip`，把**整個字型資料夾**複製到 SD 卡的 `/.fonts/` 底下:
 
 ```
 SD 卡根目錄
@@ -218,7 +225,7 @@ SD 卡根目錄
 
 代表更新器有啟動，是後半段沒過。依序檢查:
 
-1. **檔案大小是否恰為 6,003,280 bytes**(v1.2.0)——九成的問題在這:
+1. **檔案大小是否恰為 TBD-AFTER-BUILD bytes、sha256 是否為 TBD-AFTER-BUILD**（v2.0.0-rc.1）——九成的問題在這:
    下載不完整、瀏覽器存成 `update (1).bin`、Windows 隱藏副檔名變成
    `update.bin.bin`、誤放整個 zip 沒解壓，**或 SD 卡上殘留著一顆舊的
    `update.bin`**（更新器抓到的是舊檔——社群實例，換上正確的檔就成功了）。
@@ -251,7 +258,7 @@ SD 韌體選擇畫面（救援模式）——這條路只要機器上還是 Cros
    （沒看到就代表 SD 卡路徑不對，檢查是 `/.fonts/字型名/` 而不是 `/.fonts/`。）
 3. 選字級:**設定 → 閱讀器 → 閱讀字級**（對應 SD 字型的 16/18/20/22）。
 4. 裝置會在 SD 卡建 `/.crossmosa/` 放進度、書籤、Wi-Fi 憑證與快取。**不要刪它。**
-5. 版號顯示在**開機畫面**與**設定頁**，確認是 `1.2.0`。
+5. 版號顯示在**開機畫面**與**設定頁**，確認是 `2.0.0-rc.1`。
 
 ### 傳書進去
 
@@ -264,7 +271,7 @@ SD 韌體選擇畫面（救援模式）——這條路只要機器上還是 Cros
 
 ### 待機壁紙（選配）
 
-[Release](../../releases) 另附 `crossmosa-1.2.0-wallpapers.zip`:**50 張世界名畫**，
+[Release](../../releases) 另附 `crossmosa-2.0.0-rc.1-wallpapers.zip`：**50 張世界名畫**，
 全部取自 Wikimedia Commons 的公共領域作品，每一張都為 X3 這塊 4 階灰階面板挑過、裁過、調過。
 
 把 `.bmp` 複製到 SD 卡的 `/.sleep/`（**放兩張以上才會輪播**），
@@ -375,21 +382,15 @@ core 裡，不是本專案能改的)，兩次建置就會差幾十個位元組�
 | 移除 | 原因 |
 |---|---|
 | English / 繁體中文以外的 **29 種 UI 語言** | 約 258 KB，換中文字型 |
-| **XTC 格式**支援(`.xtc` / `.xtch`) | X4 的原生預渲染格式，與 X3 的 EPUB 流程無關 |
 | **KOReader 進度同步** | 沒有伺服器可同步 |
 | **字典查詢**(StarDict) | 未使用 |
 | **OTA 線上更新** | 會指向原版的 release 把本分支蓋掉;**SD 卡韌體更新保留** |
-| **Classic / RoundedRaff 主題** | 字級與語系支援跟不上中文;留 Formosa 與 Formosa Extended |
+| **Classic / RoundedRaff 主題** | 字級與語系支援跟不上中文;留 Formosa、Formosa Extended 與 Formosa Pro |
 | **非英文的斷字表**（9 種語言） | 中文不斷字，約 323 KB |
 | **內建斜體字面** | 自動退回正體，約 544 KB |
 | 內建閱讀字型縮成**單一 14px 備援** | 只在沒有 SD 字型時用得到，約 373 KB |
-
-**保留原始碼但預設不編進去**:
-
-| 功能 | 狀態 |
-|---|---|
-| **SMB2 伺服器**（iOS「檔案」App 直接管理 SD 卡） | 預設關閉。功能可用且經實機驗證過完整的建立/寫入/改名/刪除，但體驗不夠好而下架。`platformio.ini` 把 `smb2` 那行取消註解即可編回來 |
-| **BLE 翻頁遙控器** | 預設關閉。NimBLE 連結進來就是約 27 KB 的固定成本，加上執行期需求會把閱讀用的記憶體吃掉、長章節開始掉字。要用得加 `-DCROSSMOSA_BLE` 編第二份韌體，細節寫在 `src/ble/BleRemoteManager.h` 的註解裡 |
+| **SMB2 伺服器**（iOS「檔案」App 直接管理 SD 卡） | 已移除。先前公開版預設就不編進發佈韌體；這一版連原始碼一併拿掉，無法再開編譯開關編回來。請改用網頁傳檔、Calibre、OPDS 或拔卡複製 |
+| **BLE 翻頁遙控器** | 已移除。發佈韌體本來就沒有；這一版原始碼也不再保留，無法自編加回 |
 
 **保留**:Calibre 無線推書（相容原版外掛生態）、網頁設定與傳檔、WebDAV、OPDS、
 傾斜翻頁、螢幕截圖、按鍵重配、待機畫面。
@@ -404,7 +405,7 @@ core 裡，不是本專案能改的)，兩次建置就會差幾十個位元組�
 - **刷機有風險，自負。** 刷第三方韌體可能讓裝置無法開機。務必留意安裝章的 USB-locked 注意事項、
   也就是說你有一條刷回官方韌體的路。
 - **與 Xteink 無關，與原版 CrossPoint 專案也無隸屬關係。** 兩者都不為這個分支負責。
-- **只在一台 X3 上測試過。** 沒有 X4，沒有第二台機器，沒有自動化的硬體測試。
+- **驗證主力是一台 UC8279 新批次 X3。** 舊批次（UC8253）目前沒有實機可測。沒有 X4，沒有自動化的硬體測試。
   很多改動的驗證方式就是「用了幾天沒出事」。
 - **沒有遙測。** 本韌體不會回報使用狀況給任何人。Wi-Fi 憑證、閱讀進度、書籤只存在你自己的
   SD 卡上(`/.crossmosa/`)。裝置只有在你主動要求時才連外:連 Wi-Fi 後對時(NTP)、
@@ -442,11 +443,11 @@ core 裡，不是本專案能改的)，兩次建置就會差幾十個位元組�
 **Finally, your X3 can read Traditional Chinese properly.**
 
 **Traditional-Chinese-focused firmware for the Xteink X3 e-reader**, based on
-[CrossPoint](https://github.com/crosspoint-reader/crosspoint-reader) 1.4.1.
+[CrossPoint](https://github.com/crosspoint-reader/crosspoint-reader) 1.5.0.
 
 ![CrossMosa on real hardware: Traditional Chinese home menu, serif body text, masterpiece sleep screen](docs/promo/hero-photo.jpg)
 
-Version: `1.2.0`
+Version: `2.0.0-rc.1` (pre-release)
 
 ## What it is
 
@@ -481,9 +482,18 @@ that upstream arduino-esp32 still carries**. See the [CHANGELOG](CHANGELOG.md) f
 - Out-of-memory guards throughout layout, hyphenation, image decoding, font cache and TLS —
   low memory degrades instead of rebooting.
 - OPDS improvements for large Chinese libraries; image/greyscale rendering roughly 2.4× faster;
-  browser-based file transfer; a reworked UI theme (Formosa).
+  browser-based file transfer; UI themes **Formosa**, **Formosa Extended**, and **Formosa Pro**
+  (Pro is new in this release). Newer X3 batches use a **UC8279** panel controller; this build
+  identifies it at boot. If your screen already updates normally, you do not need to flash.
 
 ## Install — you must do BOTH steps
+
+> **Newer X3 batches use a UC8279 display controller** (older batches use UC8253). Firmware 1.x
+> does not drive UC8279: after flashing, the screen may freeze on the “update complete” page
+> while the device is still running (a data directory appears on the SD card). Flash this build.
+> **If your screen already updates normally, you do not need to flash.** This release was
+> verified primarily on one newer-batch UC8279 X3; there is currently **no older-batch (UC8253)
+> unit available to test**.
 
 Flashing the firmware only fixes the **menus**. **Book text needs fonts on the SD card.**
 The built-in fallback reader font is Latin-only, so **without the SD fonts every Chinese book
@@ -513,7 +523,7 @@ renders as boxes (□□□□)**.
    **Settings → System → SD Card Firmware Update** — or
    the rescue combo (power off, hold the left side button, press power) straight into the
    SD firmware picker.
-2. **Copy the fonts** from `crossmosa-1.2.0-sd-fonts.zip` into `/.fonts/` on the SD card,
+2. **Copy the fonts** from `crossmosa-2.0.0-rc.1-sd-fonts.zip` into `/.fonts/` on the SD card,
    keeping one folder per family (`/.fonts/NotoSerifTC/…`). One family is enough;
    **NotoSerifTC** is the recommended first choice (22,219 Han, widest coverage).
    Folder names must not contain spaces.
@@ -526,7 +536,7 @@ First boot: the UI defaults to **Traditional Chinese** (this fork's whole point)
 **Settings → Reader → Reader Font Family** to pick the SD font. The device creates
 `/.crossmosa/` on the card for progress, bookmarks and Wi-Fi credentials — don't delete it.
 
-**Optional — sleep wallpapers.** `crossmosa-1.2.0-wallpapers.zip` holds **50 public-domain
+**Optional — sleep wallpapers.** `crossmosa-2.0.0-rc.1-wallpapers.zip` holds **50 public-domain
 masterpieces** from Wikimedia Commons, each individually checked and tuned for this panel's
 4 grey levels. Copy the `.bmp` files to `/.sleep/` on the SD card (two or more to rotate),
 then **Settings → Display → Sleep Screen → Custom**. The converter, the curation manifest and
@@ -573,13 +583,14 @@ Everything here stands on **CrossPoint** by **Dave Allie** and its contributors 
 use upstream rather than this fork.
 
 **Removed** (to reclaim flash for Chinese fonts): 29 UI languages beyond English and
-Traditional Chinese, XTC format support, KOReader progress sync, StarDict dictionary,
-the OTA updater (SD-card firmware update is kept), the Classic and RoundedRaff themes,
+Traditional Chinese, KOReader progress sync, StarDict dictionary,
+the OTA updater (SD-card firmware update is kept), the Classic and RoundedRaff themes
+(kept: **Formosa**, **Formosa Extended**, **Formosa Pro**),
 non-English hyphenation tables, built-in italic faces, and all but one built-in reader font size.
 
-**Present but disabled by default** (code still in the tree): the **SMB2 server** for the iOS
-Files app, and the **BLE page-turner remote** — the latter costs enough RAM that long chapters
-start dropping glyphs, and on this device reading wins.
+**Also removed from the tree** (not merely disabled; they cannot be compiled back in):
+the **SMB2 server** for the iOS Files app, and the **BLE page-turner remote**.
+Use browser file transfer, Calibre, OPDS, or copy files onto the SD card instead.
 
 ## ☕ If it made your X3 better
 
@@ -590,7 +601,8 @@ Issues for missing characters or bugs are welcome too.
 ## Disclaimer
 
 This project ships **no book content and no book sources** — bring your own legally obtained, DRM-free EPUBs (publisher or indie-store direct sales, public-domain libraries, your own documents). Support the authors. Flash at your own risk; third-party firmware can leave a device unbootable. Not affiliated
-with Xteink or upstream. Tested on exactly one X3 — much of the verification is "used it for
+with Xteink or upstream. Verified primarily on **one newer-batch UC8279 X3**; there is
+currently **no older-batch (UC8253) unit to test**, and no X4 — much of the verification is "used it for
 a few days and nothing broke". **No telemetry**: credentials, progress and bookmarks stay on
 your SD card, and the device only reaches the network when you ask it to (NTP after joining
 Wi-Fi, your own OPDS server, Calibre). The upstream OTA update check is removed, so this

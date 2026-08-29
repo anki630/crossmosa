@@ -52,8 +52,9 @@ void FileBrowserActivity::loadFiles() {
         if (FsHelpers::checkFileExtension(filename, ".bin")) {
           files.emplace_back(filename);
         }
-      } else if (FsHelpers::hasEpubExtension(filename) || FsHelpers::hasTxtExtension(filename) ||
-                 FsHelpers::hasMarkdownExtension(filename) || FsHelpers::hasBmpExtension(filename)) {
+      } else if (FsHelpers::hasEpubExtension(filename) || FsHelpers::hasXtcExtension(filename) ||
+                 FsHelpers::hasTxtExtension(filename) || FsHelpers::hasMarkdownExtension(filename) ||
+                 FsHelpers::hasBmpExtension(filename)) {
         files.emplace_back(filename);
       }
     }
@@ -204,8 +205,12 @@ void FileBrowserActivity::loop() {
 
   const int pathReserved = renderer.getLineHeight(UI_10_FONT_ID) + UITheme::getInstance().getMetrics().verticalSpacing;
   const int pageItems = UITheme::getNumberOfItemsPerPage(renderer, true, false, true, false, pathReserved);
+  const auto& metrics = UITheme::getInstance().getMetrics();
+  const int contentTop = metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
+  const int contentHeight =
+      renderer.getScreenHeight() - contentTop - metrics.buttonHintsHeight - metrics.verticalSpacing - pathReserved;
 
-  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+  auto activateSelected = [this] {
     if (lockNextConfirmRelease) {
       lockNextConfirmRelease = false;
       return;
@@ -233,6 +238,11 @@ void FileBrowserActivity::loop() {
       const std::string fullPath = cleanBasePath + entry;
 
       auto handler = [this, fullPath](const ActivityResult& res) {
+        // The confirmation popup acts on button press; if that button is still
+        // held when we resume, swallow its release so it doesn't also act here
+        // (Back would go up a directory, Confirm would open the selection).
+        lockLongPressBack = mappedInput.isPressed(MappedInputManager::Button::Back);
+        lockNextConfirmRelease = mappedInput.isPressed(MappedInputManager::Button::Confirm);
         if (!res.isCancelled) {
           LOG_DBG("FileBrowser", "Attempting to delete: %s", fullPath.c_str());
           if (removeDirFile(fullPath)) {
@@ -272,6 +282,19 @@ void FileBrowserActivity::loop() {
       }
     }
     return;
+  };
+
+  int touchSel = static_cast<int>(selectorIndex);
+  const auto listTouch = handleListTouch(touchSel, static_cast<int>(files.size()), contentTop, contentHeight, false);
+  if (listTouch != ListTouchResult::None) {
+    selectorIndex = static_cast<size_t>(touchSel);
+    if (listTouch == ListTouchResult::Activated) activateSelected();
+    return;
+  }
+
+  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+    activateSelected();
+    return;
   }
 
   if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
@@ -302,6 +325,18 @@ void FileBrowserActivity::loop() {
   }
 
   int listSize = static_cast<int>(files.size());
+  const auto swipe = mappedInput.wasSwipe();
+  if (swipe == MappedInputManager::SwipeDir::Up) {
+    selectorIndex = ButtonNavigator::nextPageIndexClamped(static_cast<int>(selectorIndex), listSize, pageItems);
+    requestUpdate();
+    return;
+  }
+  if (swipe == MappedInputManager::SwipeDir::Down) {
+    selectorIndex = ButtonNavigator::previousPageIndexClamped(static_cast<int>(selectorIndex), listSize, pageItems);
+    requestUpdate();
+    return;
+  }
+
   buttonNavigator.onNextRelease([this, listSize] {
     selectorIndex = ButtonNavigator::nextIndex(static_cast<int>(selectorIndex), listSize);
     requestUpdate();
@@ -354,26 +389,16 @@ void FileBrowserActivity::render(RenderLock&&) {
       (mode == Mode::PickFirmware)
           ? std::string(tr(STR_SELECT_FIRMWARE_FILE))
           : ((basepath == "/") ? std::string(tr(STR_SD_CARD)) : basepath.substr(basepath.rfind('/') + 1));
+  GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.headerHeight}, folderName.c_str());
+
   const int pathLineHeight = renderer.getLineHeight(UI_10_FONT_ID);
   const int pathReserved = pathLineHeight + metrics.verticalSpacing;
-  // 頁碼副標(pageItems 與 loop :206 同式,含底部路徑列的保留高度)
-  const std::string pageText = UITheme::pageIndicatorText(
-      static_cast<int>(selectorIndex), static_cast<int>(files.size()),
-      UITheme::getNumberOfItemsPerPage(renderer, true, false, true, false, pathReserved));
-  GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.headerHeight}, folderName.c_str(),
-                 pageText.empty() ? nullptr : pageText.c_str());
   const int contentTop = metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
   const int contentHeight =
       pageHeight - contentTop - metrics.buttonHintsHeight - metrics.verticalSpacing - pathReserved;
   if (files.empty()) {
-    // 空狀態:置中兩級字;書籍模式附「下一步」提示,挑韌體模式只留主句
     const char* emptyMsg = (mode == Mode::PickFirmware) ? tr(STR_NO_BIN_FILES) : tr(STR_NO_FILES_FOUND);
-    const int midY = contentTop + contentHeight / 2;
-    renderer.drawCenteredText(UI_12_FONT_ID, midY - renderer.getLineHeight(UI_12_FONT_ID) - 2, emptyMsg, true,
-                              EpdFontFamily::BOLD);
-    if (mode != Mode::PickFirmware) {
-      renderer.drawCenteredText(UI_10_FONT_ID, midY + 2, tr(STR_UPLOAD_HINT));
-    }
+    renderer.drawText(UI_10_FONT_ID, metrics.contentSidePadding, contentTop + 20, emptyMsg);
   } else {
     GUI.drawList(
         renderer, Rect{0, contentTop, pageWidth, contentHeight}, files.size(), selectorIndex,

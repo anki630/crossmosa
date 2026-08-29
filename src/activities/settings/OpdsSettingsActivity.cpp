@@ -48,6 +48,20 @@ void OpdsSettingsActivity::onEnter() {
 void OpdsSettingsActivity::onExit() { Activity::onExit(); }
 
 void OpdsSettingsActivity::loop() {
+  const auto& metrics = UITheme::getInstance().getMetrics();
+  const int contentTop = metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing + metrics.tabBarHeight;
+  const int contentHeight =
+      renderer.getScreenHeight() - contentTop - metrics.buttonHintsHeight - metrics.verticalSpacing * 2;
+  const int menuItems = getMenuItemCount();
+
+  int touchSel = static_cast<int>(selectedIndex);
+  const auto listTouch = handleListTouch(touchSel, menuItems, contentTop, contentHeight, false);
+  if (listTouch != ListTouchResult::None) {
+    selectedIndex = static_cast<size_t>(touchSel);
+    if (listTouch == ListTouchResult::Activated) handleSelection();
+    return;
+  }
+
   if (mappedInput.wasPressed(MappedInputManager::Button::Back)) {
     finish();
     return;
@@ -58,7 +72,6 @@ void OpdsSettingsActivity::loop() {
     return;
   }
 
-  const int menuItems = getMenuItemCount();
   buttonNavigator.onNext([this, menuItems] {
     selectedIndex = (selectedIndex + 1) % menuItems;
     requestUpdate();
@@ -174,7 +187,9 @@ void OpdsSettingsActivity::render(RenderLock&&) {
   const auto& metrics = UITheme::getInstance().getMetrics();
   const auto pageWidth = renderer.getScreenWidth();
   const auto pageHeight = renderer.getScreenHeight();
-  const char* header = isNewServer ? tr(STR_ADD_SERVER) : tr(STR_EDIT_SERVER);
+  // Reuse STR_OPDS_BROWSER as the "edit existing server" title.
+  // New server creation uses STR_ADD_SERVER.
+  const char* header = isNewServer ? tr(STR_ADD_SERVER) : tr(STR_OPDS_BROWSER);
   GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.headerHeight}, header);
   GUI.drawSubHeader(renderer, Rect{0, metrics.topPadding + metrics.headerHeight, pageWidth, metrics.tabBarHeight},
                     tr(STR_CALIBRE_URL_HINT));

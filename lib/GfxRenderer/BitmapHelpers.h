@@ -1,11 +1,14 @@
 #pragma once
 
-#include <new>  // v57:std::nothrow
-
 #include <cstdint>
 #include <cstring>
+#include <new>
 
 struct BmpHeader;
+
+// v194：抖動器配置失敗的證人（先到先得）。src 讀走寫成 ALLOCFAIL。
+extern char ditherLastAllocFail[96];
+void noteDitherAllocFail(const char* where, size_t bytes);
 
 // Helper functions
 uint8_t quantize(int gray, int x, int y);
@@ -26,14 +29,12 @@ void createBmpHeader(BmpHeader* bmpHeader, int width, int height, BmpRowOrder ro
 class Atkinson1BitDitherer {
  public:
   explicit Atkinson1BitDitherer(int width) : width(width) {
-    errorRow0 = new (std::nothrow) int16_t[width + 4]();  // Current row
-    errorRow1 = new (std::nothrow) int16_t[width + 4]();  // Next row
-    errorRow2 = new (std::nothrow) int16_t[width + 4]();  // Row after next
+    // v194：error row 是 throwing new[] 會 abort；配不到就 ok()=false，呼叫端改走無抖動量化。
+    const size_t n = static_cast<size_t>(width) + 4;
+    errorRow0 = new (std::nothrow) int16_t[n]();
+    errorRow1 = new (std::nothrow) int16_t[n]();
+    errorRow2 = new (std::nothrow) int16_t[n]();
   }
-
-  // v57:建構子裡的陣列配置改成 nothrow,所以【建構成功不等於可用】。
-  // -fno-exceptions 下裸 new 失敗會直接 abort(),呼叫端對物件本身的 null 檢查
-  // 完全擋不到這裡;必須建構後再問一次 ok()。
   bool ok() const { return errorRow0 && errorRow1 && errorRow2; }
 
   ~Atkinson1BitDitherer() {
@@ -98,9 +99,9 @@ class Atkinson1BitDitherer {
 
  private:
   int width;
-  int16_t* errorRow0;
-  int16_t* errorRow1;
-  int16_t* errorRow2;
+  int16_t* errorRow0 = nullptr;
+  int16_t* errorRow1 = nullptr;
+  int16_t* errorRow2 = nullptr;
 };
 
 // Atkinson dithering - distributes only 6/8 (75%) of error for cleaner results
@@ -112,14 +113,12 @@ class Atkinson1BitDitherer {
 class AtkinsonDitherer {
  public:
   explicit AtkinsonDitherer(int width) : width(width) {
-    errorRow0 = new (std::nothrow) int16_t[width + 4]();  // Current row
-    errorRow1 = new (std::nothrow) int16_t[width + 4]();  // Next row
-    errorRow2 = new (std::nothrow) int16_t[width + 4]();  // Row after next
+    // v194：見 Atkinson1BitDitherer。三列 error row，配不到任一列就當失敗。
+    const size_t n = static_cast<size_t>(width) + 4;
+    errorRow0 = new (std::nothrow) int16_t[n]();
+    errorRow1 = new (std::nothrow) int16_t[n]();
+    errorRow2 = new (std::nothrow) int16_t[n]();
   }
-
-  // v57:建構子裡的陣列配置改成 nothrow,所以【建構成功不等於可用】。
-  // -fno-exceptions 下裸 new 失敗會直接 abort(),呼叫端對物件本身的 null 檢查
-  // 完全擋不到這裡;必須建構後再問一次 ok()。
   bool ok() const { return errorRow0 && errorRow1 && errorRow2; }
 
   ~AtkinsonDitherer() {
@@ -202,9 +201,9 @@ class AtkinsonDitherer {
 
  private:
   int width;
-  int16_t* errorRow0;
-  int16_t* errorRow1;
-  int16_t* errorRow2;
+  int16_t* errorRow0 = nullptr;
+  int16_t* errorRow1 = nullptr;
+  int16_t* errorRow2 = nullptr;
 };
 
 // Floyd-Steinberg error diffusion dithering with serpentine scanning
@@ -218,13 +217,11 @@ class AtkinsonDitherer {
 class FloydSteinbergDitherer {
  public:
   explicit FloydSteinbergDitherer(int width) : width(width), rowCount(0) {
-    errorCurRow = new (std::nothrow) int16_t[width + 2]();  // +2 for boundary handling
-    errorNextRow = new (std::nothrow) int16_t[width + 2]();
+    // v194：見 Atkinson1BitDitherer。兩列 error row。
+    const size_t n = static_cast<size_t>(width) + 2;
+    errorCurRow = new (std::nothrow) int16_t[n]();
+    errorNextRow = new (std::nothrow) int16_t[n]();
   }
-
-  // v57:建構子裡的陣列配置改成 nothrow,所以【建構成功不等於可用】。
-  // -fno-exceptions 下裸 new 失敗會直接 abort(),呼叫端對物件本身的 null 檢查
-  // 完全擋不到這裡;必須建構後再問一次 ok()。
   bool ok() const { return errorCurRow && errorNextRow; }
 
   ~FloydSteinbergDitherer() {
@@ -334,6 +331,6 @@ class FloydSteinbergDitherer {
  private:
   int width;
   int rowCount;
-  int16_t* errorCurRow;
-  int16_t* errorNextRow;
+  int16_t* errorCurRow = nullptr;
+  int16_t* errorNextRow = nullptr;
 };

@@ -72,6 +72,7 @@ class CrossPointWebServer {
   std::unique_ptr<WebServer> server = nullptr;
   std::unique_ptr<WebSocketsServer> wsServer = nullptr;
   bool running = false;
+  bool watchdogTaskRegistered = false;
   bool apMode = false;  // true when running in AP mode, false for STA mode
   uint16_t port = 80;
   uint16_t wsPort = 81;  // WebSocket port
@@ -90,6 +91,7 @@ class CrossPointWebServer {
 
   // Request handlers
   void handleRoot() const;
+  void handleJszip() const;
   void handleNotFound() const;
   void handleStatus() const;
   void handleFileList() const;
@@ -109,7 +111,6 @@ class CrossPointWebServer {
 
   // Font management handlers
   void handleFontsPage() const;
-  void handleJszip() const;
   void handleFontList() const;
   void handleFontUpload();
   void handleFontUploadData();
