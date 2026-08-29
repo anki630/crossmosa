@@ -225,7 +225,7 @@ SD 卡根目錄
 
 代表更新器有啟動，是後半段沒過。依序檢查:
 
-1. **檔案大小是否恰為 TBD-AFTER-BUILD bytes、sha256 是否為 TBD-AFTER-BUILD**（v2.0.0-rc.1）——九成的問題在這:
+1. **檔案大小是否恰為 6,143,920 bytes、sha256 是否為 af4aa5f432d7ca3cd6ee2f9bbf13588f06b094c5bf48344685e5377fc85870f8**（v2.0.0-rc.1）——九成的問題在這:
    下載不完整、瀏覽器存成 `update (1).bin`、Windows 隱藏副檔名變成
    `update.bin.bin`、誤放整個 zip 沒解壓，**或 SD 卡上殘留著一顆舊的
    `update.bin`**（更新器抓到的是舊檔——社群實例，換上正確的檔就成功了）。
