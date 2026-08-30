@@ -12,7 +12,7 @@
 [主要特色]（#主要特色相對原版） ·
 [字集限制]（#ui-字型的字集限制請先讀這段） ·
 [與原版的差異]（#與原版-crosspoint-的關係） ·
-[下載 2.0.0-rc.1（新版）](https://github.com/anki630/crossmosa/releases/tag/v2.0.0-rc.1) · [下載 1.2.0（穩定版）](https://github.com/anki630/crossmosa/releases/latest) ·
+[下載 2.0](https://github.com/anki630/crossmosa/releases/tag/v2.0.0-rc.1) ·
 [English](#crossmosa-english)
 
 ![CrossMosa 實機照:全繁中主畫面、明體內文、名畫待機](docs/promo/hero-photo.jpg)
@@ -58,7 +58,14 @@ Wi-Fi 連線當機**，這裡先修掉了（細節見 CHANGELOG 的 1.0.0 節）
 
 ## 這是什麼
 
-版本:[`2.0.0-rc.1`](https://github.com/anki630/crossmosa/releases/tag/v2.0.0-rc.1)（**預發布／pre-release** —— GitHub 的「Latest」仍是 1.2.0，所以請用左邊這個連結，不要用 Releases 頁面最上面的那顆按鈕）
+版本:[`2.0.0-rc.1`](https://github.com/anki630/crossmosa/releases/tag/v2.0.0-rc.1)（預發布／pre-release —— GitHub 的「Latest」仍是 1.2.0，請用左邊這個連結）
+
+**我該刷哪一版？**
+
+| | |
+|---|---|
+| **第一次刷，或不確定自己的機器是哪一批** | **刷 2.0.0-rc.1。** 韌體會自動辨識螢幕晶片，新舊批次都認得。反過來刷 1.x 才是賭博——新批次刷上去畫面就不會再更新了 |
+| **已經在用 1.0／1.1／1.2** | 你的機器是舊批次（不然當初刷不起來）。想升就升，換章、翻頁、圖片顯示都有改進；想留在驗證比較久的版本，[1.2.0](https://github.com/anki630/crossmosa/releases/latest) 還在 |
 
 > **2.0.0-rc.1 做了什麼**：新一批次 X3 換了面板控制器 **UC8279**，舊韌體刷上去畫面不會更新——
 > 這一版會在開機自動辨識控制器並驅動它，新舊批次都認得。基底對齊 **CrossPoint 1.5.0**。
