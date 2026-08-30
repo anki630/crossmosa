@@ -58,7 +58,7 @@ Wi-Fi 連線當機**，這裡先修掉了（細節見 CHANGELOG 的 1.0.0 節）
 
 ## 這是什麼
 
-版本:`2.0.0-rc.1`（預發布／pre-release）
+版本:[`2.0.0-rc.1`](https://github.com/anki630/crossmosa/releases/tag/v2.0.0-rc.1)（**預發布／pre-release** —— GitHub 的「Latest」仍是 1.2.0，所以請用左邊這個連結，不要用 Releases 頁面最上面的那顆按鈕）
 
 > **2.0.0-rc.1 做了什麼**：新一批次 X3 換了面板控制器 **UC8279**，舊韌體刷上去畫面不會更新。
 > 這一版會在開機辨識控制器並驅動它，基底對齊 **CrossPoint 1.5.0**。
@@ -295,8 +295,9 @@ SD 韌體選擇畫面（救援模式）——這條路只要機器上還是 Cros
 
 ### 待機壁紙（選配）
 
-[Release](../../releases) 另附 `crossmosa-2.0.0-rc.1-wallpapers.zip`：**50 張世界名畫**，
+[Release](../../releases) 另附壁紙包：**50 張世界名畫**，
 全部取自 Wikimedia Commons 的公共領域作品，每一張都為 X3 這塊 4 階灰階面板挑過、裁過、調過。
+⚠️ 2.0.0-rc.1 沒有重新打包壁紙，請用 [1.2.0](https://github.com/anki630/crossmosa/releases/tag/v1.2.0) 的 `crossmosa-1.2.0-wallpapers.zip`，內容相同。
 
 把 `.bmp` 複製到 SD 卡的 `/.sleep/`（**放兩張以上才會輪播**），
 然後 **設定 → 顯示 → 待機畫面 → 自訂**。
