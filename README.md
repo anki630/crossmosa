@@ -8,10 +8,10 @@
 
 **快速前往:**
 [**這一版更新了什麼**](CHANGELOG.md) ·
-[安裝]（#安裝） ·
-[主要特色]（#主要特色相對原版） ·
-[字集限制]（#ui-字型的字集限制請先讀這段） ·
-[與原版的差異]（#與原版-crosspoint-的關係） ·
+[安裝](#安裝) ·
+[主要特色](#主要特色相對原版) ·
+[字集限制](#ui-字型的字集限制請先讀這段) ·
+[與原版的差異](#與原版-crosspoint-的關係) ·
 [下載 2.0](https://github.com/anki630/crossmosa/releases/tag/v2.0.0-rc.1) ·
 [English](#crossmosa-english)
 
