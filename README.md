@@ -144,6 +144,26 @@ CrossMosa 是下班後的個人專案。如果它讓你的 X3 變好用了，幾
 3. **最壞的情況是機器救不回來。** 已經有使用者的機器變成磚，**照著救援程序也沒救回來**。
    救援是一條可能有用的路，不是保險。刷之前先假設這台機器可能就這樣沒了，你仍然願意，再開始。
 
+<a id="screen-halted"></a>
+
+### 螢幕已經不會更新了怎麼辦
+
+**先講清楚：韌體會自動辨識面板控制器，你不需要知道自己是哪一批。** 同一份 2.0 韌體
+在 UC8253 與 UC8279 上都會自己認出來，刷之前不用查、不用選。
+
+如果你**先前刷了 1.x、畫面從此停住**，機器多半還活著（放一張空白 SD 卡進去，它仍會寫出資料目錄），
+只是舊韌體不會驅動新控制器。已經有使用者用下面的方式把畫面救回來：
+
+1. SD 卡根目錄**只放一個** `update.bin`（本版的即可）。
+2. 進入 Recovery Mode。**螢幕不會有任何畫面**，全程盲操作，只能用數秒的。
+3. 依序按：**選擇鍵 → 下一頁**。**鍵與鍵之間間隔久一點。**
+
+**時機很難抓，多試幾次。** 有人試了很多次才成功；每次之間讓機器完全斷電再重來。
+按錯不會讓情況更糟，但也**不保證每台都救得回來**——已經有使用者照著做仍然沒救回。
+
+線索與討論串：[本專案 issue #2](https://github.com/anki630/crossmosa/issues/2) · [CrossInk discussions #479](https://github.com/uxjulia/CrossInk/discussions/479)
+（救援步驟由使用者 @sk5s 回報，維護者未在自己的機器上重現過。）
+
 ### ⚠️ 一定要做兩件事，少做一件，中文書就是滿頁方塊
 
 刷韌體**只解決介面**。**書的內文字型不在韌體裡**，它在 SD 卡上。
@@ -542,6 +562,29 @@ that upstream arduino-esp32 still carries**. See the [CHANGELOG](CHANGELOG.md) f
 > the worst case — **which is losing the device.** Users have bricked units, and **the rescue
 > procedure has failed for some of them too.** Rescue is a path that *may* work, not insurance.
 > Assume the device might not come back, and only proceed if you still accept that.
+>
+> <a id="screen-halted-en"></a>
+>
+> ### If your screen has already stopped updating
+>
+> **The firmware detects the panel controller automatically** — you do not need to know which
+> batch your unit is. The same 2.0 build recognises both UC8253 and UC8279.
+>
+> If you flashed 1.x and the screen froze, the device is most likely still running (put a blank
+> SD card in and it still writes a data directory); the old firmware simply never drives the new
+> controller. Users have recovered theirs like this:
+>
+> 1. Keep **only one** `update.bin` in the SD card root (this release's is fine).
+> 2. Enter Recovery Mode. **There is no display at all** — the whole thing is done blind, timed
+>    by counting seconds.
+> 3. Press, in order: **Select → Next page**, leaving a generous pause between the two.
+>
+> **The timing is hard to hit, so try several times**, fully powering the device down between
+> attempts. Getting it wrong does not make things worse, but it is **not guaranteed to work** —
+> some users have followed these steps and still not recovered their device.
+>
+> Threads: [issue #2](https://github.com/anki630/crossmosa/issues/2) · [CrossInk discussions #479](https://github.com/uxjulia/CrossInk/discussions/479)
+> (Procedure reported by @sk5s; not reproduced on the maintainer's own hardware.)
 
 Flashing the firmware only fixes the **menus**. **Book text needs fonts on the SD card.**
 The built-in fallback reader font is Latin-only, so **without the SD fonts every Chinese book
