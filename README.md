@@ -154,17 +154,41 @@ CrossMosa 是下班後的個人專案。如果它讓你的 X3 變好用了，幾
 在 UC8253 與 UC8279 上都會自己認出來，刷之前不用查、不用選。
 
 如果你**先前刷了 1.x、畫面從此停住**，機器多半還活著（放一張空白 SD 卡進去，它仍會寫出資料目錄），
-只是舊韌體不會驅動新控制器。已經有使用者用下面的方式把畫面救回來：
+只是舊韌體不會驅動新控制器。已經有使用者救回來了，下面是他們回報可行的做法。
 
-1. SD 卡根目錄**只放一個** `update.bin`（本版的即可）。
-2. 進入 Recovery Mode。**螢幕不會有任何畫面**，全程盲操作，只能用數秒的。
-3. 依序按：**選擇鍵 → 下一頁**。**鍵與鍵之間間隔久一點。**
+⚠️ **這套程序維護者沒有在自己的機器上重現過**，來源是 [CrossInk discussions #479](https://github.com/uxjulia/CrossInk/discussions/479)
+與[本專案 issue #2](https://github.com/anki630/crossmosa/issues/2)（步驟由 @sk5s 回報）。按鍵名稱是依本專案的實體按鍵對照表換算的，
+**原文用的是示意圖編號**，對不上時請以原文的圖為準。
 
-**時機很難抓，多試幾次。** 有人試了很多次才成功；每次之間讓機器完全斷電再重來。
-按錯不會讓情況更糟，但也**不保證每台都救得回來**——已經有使用者照著做仍然沒救回。
+**準備**
 
-線索與討論串：[本專案 issue #2](https://github.com/anki630/crossmosa/issues/2) · [CrossInk discussions #479](https://github.com/uxjulia/CrossInk/discussions/479)
-（救援步驟由使用者 @sk5s 回報，維護者未在自己的機器上重現過。）
+1. 把 SD 卡**重新格式化**成 FAT32 或 exFAT。
+2. 根目錄放**原廠韌體**的 `.bin`（不是本專案的 `update.bin`）——原文附有下載連結。不必改名。
+3. 插回機器，**讓它睡上幾分鐘**。
+
+**進入 Recovery（全程沒有畫面，只能數秒）**
+
+4. 按住**左側邊的「上一頁」鍵**，同時按住**右上角的電源鍵**，兩顆一起按住**約 7 秒**。
+   先放開「上一頁」，電源鍵**再多按 1 秒**才放開。
+5. **等 30 秒**，讓救援模式與檔案選擇器啟動。**螢幕不會有任何反應，這是正常的。**
+
+**選檔並刷入**
+
+6. 按一次**確認鍵**（正面下緣）。
+7. **等 2 分鐘。**
+8. 按原文的 **Button 8**，再按一次**確認鍵**。
+9. **等 2 分鐘。**
+10. 再按一次**確認鍵**。若沒有動靜，**再等 3 分鐘**，然後按 Button 8 或「上一頁」。
+
+**注意事項**
+
+- **刷寫期間什麼都不要做。**
+- **時機很難抓，多試幾次。** 有人試了很多次才成功。
+- 想確認機器是不是還活著：按**電源＋右側邊的「下一頁」**（截圖組合鍵），成功的話 SD 卡上會多出截圖檔。
+- 還是凍住的話：按**左上角的重置鍵**，長按電源 5 秒，**等 5 分鐘**再從頭來一次。
+- 按錯不會讓情況更糟，但**也不保證每台都救得回來**——已經有使用者照著做仍然沒救回。
+
+畫面回來之後，就可以照上面的方式刷本版了。
 
 ### ⚠️ 一定要做兩件事，少做一件，中文書就是滿頁方塊
 
@@ -577,16 +601,30 @@ that upstream arduino-esp32 still carries**. See the [CHANGELOG](CHANGELOG.md) f
 >
 > If you flashed 1.x and the screen froze, the device is most likely still running (put a blank
 > SD card in and it still writes a data directory); the old firmware simply never drives the new
-> controller. Users have recovered theirs like this:
+> controller. Users have recovered theirs with the procedure below.
 >
-> 1. Keep **only one** `update.bin` in the SD card root (this release's is fine).
-> 2. Enter Recovery Mode. **There is no display at all** — the whole thing is done blind, timed
->    by counting seconds.
-> 3. Press, in order: **Select → Next page**, leaving a generous pause between the two.
+> ⚠️ **The maintainer has not reproduced this on their own hardware.** Source: the threads below.
+> Button names are translated from this project's verified physical layout; **the original uses
+> numbers from a diagram** — when in doubt, follow the diagram in the original.
 >
-> **The timing is hard to hit, so try several times**, fully powering the device down between
-> attempts. Getting it wrong does not make things worse, but it is **not guaranteed to work** —
-> some users have followed these steps and still not recovered their device.
+> **Prepare:** reformat the SD card to FAT32/exFAT; put the **stock firmware** `.bin` in the root
+> (not this project's `update.bin` — the original links to it); insert it and let the device sleep
+> for a few minutes.
+>
+> **Enter recovery (there is no display at any point):** hold the **Previous-page button on the
+> left edge** and the **Power button** together for **about 7 seconds**; release Previous-page
+> first, hold Power **one more second**, then release. **Wait 30 seconds** for recovery and the
+> file picker to come up.
+>
+> **Select and flash:** press **Confirm** once → **wait 2 minutes** → press the original's
+> **Button 8**, then **Confirm** → **wait 2 minutes** → press **Confirm** again. If nothing
+> happens, wait **3 more minutes** and press Button 8 or Previous-page.
+>
+> **Notes:** do nothing while it is flashing; **the timing is hard to hit, so try several times**;
+> to check the device is alive, press **Power + Next-page** (the screenshot combo) and look for a
+> screenshot file on the SD card; if it is still frozen, press **Reset** (top-left), hold Power for
+> 5 seconds, **wait 5 minutes** and start over. Getting it wrong does not make things worse, but it
+> is **not guaranteed to work** — some users have followed these steps and still not recovered.
 >
 > Threads: [issue #2](https://github.com/anki630/crossmosa/issues/2) · [CrossInk discussions #479](https://github.com/uxjulia/CrossInk/discussions/479)
 > (Procedure reported by @sk5s; not reproduced on the maintainer's own hardware.)
