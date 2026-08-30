@@ -12,7 +12,7 @@
 [主要特色]（#主要特色相對原版） ·
 [字集限制]（#ui-字型的字集限制請先讀這段） ·
 [與原版的差異]（#與原版-crosspoint-的關係） ·
-[下載](https://github.com/anki630/crossmosa/releases/latest) ·
+[下載 2.0.0-rc.1（新版）](https://github.com/anki630/crossmosa/releases/tag/v2.0.0-rc.1) · [下載 1.2.0（穩定版）](https://github.com/anki630/crossmosa/releases/latest) ·
 [English](#crossmosa-english)
 
 ![CrossMosa 實機照:全繁中主畫面、明體內文、名畫待機](docs/promo/hero-photo.jpg)
@@ -60,9 +60,9 @@ Wi-Fi 連線當機**，這裡先修掉了（細節見 CHANGELOG 的 1.0.0 節）
 
 版本:[`2.0.0-rc.1`](https://github.com/anki630/crossmosa/releases/tag/v2.0.0-rc.1)（**預發布／pre-release** —— GitHub 的「Latest」仍是 1.2.0，所以請用左邊這個連結，不要用 Releases 頁面最上面的那顆按鈕）
 
-> **2.0.0-rc.1 做了什麼**：新一批次 X3 換了面板控制器 **UC8279**，舊韌體刷上去畫面不會更新。
-> 這一版會在開機辨識控制器並驅動它，基底對齊 **CrossPoint 1.5.0**。
-> SMB 檔案分享與 BLE 翻頁遙控器已移除（原始碼也不再保留）。畫面已經正常的機器**沒必要刷**。
+> **2.0.0-rc.1 做了什麼**：新一批次 X3 換了面板控制器 **UC8279**，舊韌體刷上去畫面不會更新——
+> 這一版會在開機自動辨識控制器並驅動它，新舊批次都認得。基底對齊 **CrossPoint 1.5.0**。
+> 另外換章從十秒級降到一兩秒、翻頁更順、清除快取可以保留閱讀進度。
 > 完整說明見 [CHANGELOG](CHANGELOG.md)。
 
 CrossMosa 是原版 [CrossPoint](https://github.com/crosspoint-reader/crosspoint-reader)（本分支的來源專案，開發圈慣稱 upstream）的繁體中文分支。
@@ -156,9 +156,9 @@ CrossMosa 是下班後的個人專案。如果它讓你的 X3 變好用了，幾
 如果你**先前刷了 1.x、畫面從此停住**，機器多半還活著（放一張空白 SD 卡進去，它仍會寫出資料目錄），
 只是舊韌體不會驅動新控制器。已經有使用者救回來了，下面是他們回報可行的做法。
 
-⚠️ **這套程序維護者沒有在自己的機器上重現過**，來源是 [CrossInk discussions #479](https://github.com/uxjulia/CrossInk/discussions/479)
-與[本專案 issue #2](https://github.com/anki630/crossmosa/issues/2)（步驟由 @sk5s 回報）。按鍵名稱是依本專案的實體按鍵對照表換算的，
-**原文用的是示意圖編號**，對不上時請以原文的圖為準。
+來源：[CrossInk discussions #479](https://github.com/uxjulia/CrossInk/discussions/479)
+與[本專案 issue #2](https://github.com/anki630/crossmosa/issues/2)（步驟由 @sk5s 回報）。
+按鍵名稱是依本專案的實體按鍵對照表換算的，**原文用的是示意圖編號**，對不上時請以原文的圖為準。
 
 **準備**
 
@@ -603,9 +603,9 @@ that upstream arduino-esp32 still carries**. See the [CHANGELOG](CHANGELOG.md) f
 > SD card in and it still writes a data directory); the old firmware simply never drives the new
 > controller. Users have recovered theirs with the procedure below.
 >
-> ⚠️ **The maintainer has not reproduced this on their own hardware.** Source: the threads below.
-> Button names are translated from this project's verified physical layout; **the original uses
-> numbers from a diagram** — when in doubt, follow the diagram in the original.
+> Source: the threads linked below. Button names are translated from this project's verified
+> physical layout; **the original uses numbers from a diagram** — when in doubt, follow the
+> diagram in the original.
 >
 > **Prepare:** reformat the SD card to FAT32/exFAT; put the **stock firmware** `.bin` in the root
 > (not this project's `update.bin` — the original links to it); insert it and let the device sleep
