@@ -128,8 +128,10 @@ CrossMosa 是下班後的個人專案。如果它讓你的 X3 變好用了，幾
 機器還在跑，只是舊韌體不會驅動新控制器。上游在
 [#2707](https://github.com/crosspoint-reader/crosspoint-reader/pull/2707) 加入偵測、收在 1.5.0，本版包含它。
 
-**畫面已經正常更新的機器沒必要刷。** 這一版的驗證主力是一台 UC8279 新批次機器；
-舊批次（UC8253）目前沒有實機可以測試。
+**如果你想試試，很歡迎。** 換章從十秒級降到一兩秒、翻頁更順、圖片顯示更穩、清除快取可以保留閱讀進度——
+這一版累積的改進不少。它是預發布版，所以請先讀完這一段再開始；除此之外，想嚐鮮就試吧。
+
+（這一版的驗證主力是一台 UC8279 新批次機器；舊批次（UC8253）目前沒有實機可以測試。）
 
 **但仍然不保證每一台都成功。** 面板控制器是已知的原因之一，不是唯一的。
 **e-ink 會保留殘影，所以「畫面上有東西」不代表機器還活著**；反過來，韌體也可能正常執行，
@@ -544,9 +546,12 @@ that upstream arduino-esp32 still carries**. See the [CHANGELOG](CHANGELOG.md) f
 > [#2707](https://github.com/crosspoint-reader/crosspoint-reader/pull/2707), shipped in 1.5.0;
 > this build includes it.
 >
-> **If your screen already updates normally, you do not need to flash.** This release was
-> verified primarily on one newer-batch UC8279 unit; there is currently **no older-batch
-> (UC8253) unit available to test**.
+> **If you want to try it, please do.** Chapter switches drop from ~10 s to a second or two,
+> page turns are smoother, images are more reliable, and clearing the cache can now keep your
+> reading positions. It is a pre-release, so read this section first — beyond that, go ahead.
+>
+> (Verified primarily on one newer-batch UC8279 unit; there is currently **no older-batch
+> (UC8253) unit available to test**.)
 >
 > **It is still not guaranteed to work on every device.** The panel controller is one known
 > cause, not the only one. **E-ink retains its last image, so "something is on screen" does not
