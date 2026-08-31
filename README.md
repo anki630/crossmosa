@@ -274,22 +274,27 @@ SD 卡根目錄
     │   ├── NotoSerifTC_20.cpfont
     │   └── NotoSerifTC_22.cpfont
     ├── NotoSansTC/           ← 黑體
-    └── Iansui/               ← 硬筆楷書
+    ├── Iansui/               ← 硬筆楷書
+    └── GuanKiapTsingKhai-90/ ← 楷書·直排用
 ```
 
 | 字型 | 風格 | 漢字涵蓋 | 大小 | 說明 |
 |---|---|---|---|---|
-| **NotoSerifTC** | 明體 | **22,219（全部）** | 66 MB | 涵蓋最完整，罕用字最不會方塊 |
-| **NotoSansTC** | 黑體 | 16,317 | 47 MB | 有粗體，1-bit 下筆畫最穩 |
-| **Iansui** 芫荽 | 硬筆楷書 | 5,366（常用字） | 7.8 MB | 只有 Regular;罕用字會方塊 |
-| IBMPlexSansTC | 黑體 | 約 16,000 | 37 MB | 保留的舊選項，字級是 14/16/18/20 |
+| **NotoSerifTC** | 明體 | 20,992（完整） | 65 MB | 建議先裝這套 |
+| **NotoSansTC** | 黑體 | 20,976（完整） | 64 MB | 有粗體，1-bit 下筆畫最穩 |
+| **Iansui** 芫荽 | 硬筆楷書 | 20,992（完整） | 31 MB | 只有 Regular（粗體會退回一般字） |
+| **GuanKiapTsingKhai-90** 原俠正楷 | 楷書·**偽直排** | 20,992（完整） | 30 MB | 字形預先轉了 90 度，見下 |
+| IBMPlexSansTC | 黑體 | 20,976（完整） | 62 MB | 保留的舊選項 |
 
-**只裝一套也可以**——空間有限就先裝 `NotoSerifTC`。
-四套全裝約 157 MB，不影響 RAM（字型是按需從 SD 讀的，不是全部載進記憶體）。
+**2026-08-31 起五套都是完整漢字涵蓋**——台語文、古文、人名的冷僻字以前會變黑框，現在都有字。
+（做法是替每套掛一個同風格的備援字型來補洞，不是把字裁掉。）
 
-> **芫荽為什麼只有 5,366 字**:裝置對單一 SD 字型有 4,096 個 interval 的硬上限，
-> 超過就整份拒載變全方塊。芫荽的字碼分佈很散，全字集會到 4,762 個 interval，
-> 所以先裁到常用字。Noto 兩套的漢字碼位幾乎連續，不受這個限制。
+**只裝一套也可以**——空間有限就先裝 `NotoSerifTC`。五套全裝約 252 MB。
+不影響 RAM:字型是按需從 SD 讀的，不會整份載進記憶體。
+
+> **想直排讀中文**:選 `GuanKiapTsingKhai-90`，再把螢幕轉成橫向，
+> 中文就會由上而下、由右而左排列。它的字形是**預先轉了 90 度**的，
+> 所以正常橫排時選它會整頁躺著——只在要直排時用。
 
 **SD 卡要求**:FAT32 或 exFAT。**字型資料夾名稱不可以有空格**（原版已知會 crash，用底線）。
 
@@ -378,15 +383,14 @@ SD 韌體選擇畫面（救援模式）——這條路只要機器上還是 Cros
    最常見的三個（**喆、堃、彣**）已在 build 115 補上;其餘 BIG5 外的字仍缺——
    系統性補齊需要換一套候選字源（現在的候選池與字頻表都以 BIG5 為界），1.0 沒做。
 
-### 書的內文不受影響（有條件）
+### 書的內文不受影響
 
-UI 字型與內文字型是**完全獨立的兩套**。書的內文走 SD 卡字型:
-
-- 用 **NotoSerifTC**（明體，22,219 字全涵蓋）→ 內文基本上不會缺字，含上面那些人名用字。
-- 用 **NotoSansTC**（16,317 字）→ 極罕用字仍可能方塊。
-- 用 **Iansui**（5,366 字）→ 罕用字會方塊，這是為了 4,096 interval 上限付的代價。
+UI 字型與內文字型是**完全獨立的兩套**。書的內文走 SD 卡字型，
+而 **2026-08-31 起五套 SD 字型都是完整漢字涵蓋**（約 21,000 字）——
+台語文、古文、BIG5 外的人名用字，內文都有字。
 
 也就是說:**書名在檔案清單上是方塊、打開之後內文正常**，是預期中的行為，不是 bug。
+缺口只在 UI（檔名／選單／書名），內文沒有。
 
 ### 遇到方塊怎麼辦
 
@@ -668,7 +672,10 @@ renders as boxes (□□□□)**.
    SD firmware picker.
 2. **Copy the fonts** from `crossmosa-2.0.0-rc.2-sd-fonts.zip` into `/.fonts/` on the SD card,
    keeping one folder per family (`/.fonts/NotoSerifTC/…`). One family is enough;
-   **NotoSerifTC** is the recommended first choice (22,219 Han, widest coverage).
+   **NotoSerifTC** is the recommended first choice. As of 2026-08-31 all five families
+   cover the full Han block (~21,000 characters), so rare characters no longer render as
+   black boxes. `GuanKiapTsingKhai-90` is a pre-rotated brush face: pick it and turn the
+   screen to landscape to read Chinese vertically.
    Folder names must not contain spaces.
 
 While you have the card out, also copy 《歡迎使用CrossMosa.epub》 from the firmware zip onto
