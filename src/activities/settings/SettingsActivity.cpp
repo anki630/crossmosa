@@ -11,6 +11,9 @@
 #include "ButtonRemapActivity.h"
 #include "ClearCacheActivity.h"
 #include "CrossPointSettings.h"
+#include <Memory.h>
+
+#include "DeviceInfoActivity.h"
 #include "LanguageSelectActivity.h"
 #include "MappedInputManager.h"
 #include "OpdsServerListActivity.h"
@@ -23,6 +26,7 @@
 #include "activities/util/IntervalSelectionActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "util/DeviceInfo.h"
 
 const StrId SettingsActivity::categoryNames[categoryCount] = {StrId::STR_CAT_DISPLAY, StrId::STR_CAT_READER,
                                                               StrId::STR_CAT_CONTROLS, StrId::STR_CAT_SYSTEM};
@@ -70,6 +74,12 @@ void SettingsActivity::rebuildSettingsLists() {
   // 入口一併拔掉，讓 --gc-sections 回收整條鏈（作法同 v36）。
   systemSettings.push_back(SettingInfo::Action(StrId::STR_SD_FIRMWARE_UPDATE, SettingAction::SdFirmwareUpdate));
   systemSettings.push_back(SettingInfo::Action(StrId::STR_LANGUAGE, SettingAction::Language));
+  // v196：一列「裝置資訊」——值顯示晶片型號；Confirm 開唯讀詳情看完整 SN。
+  // DynamicString 在 toggleCurrentSetting 對 STRING 無寫入分支（唯讀）；不啟用清單 subtitle，
+  // 以免全列改用 listWithSubtitleRowHeight 壓縮橫向可見列數。
+  systemSettings.push_back(SettingInfo::DynamicString(
+      StrId::STR_DEVICE_INFO, []() { return std::string(displayControllerName()); },
+      [](const std::string&) {}, nullptr, StrId::STR_CAT_SYSTEM));
   readerSettings.insert(readerSettings.begin(),
                         SettingInfo::Action(StrId::STR_TEXT_SETTINGS, SettingAction::TextSettings));
   readerSettings.push_back(SettingInfo::Action(StrId::STR_CUSTOMISE_STATUS_BAR, SettingAction::CustomiseStatusBar));
@@ -302,6 +312,18 @@ void SettingsActivity::toggleCurrentSetting() {
     return;
   }
 
+  // v196：DynamicString 唯讀——無寫入分支；裝置資訊 Confirm 開詳情畫面看完整 SN。
+  if (setting.type == SettingType::STRING && setting.stringGetter) {
+    if (setting.nameId == StrId::STR_DEVICE_INFO) {
+      // v196（複查）：nothrow —— 記憶體吃緊時配不到就留在設定頁，不要在 -fno-exceptions 下 abort。
+      auto info = makeUniqueNoThrow<DeviceInfoActivity>(renderer, mappedInput);
+      if (info) {
+        startActivityForResult(std::move(info), [](const ActivityResult&) {});
+      }
+    }
+    return;
+  }
+
   if (setting.type == SettingType::TOGGLE && setting.valuePtr != nullptr) {
     // Toggle the boolean value using the member pointer
     const bool currentValue = SETTINGS.*(setting.valuePtr);
@@ -495,16 +517,22 @@ void SettingsActivity::render(RenderLock&&) {
           } else {
             valueText = std::to_string(SETTINGS.*(setting.valuePtr));
           }
+        } else if (setting.type == SettingType::STRING && setting.stringGetter) {
+          // v196：DynamicString 顯示 getter 值（裝置資訊＝晶片型號）
+          valueText = setting.stringGetter();
         }
         return valueText;
       },
       true);
 
   // Draw help text
+  // v196：裝置資訊是唯讀詳情入口，按鈕提示用「選擇」而非「切換」。
   const auto confirmLabel =
       (selectedSettingIndex == 0)
           ? I18N.get(categoryNames[(selectedCategoryIndex + 1) % categoryCount])
-          : (selectedSettingIndex > 0 && (*currentSettings)[selectedSettingIndex - 1].nameId == StrId::STR_TIME_TO_SLEEP
+          : (selectedSettingIndex > 0 &&
+                     ((*currentSettings)[selectedSettingIndex - 1].nameId == StrId::STR_TIME_TO_SLEEP ||
+                      (*currentSettings)[selectedSettingIndex - 1].nameId == StrId::STR_DEVICE_INFO)
                  ? tr(STR_SELECT)
                  : tr(STR_TOGGLE));
 

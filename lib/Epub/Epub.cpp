@@ -690,8 +690,15 @@ bool Epub::generateThumbBmp(int height) const {
   }
 
   if (!bookMetadataCache || !bookMetadataCache->isLoaded()) {
-    LOG_ERR("EBP", "Cannot generate thumb BMP, cache not loaded");
-    thumbFailReason_ = "cache-not-loaded";
+    // v196：分因——快取檔不存在 vs 存在但載入失敗（只改診斷字串，不改行為）。
+    // v196（複查）：這條是【低記憶體失敗路徑】，不可以在這裡配置 std::string ——
+    // -fno-exceptions 下配置失敗＝abort，會把「縮圖產不出來」升級成整機重開。用固定緩衝。
+    char cachePathBuf[160];
+    const int n = snprintf(cachePathBuf, sizeof(cachePathBuf), "%s/book.bin", getCachePath().c_str());
+    const bool truncated = (n < 0 || static_cast<size_t>(n) >= sizeof(cachePathBuf));
+    const bool missing = !truncated && !Storage.exists(cachePathBuf);
+    LOG_ERR("EBP", "Cannot generate thumb BMP, cache %s", missing ? "missing" : "load-failed");
+    thumbFailReason_ = missing ? "cache-missing" : "cache-load-failed";
     return false;
   }
 

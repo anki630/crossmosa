@@ -261,6 +261,12 @@ void setupDisplayAndFonts(bool seamless = false) {
   LOG_DBG("MAIN", "Fonts setup");
 }
 
+// v196（複查）：開機證人**不可以**在這一段寫 SD。DiagLog::line() 每行都會開檔／寫入／flush／關檔，
+// 而這幾個點全都排在 verifyPowerButtonWakeup() 與 recovery 按鍵取樣【之前】——慢卡上多幾次同步寫入
+// 就會把電源鍵的驗證往後推，讓「按了醒不來」變得更嚴重，也可能讓 UP+POWER 的 SD 更新入口失效。
+// 這裡只記時間戳（純 RAM，零 I/O），等過了那一段再一行印出來。
+static uint32_t g_wakeT[6] = {0, 0, 0, 0, 0, 0};
+
 void setup() {
   BoardConfig::holdPowerRails();
 
@@ -343,18 +349,23 @@ void setup() {
   DiagLog::mem("boot");
   BenchFlags::load();  // v185 bench 哨兵（同樣只在這裡讀一次 SD）
 
+  // v196：BENCH→RESUME 黑盒補證人（純觀測，不改順序／行為）。
   HalSystem::checkPanic();
+  g_wakeT[0] = millis();
 
   SETTINGS.loadFromFile();
   // v187：粗體閱讀是 ParsedText 的全域旗標，開機就跟設定對齊（否則從設定頁進文字設定的預覽會用錯字重）。
   ParsedText::setBoldBodyText(SETTINGS.boldBodyText != 0);
+  g_wakeT[1] = millis();
   APP_STATE.loadFromFile();
+  g_wakeT[2] = millis();
   RECENT_BOOKS.loadFromFile();
   I18N.setLanguage(static_cast<Language>(SETTINGS.language));
   KOREADER_STORE.loadFromFile();
   OPDS_STORE.loadFromFile();
   UITheme::getInstance().reload();
   ButtonNavigator::setMappedInputManager(mappedInputManager);
+  g_wakeT[3] = millis();
 
   const auto wakeupReason = gpio.getWakeupReason();
   switch (wakeupReason) {
@@ -376,6 +387,7 @@ void setup() {
     default:
       break;
   }
+  g_wakeT[4] = millis();
 
   // Recovery firmware mode: hold left side button (BTN_UP) together with the power button at
   // boot to skip directly to the SD-card firmware update screen. Useful on devices where USB
@@ -395,6 +407,7 @@ void setup() {
       LOG_INF("MAIN", "Recovery firmware mode (UP + POWER held at boot)");
     }
   }
+  g_wakeT[5] = millis();
 
   // First serial output only here to avoid timing inconsistencies for power button press duration verification
   LOG_DBG("MAIN", "Starting CrossPoint version " CROSSPOINT_VERSION);
@@ -407,6 +420,11 @@ void setup() {
                             : !APP_STATE.showBootScreen ? BootResume::QuickResume
                                                         : BootResume::Splash;
   bool allowFastInitialReaderRefresh = false;
+  // v196：喚醒回閱讀器時可跳過開機動畫（省一次完整面板刷新）。條件只用此刻已確定的欄位；
+  // 刻意不含 Back 鍵——該鍵狀態此時不一定可靠，少判只會落到主畫面，仍會設定 activity。
+  const bool willResumeToReader = !recoveryFirmwareMode && !HalSystem::isRebootFromPanic() &&
+                                  !APP_STATE.openEpubPath.empty() && APP_STATE.lastSleepFromReader &&
+                                  APP_STATE.readerActivityLoadCount == 0;
   // v185 證人：0=Splash 1=Silent 2=QuickResume；配上 BOOT 行的 rst= 就能分類每次開機。
   // 前綴刻意不用 BOOT —— 那是 diag.log 的版本分段記號，多一行就把每段切成兩半。
   DiagLog::line("RESUME kind=%d target=%u", static_cast<int>(resume), static_cast<unsigned>(snapshotTarget));
@@ -458,9 +476,27 @@ void setup() {
       break;
     }
     case BootResume::Splash:
-      activityManager.goToBoot();
+      // v196：willResumeToReader 時跳過 goToBoot（開機 logo 的完整刷新）。
+      // 安全性：switch 之後的路由是完整 if/else if/else，每一條都會 replaceActivity／goXxx：
+      //   1) recoveryFirmwareMode → replaceActivity(SdFirmwareUpdate)
+      //   2) isRebootFromPanic() → goToCrashReport()
+      //   3) Silent + reader target + 有路徑 → goToReader()
+      //   4) Silent（其餘）→ goHome()
+      //   5) 無書／非閱讀器休眠／Back／loadCount>0 → goHome()
+      //   6) else → goToReader()
+      // willResumeToReader 為真時 (1)(2) 已排除；Splash 非 Silent 故 (3)(4) 不成立；
+      // 落到 (5) 或 (6) 仍一定設定 activity（Back 少判只是進主畫面）。
+      if (!willResumeToReader) activityManager.goToBoot();
       break;
   }
+
+  // v196：證人——兩種情況都印，對照 willResumeToReader 與實際有無畫 logo。
+  DiagLog::line("WAKE splash skipped=%d", (resume == BootResume::Splash && willResumeToReader) ? 1 : 0);
+  // v196（複查）：開機前段的時間戳集中在這裡印 —— 此時電源鍵驗證與 recovery 判定都已經過去。
+  DiagLog::line("WAKE steps panic=%lu settings=%lu appstate=%lu stores=%lu wakeup=%lu settle=%lu",
+                static_cast<unsigned long>(g_wakeT[0]), static_cast<unsigned long>(g_wakeT[1]),
+                static_cast<unsigned long>(g_wakeT[2]), static_cast<unsigned long>(g_wakeT[3]),
+                static_cast<unsigned long>(g_wakeT[4]), static_cast<unsigned long>(g_wakeT[5]));
 
   if (recoveryFirmwareMode) {
     // Skip normal home/reader routing: jump straight into the SD firmware picker.

@@ -61,7 +61,7 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
   recentsLoading = true;
   bool showingLoading = false;
   // v175（diag174）：縮圖的 JPEG 解碼要 53KB 總量、Epub::load 也要一塊；剛離開閱讀器時 SD 字型
-  // （interval 表＋16KB 碼位緩衝）仍常駐，實測只剩 39KB → 每本 THUMBFAIL（why=cache-not-loaded /
+  // （interval 表＋16KB 碼位緩衝）仍常駐，實測只剩 39KB → 每本 THUMBFAIL（why=cache-missing|cache-load-failed /
   // heap 39024<53248）。同 v5 連線前卸載：地板以下先卸字型，下次進閱讀器 ensureLoaded 自動重載。
   // 只在真的有縮圖要產時做一次（否則每次回主畫面都卸＝每次進書都重載）。
   bool reliefChecked = false;

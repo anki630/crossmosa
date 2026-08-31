@@ -9,8 +9,6 @@
 #include <HalStorage.h>
 #include <Logging.h>
 #include <WiFi.h>
-#include <esp_efuse.h>
-#include <esp_efuse_table.h>
 
 #include <algorithm>
 #include <cctype>
@@ -28,6 +26,7 @@
 #include "html/SettingsPageHtml.generated.h"
 #include "html/js/jszip_minJs.generated.h"
 #include "util/BookCacheUtils.h"
+#include "util/DeviceInfo.h"
 #include "util/TaskWatchdog.h"
 
 namespace {
@@ -414,26 +413,11 @@ void CrossPointWebServer::handleStatus() const {
   doc["uptime"] = millis() / 1000;
   doc["device"] = gpio.deviceIsX3() ? "X3" : "X4";
 
-  char snBuf[33] = {0};
-  bool valid = false;
-#if !CONFIG_IDF_TARGET_ESP32
-  // Classic ESP32's efuse table has no USER_DATA block (C3/S3 only)
-  if (esp_efuse_read_field_blob(ESP_EFUSE_USER_DATA, snBuf, 256) == ESP_OK) {
-    valid = snBuf[0] != '\0' && snBuf[0] != (char)0xFF;
-    for (int i = 0; i < 32 && snBuf[i] != '\0'; i++) {
-      if (!std::isprint(static_cast<unsigned char>(snBuf[i]))) {
-        valid = false;
-        break;
-      }
-    }
-  }
-#endif
-
-  if (valid) {
-    doc["serial"] = snBuf;
-  } else {
-    doc["serial"] = "Not found";
-  }
+  // v196：序號讀取抽到 util/DeviceInfo，與設定頁共用。
+  // v196（複查）：用固定緩衝，維持原本「純堆疊、零配置」的行為 —— 這條路徑在 WiFi 起來之後跑，
+  // 記憶體本來就吃緊，不該為了診斷欄位多一個會 abort 的配置點。
+  char serialBuf[33];
+  doc["serial"] = deviceSerial(serialBuf, sizeof(serialBuf)) ? serialBuf : "Not found";
 
   String response;
   serializeJson(doc, response);
