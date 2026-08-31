@@ -297,14 +297,17 @@ ofl_body() {
 }
 
 # Copyright lines transcribed from each source font's own name table (nameID 0).
-# None of the four declares a Reserved Font Name, which is why the .cpfont derivatives
+# None of these declares a Reserved Font Name, which is why the .cpfont derivatives
 # may keep their family names. Verified with fontTools; re-check if a family is added.
+# GuanKiapTsingKhai-90 checked 2026-08-31: nameID 0 has no "Reserved Font Name", nameID 13/14 unset.
 family_copyright() {
   case "$1" in
     NotoSerifTC)    echo "Copyright © 2017-2023 Adobe (http://www.adobe.com/).|Noto Serif CJK TC" ;;
     NotoSansTC)     echo "Copyright © 2014-2021 Adobe (http://www.adobe.com/).|Noto Sans TC" ;;
     Iansui)         echo "Copyright 2025 The Iansui Project Authors (https://github.com/ButTaiwan/iansui)|Iansui (芫荽), derived from Klee One" ;;
     IBMPlexSansTC)  echo "Copyright 2018 IBM Corp. All rights reserved.|IBM Plex Sans TC" ;;
+    GuanKiapTsingKhai-90)
+                    echo "Copyright 2022-2025 Tony Huang (https://github.com/tonyhuan/GuanKiapTsingKhai)|原俠正楷 GuanKiapTsingKhai（偽直排版，字身旋轉 90 度），由芫荽 Iansui 與 LXGW 文楷合併而來" ;;
     *)              return 1 ;;
   esac
 }
