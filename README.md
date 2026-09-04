@@ -162,50 +162,85 @@ CrossMosa 是下班後的個人專案。如果它讓你的 X3 變好用了，幾
 如果你**先前刷了 1.x、畫面從此停住**，機器其實多半還活著——放一張空白 SD 卡進去，它還是會在卡上自己建出資料夾，
 只是舊韌體不會跟新晶片說話，所以畫面停在最後一張不動。**可以直接盲刷成 2.0，不必先繞回原廠韌體。**
 
-> 下面的步驟我們在一台故意用 1.2 弄壞的機器上實際走過，每個等待時間都是計時出來的，
-> 每顆按鍵按下去會發生什麼，我們也都翻程式確認過。
+> 下面的步驟來自一台故意用 1.2 弄壞的機器：**等待秒數是實際計時出來的**，
+> 每顆按鍵按下去會發生什麼**都翻程式確認過**。
+> （唯一還沒實測的細節：第 5 步我推薦用 ③，而當初那次用的是 ⑦——兩顆在清單畫面上作用相同，
+> 但 ⑦ 到了確認畫面會變成「取消」，所以這裡寫 ③。）
 > **全程看不到畫面，只能照秒數操作。**
 
-**準備：SD 卡上只放一個 `.bin`**
+**按鍵編號**
 
-把 `update.bin`（或 firmware zip 裡的那個 `.bin`）放進 SD 卡根目錄，**確保卡上只有這一個 `.bin` 檔**。
+畫面完全沒有反應時，按鍵的「名字」幫不上忙——同一顆鍵在不同畫面上的標示會變。
+所以下面一律用位置編號，由左到右、由上到下：
 
-資料夾不用管，有幾個都沒關係——**但 `.bin` 只能有一個**。
-（原因：救援畫面的清單只會顯示 `.bin`，而且資料夾一律排在前面，
-所以你那唯一的 `.bin` 一定是清單的**最後一個**。第 4 步就是靠這一點找到它。）
+| 編號 | 位置 | 平常的身分 |
+|---|---|---|
+| **①** | 上緣左 | 重置 |
+| **②** | 上緣右 | 電源 |
+| **③** | 左側邊 | 上一頁 |
+| **④** | 右側邊 | 下一頁 |
+| ⑤ | 正面下緣 左1 | 返回 ⛔ |
+| **⑥** | 正面下緣 左2 | 確認 |
+| ⑦ | 正面下緣 左3 | ⛔ 見下 |
+| ⑧ | 正面下緣 左4 | ⛔ 見下 |
+
+**整個流程只會用到 ③ 和 ⑥**（加上開頭結尾的 ① 和 ②）。
+
+**準備**
+
+- SD 卡根目錄放韌體的 `.bin`
+- **最好只放一個**。若有好幾個，**會選到檔名排序最後的那一個**
+- 資料夾不用管，有幾個都沒關係
+  （救援畫面的清單只顯示 `.bin`，而且資料夾一律排在前面，所以你的 `.bin` 一定在最後。
+  第 5 步就是靠這一點找到它。）
 
 **步驟**
 
-| # | 動作 | 等多久 |
-|---|---|---|
-| 1 | 按一下**左上角的重置鍵** | — |
-| 2 | 按住**左側邊的「上一頁」鍵 ＋ 右上角的電源鍵**，維持 **4 秒**。放手時**先放電源，再放「上一頁」** | — |
-| 3 | 手離開機器，什麼都別按 | **2 秒** |
-| 4 | 按一下**左側邊的「上一頁」鍵**（選取會從第一個繞到最後一個，也就是你的 `.bin`） | **1 秒** |
-| 5 | 按一下**確認鍵**（正面下緣，左起第二顆） | **⏳ 90 秒** |
-| 6 | 再按一下**確認鍵** | **⏳ 120 秒** |
-| 7 | 按**左上角的重置鍵**，然後**長按電源鍵**開機 | — |
+1. 按 **①**（重置）
+2. 按住 **③ ＋ ②**，維持 **4 秒**
+3. **先放 ②，再放 ③**
+4. 手離開機器，**等 2 秒**
+5. 按 **③** 一下 —— 選取會繞到清單最後一項，就是你的 `.bin`
+6. 按 **⑥** 一下 —— 選擇這個檔案
+7. **等 90 秒** —— 機器在檢查檔案有沒有壞掉，完全沒有反應是正常的
+8. 按 **⑥** 一下 —— 回答畫面上的「要更新韌體嗎？」
+9. **等 120 秒** —— 正在寫入，**絕對不要動機器、不要拔卡**
+10. 按 **①**（重置），然後長按 **②** 開機
 
-**⛔ 全程只碰兩顆鍵：左側邊的「上一頁」和正面的「確認」。**
-正面的「返回」鍵（最左）和「左」鍵（左起第三顆）**一次都不要按**——在確認畫面上那兩顆都是「取消」。
+**全程不要按的**
+
+- ⛔ **⑤** 和 **⑦** —— 在第 8 步那個確認畫面上，這兩顆都是「取消」
+- ⛔ **⑧** —— 在確認畫面上是「確認」，但在清單畫面會把選取移到錯的地方
+- ✅ **⑥ 多按幾次沒關係** —— 寫入的時候按鍵根本不會被理會
+
+> ⚠️ **⑦ 特別容易中招**：它在清單畫面上螢幕會標「上」，跟 ③ 做同樣的事；
+> 但到了確認畫面，它變成「取消」，而且**畫面上不會標出來**。看不到螢幕時分不出來。
+> 所以整份流程請只用 ③。
 
 **每一步在等什麼**
 
 - **第 1 步**：救援組合鍵只在**開機那一瞬間**才會被讀到。如果機器現在是「開著但沒畫面」，
   直接按組合鍵沒有用。先重置，確保它是從頭開機。
-- **第 3 步**：剛剛按住不放的那顆「上一頁」，放開的瞬間也會被當成按了一下。等兩秒讓它過去。
-- **第 5 步的 90 秒**：機器正在檢查這個檔案有沒有壞掉（整個約 6 MB 都要讀一遍，實測 30–60 秒）。
-  **這段期間完全沒有反應是正常的**，不要提早按。
-- **第 6 步的 120 秒**：正在寫入（實測 60–90 秒）。**這段期間絕對不要動機器、不要拔卡。**
-- **第 7 步**：寫完之後機器會自己重開，但那種重開**不會把螢幕晶片一起重來**，
-  所以畫面不一定會亮。按實體的重置鍵才會真的從頭來過。
+- **第 4 步**：剛剛按住不放的 ③，放開的瞬間也會被當成按了一下。等兩秒讓它過去。
+- **第 7 步**：機器正在檢查這個檔案有沒有壞掉（整個約 6 MB 都要讀一遍，實測 30–60 秒）。
+- **第 9 步**：正在寫入（實測 60–90 秒）。
+- **第 10 步**：寫完之後機器會自己重開，但那種重開**不會把螢幕晶片一起重來**，
+  所以畫面不一定會亮。按 ① 才會真的從頭來過。
+
+**不確定自己走到哪一步時**
+
+按 **② ＋ ④** 可以拍一張截圖 —— 畫面雖然沒更新，機器內部仍然知道「現在該顯示什麼」。
+把卡拔到電腦上打開 `screenshot-*.bmp`，就看得到自己停在哪裡。
+
+⚠️ 只在**靜止畫面**有效（第 5–6 步的清單、第 8 步的對話框）。
+**第 7 步的檢查中和第 9 步的寫入中按了不會有反應**，那時候主程式被佔住了。
 
 **如果沒成功**
 
-- 多按幾次確認鍵不會怎樣——寫入的時候按鍵根本不會被理會。
-- 從第 1 步整個重來。時間點不好抓，有人試了好幾次才成功。
-- 想確認機器還活著：按**電源鍵 ＋ 右側邊的「下一頁」鍵**（截圖組合鍵）。**畫面凍住的狀態下這招仍然有效**（已實測），成功的話 SD 卡上會多出一個截圖檔。
-- 另一個社群回報的版本秒數不同（組合鍵約 7 秒、先放「上一頁」再放電源，並且先刷回原廠韌體）：
+- **從第 1 步整個重來。** 時間點不好抓，有人試了好幾次才成功。
+- ⛔ **不要在原地繼續盲按方向鍵** —— 萬一已經退回清單，只會把選取移到別的項目。
+- 想確認機器還活著：按 **② ＋ ④**，卡上會多出一個截圖檔（已實測，畫面凍住也有效）。
+- 另一個社群回報的版本秒數不同（組合鍵約 7 秒、先放 ③ 再放 ②，並且先刷回原廠韌體）：
   [CrossInk discussions #479](https://github.com/uxjulia/CrossInk/discussions/479) 與
   [本專案 issue #2](https://github.com/anki630/crossmosa/issues/2)（由 @sk5s 回報）。
   上面這套行不通的話，可以試試他們那一版。
@@ -635,38 +670,67 @@ that upstream arduino-esp32 still carries**. See the [CHANGELOG](CHANGELOG.md) f
 > and we checked in the source what each button actually does. **You will see nothing on screen
 > the whole time — you are working by the clock.**
 >
-> **Prepare:** put `update.bin` (or the `.bin` from the firmware zip) in the SD card root, and make
-> sure it is **the only `.bin` on the card**. Folders do not matter, however many there are.
-> (The rescue list only shows `.bin` files and always sorts folders first, so your single `.bin`
-> is necessarily the **last** entry. Step 4 relies on that.)
+> **Button numbers.** With a dead screen the buttons' *names* are useless — the same button is
+> labelled differently on different screens. So the steps below use position numbers, left to
+> right and top to bottom:
 >
-> | # | Action | Wait |
+> | # | Position | Normal role |
 > |---|---|---|
-> | 1 | Press the **Reset button** (top-left corner) | — |
-> | 2 | Hold **Previous-page (left edge) + Power (top-right)** for **4 s**. Release **Power first**, then Previous-page | — |
-> | 3 | Hands off, press nothing | **2 s** |
-> | 4 | Press **Previous-page** once (selection wraps to the last entry — your `.bin`) | **1 s** |
-> | 5 | Press **Confirm** (front row, second from the left) | **⏳ 90 s** |
-> | 6 | Press **Confirm** again | **⏳ 120 s** |
-> | 7 | Press **Reset**, then **hold Power** to boot | — |
+> | **①** | top-left | Reset |
+> | **②** | top-right | Power |
+> | **③** | left edge | Previous page |
+> | **④** | right edge | Next page |
+> | ⑤ | front row, 1st from left | Back ⛔ |
+> | **⑥** | front row, 2nd | Confirm |
+> | ⑦ | front row, 3rd | ⛔ see below |
+> | ⑧ | front row, 4th | ⛔ see below |
 >
-> **⛔ Only ever touch two buttons: Previous-page (left edge) and Confirm** (front row, second
-> from the left; the row is Back / Confirm / Left / Right). Never press the front **Back**
-> (leftmost) or **Left** (third) — on the confirmation screen both mean *cancel*.
+> **The whole procedure only uses ③ and ⑥** (plus ① and ② at the start and end).
+>
+> **Prepare:** put the firmware `.bin` in the SD card root. **Ideally just one** — if there are
+> several, **the one that sorts last by name is the one you will get**. Folders do not matter,
+> however many there are. (The rescue list only shows `.bin` files and always sorts folders
+> first, so your `.bin` is necessarily last. Step 5 relies on that.)
+>
+> **Steps**
+>
+> 1. Press **①** (Reset)
+> 2. Hold **③ + ②** for **4 seconds**
+> 3. Release **② first, then ③**
+> 4. Hands off, **wait 2 seconds**
+> 5. Press **③** once — the selection wraps to the last entry, which is your `.bin`
+> 6. Press **⑥** once — this selects the file
+> 7. **Wait 90 seconds** — the device is checking the file is not corrupt; nothing happens on screen
+> 8. Press **⑥** once — this answers the "Update firmware?" prompt
+> 9. **Wait 120 seconds** — writing. **Do not touch the device or remove the card.**
+> 10. Press **①** (Reset), then hold **②** to boot
+>
+> **Never press:** ⛔ **⑤** and **⑦** — on the step-8 prompt both mean *cancel*; ⛔ **⑧** — it
+> confirms on that prompt but moves the selection wrongly in the list. ✅ Extra presses of **⑥**
+> are harmless (input is ignored while writing).
+>
+> ⚠️ **⑦ is the trap**: in the list the screen labels it "up" and it does the same thing as ③, but
+> on the confirmation prompt it becomes *cancel* — **and the screen does not say so**. You cannot
+> tell the difference blind, so use ③ throughout.
 >
 > **What each wait is for:** step 1 — the rescue combo is only read at the instant of boot, so if
-> the device is already on with a dead screen the combo does nothing; step 3 — releasing the
-> Previous-page button you were holding also counts as a press; step 5 — the device is checking
-> the file is not corrupt (it reads all ~6 MB; measured 30–60 s, and **nothing happens on screen**,
-> so do not press early); step 6 — writing (measured 60–90 s; **do not touch the device or remove
-> the card**); step 7 — the automatic restart after writing does **not** reset the screen chip, so
-> the display may stay blank until you press the physical Reset button.
+> the device is already on with a dead screen the combo does nothing; step 4 — releasing the ③ you
+> were holding also counts as a press; step 7 — reading all ~6 MB to verify (measured 30–60 s);
+> step 9 — writing (measured 60–90 s); step 10 — the automatic restart does **not** reset the
+> screen chip, so the display may stay blank until you press ①.
 >
-> **If it does not work:** extra Confirm presses are harmless (input is ignored while writing);
-> start again from step 1 — the timing is fiddly and some people needed several attempts; to check
-> the device is alive, press **Power + Next-page** (the screenshot combo) — **this still works with
-> a frozen screen** (verified) — and look for a screenshot file on the card. A community write-up reports different timings (~7 s combo, release
-> Previous-page first, and flashing stock firmware first) — try that if the above fails:
+> **If you lose track of which step you are on:** press **② + ④** to take a screenshot — the panel
+> is not updating, but the device still knows what *should* be on screen. Read `screenshot-*.bmp`
+> from the card on a computer. ⚠️ This only works on a **static screen** (the list at steps 5–6,
+> the prompt at step 8); during the checks at step 7 and the writing at step 9 the main loop is
+> busy and nothing will happen.
+>
+> **If it does not work:** start again from step 1 — the timing is fiddly and some people needed
+> several attempts. ⛔ Do not keep blindly pressing direction buttons where you are — if you have
+> dropped back to the list, they will just move the selection somewhere wrong. To check the device
+> is alive, press **② + ④** and look for a screenshot file on the card (verified: this works even
+> with a frozen screen). A community write-up reports different timings (~7 s combo, release ③
+> first, and flashing stock firmware first) — try that if the above fails:
 > [issue #2](https://github.com/anki630/crossmosa/issues/2) ·
 > [CrossInk discussions #479](https://github.com/uxjulia/CrossInk/discussions/479) (reported by @sk5s).
 > **It is not guaranteed to work** — some users have followed these steps and still not recovered.
