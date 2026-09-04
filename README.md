@@ -146,7 +146,8 @@ CrossMosa 是下班後的個人專案。如果它讓你的 X3 變好用了，幾
 **開始之前，先做這三件事**
 
 1. **把 SD 卡上的 `/.crossmosa/` 整個資料夾備份到電腦。** 設定、Wi-Fi 憑證、OPDS 設定，以及
-   每一本書的閱讀進度都在裡面——重刷韌體救不回來，而救援流程可能還會要求你重新格式化 SD 卡。
+   每一本書的閱讀進度都在裡面——重刷韌體救不回來。（下面的救援步驟**不需要**格式化 SD 卡，
+   但社群另一版的做法會要求格式化，備份起來比較安心。）
 2. **SD 卡根目錄只留一個 `.bin` 檔。** 救援時螢幕可能完全沒有畫面，你會看不到自己選了什麼。
 3. **最壞的情況是機器救不回來。** 已經有使用者的機器變成磚，**照著救援程序也沒救回來**。
    救援是一條可能有用的路，不是保險。刷之前先假設這台機器可能就這樣沒了，你仍然願意，再開始。
@@ -155,45 +156,65 @@ CrossMosa 是下班後的個人專案。如果它讓你的 X3 變好用了，幾
 
 ### 螢幕已經不會更新了怎麼辦
 
-**先講清楚：韌體會自動辨識面板控制器，你不需要知道自己是哪一批。** 同一份 2.0 韌體
-在 UC8253 與 UC8279 上都會自己認出來，刷之前不用查、不用選。
+**先講清楚：韌體會自動辨識螢幕晶片，你不需要知道自己是哪一批。** 同一份 2.0 韌體
+在新舊晶片上都會自己認出來，刷之前不用查、不用選。
 
-如果你**先前刷了 1.x、畫面從此停住**，機器多半還活著（放一張空白 SD 卡進去，它仍會寫出資料目錄），
-只是舊韌體不會驅動新控制器。已經有使用者救回來了，下面是他們回報可行的做法。
+如果你**先前刷了 1.x、畫面從此停住**，機器其實多半還活著——放一張空白 SD 卡進去，它還是會在卡上自己建出資料夾，
+只是舊韌體不會跟新晶片說話，所以畫面停在最後一張不動。**可以直接盲刷成 2.0，不必先繞回原廠韌體。**
 
-來源：[CrossInk discussions #479](https://github.com/uxjulia/CrossInk/discussions/479)
-與[本專案 issue #2](https://github.com/anki630/crossmosa/issues/2)（步驟由 @sk5s 回報）。
-按鍵名稱是依本專案的實體按鍵對照表換算的，**原文用的是示意圖編號**，對不上時請以原文的圖為準。
+> 下面的步驟我們在一台故意用 1.2 弄壞的機器上實際走過，每個等待時間都是計時出來的，
+> 每顆按鍵按下去會發生什麼，我們也都翻程式確認過。
+> **全程看不到畫面，只能照秒數操作。**
 
-**準備**
+**準備：SD 卡上只放一個 `.bin`**
 
-1. 把 SD 卡**重新格式化**成 FAT32 或 exFAT。
-2. 根目錄放**原廠韌體**的 `.bin`（不是本專案的 `update.bin`）——原文附有下載連結。不必改名。
-3. 插回機器，**讓它睡上幾分鐘**。
+把 `update.bin`（或 firmware zip 裡的那個 `.bin`）放進 SD 卡根目錄，**確保卡上只有這一個 `.bin` 檔**。
 
-**進入 Recovery（全程沒有畫面，只能數秒）**
+資料夾不用管，有幾個都沒關係——**但 `.bin` 只能有一個**。
+（原因：救援畫面的清單只會顯示 `.bin`，而且資料夾一律排在前面，
+所以你那唯一的 `.bin` 一定是清單的**最後一個**。第 4 步就是靠這一點找到它。）
 
-4. 按住**左側邊的「上一頁」鍵**，同時按住**右上角的電源鍵**，兩顆一起按住**約 7 秒**。
-   先放開「上一頁」，電源鍵**再多按 1 秒**才放開。
-5. **等 30 秒**，讓救援模式與檔案選擇器啟動。**螢幕不會有任何反應，這是正常的。**
+**步驟**
 
-**選檔並刷入**
+| # | 動作 | 等多久 |
+|---|---|---|
+| 1 | 按一下**左上角的重置鍵** | — |
+| 2 | 按住**左側邊的「上一頁」鍵 ＋ 右上角的電源鍵**，維持 **2–5 秒**。放手時**先放電源，再放「上一頁」** | — |
+| 3 | 手離開機器，什麼都別按 | **2 秒** |
+| 4 | 按一下**左側邊的「上一頁」鍵**（選取會從第一個繞到最後一個，也就是你的 `.bin`） | **1 秒** |
+| 5 | 按一下**確認鍵**（正面下緣，左起第二顆） | **⏳ 90 秒** |
+| 6 | 再按一下**確認鍵** | **⏳ 120 秒** |
+| 7 | 按**左上角的重置鍵**，然後**長按電源鍵**開機 | — |
 
-6. 按一次**確認鍵**（正面下緣）。
-7. **等 2 分鐘。**
-8. 按原文的 **Button 8**，再按一次**確認鍵**。
-9. **等 2 分鐘。**
-10. 再按一次**確認鍵**。若沒有動靜，**再等 3 分鐘**，然後按 Button 8 或「上一頁」。
+**⛔ 全程只碰兩顆鍵：左側邊的「上一頁」和正面的「確認」。**
+正面的「左」鍵和「返回」鍵**一次都不要按**——在確認畫面上那兩顆是「取消」。
 
-**注意事項**
+**每一步在等什麼**
 
-- **刷寫期間什麼都不要做。**
-- **時機很難抓，多試幾次。** 有人試了很多次才成功。
-- 想確認機器是不是還活著：按**電源＋右側邊的「下一頁」**（截圖組合鍵），成功的話 SD 卡上會多出截圖檔。
-- 還是凍住的話：按**左上角的重置鍵**，長按電源 5 秒，**等 5 分鐘**再從頭來一次。
-- 按錯不會讓情況更糟，但**也不保證每台都救得回來**——已經有使用者照著做仍然沒救回。
+- **第 1 步**：救援組合鍵只在**開機那一瞬間**才會被讀到。如果機器現在是「開著但沒畫面」，
+  直接按組合鍵沒有用。先重置，確保它是從頭開機。
+- **第 3 步**：剛剛按住不放的那顆「上一頁」，放開的瞬間也會被當成按了一下。等兩秒讓它過去。
+- **第 5 步的 90 秒**：機器正在檢查這個檔案有沒有壞掉（整個約 6 MB 都要讀一遍，實測 30–60 秒）。
+  **這段期間完全沒有反應是正常的**，不要提早按。
+- **第 6 步的 120 秒**：正在寫入（實測 60–90 秒）。**這段期間絕對不要動機器、不要拔卡。**
+- **第 7 步**：寫完之後機器會自己重開，但那種重開**不會把螢幕晶片一起重來**，
+  所以畫面不一定會亮。按實體的重置鍵才會真的從頭來過。
 
-畫面回來之後，就可以照上面的方式刷本版了。
+**如果沒成功**
+
+- 多按幾次確認鍵不會怎樣——寫入的時候按鍵根本不會被理會。
+- 從第 1 步整個重來。時間點不好抓，有人試了好幾次才成功。
+- 想確認機器還活著：按**電源鍵 ＋ 右側邊的「下一頁」鍵**（截圖組合鍵），成功的話 SD 卡上會多出截圖檔。
+- 另一個社群回報的版本秒數不同（組合鍵約 7 秒、先放「上一頁」再放電源，並且先刷回原廠韌體）：
+  [CrossInk discussions #479](https://github.com/uxjulia/CrossInk/discussions/479) 與
+  [本專案 issue #2](https://github.com/anki630/crossmosa/issues/2)（由 @sk5s 回報）。
+  上面這套行不通的話，可以試試他們那一版。
+- **不保證每台都救得回來。** 已經有使用者照著做仍然沒救回。
+
+> ℹ️ **如果哪天是卡在 2.0**（目前沒有這種回報）：第 6 步要改成
+> **先按一下左側邊的「上一頁」，再按確認鍵**——2.0 的確認畫面預設停在「取消」上。
+
+畫面回來之後，就可以照下面的方式正常刷機了。
 
 ### ⚠️ 一定要做兩件事，少做一件，中文書就是滿頁方塊
 
@@ -602,38 +623,55 @@ that upstream arduino-esp32 still carries**. See the [CHANGELOG](CHANGELOG.md) f
 >
 > ### If your screen has already stopped updating
 >
-> **The firmware detects the panel controller automatically** — you do not need to know which
-> batch your unit is. The same 2.0 build recognises both UC8253 and UC8279.
+> **The firmware detects the screen chip automatically** — you do not need to know which batch
+> your unit is. The same 2.0 build recognises both.
 >
-> If you flashed 1.x and the screen froze, the device is most likely still running (put a blank
-> SD card in and it still writes a data directory); the old firmware simply never drives the new
-> controller. Users have recovered theirs with the procedure below.
+> If you flashed 1.x and the screen froze, the device is most likely still running — put a blank
+> SD card in and it still creates its own folder there. The old firmware just never talks to the
+> new chip, so the last image stays on screen. **You can blind-flash straight to 2.0; you do not
+> need to go back to stock firmware first.**
 >
-> Source: the threads linked below. Button names are translated from this project's verified
-> physical layout; **the original uses numbers from a diagram** — when in doubt, follow the
-> diagram in the original.
+> We walked these steps on a device we deliberately bricked with 1.2. Every wait below was timed,
+> and we checked in the source what each button actually does. **You will see nothing on screen
+> the whole time — you are working by the clock.**
 >
-> **Prepare:** reformat the SD card to FAT32/exFAT; put the **stock firmware** `.bin` in the root
-> (not this project's `update.bin` — the original links to it); insert it and let the device sleep
-> for a few minutes.
+> **Prepare:** put `update.bin` (or the `.bin` from the firmware zip) in the SD card root, and make
+> sure it is **the only `.bin` on the card**. Folders do not matter, however many there are.
+> (The rescue list only shows `.bin` files and always sorts folders first, so your single `.bin`
+> is necessarily the **last** entry. Step 4 relies on that.)
 >
-> **Enter recovery (there is no display at any point):** hold the **Previous-page button on the
-> left edge** and the **Power button** together for **about 7 seconds**; release Previous-page
-> first, hold Power **one more second**, then release. **Wait 30 seconds** for recovery and the
-> file picker to come up.
+> | # | Action | Wait |
+> |---|---|---|
+> | 1 | Press the **Reset button** (top-left corner) | — |
+> | 2 | Hold **Previous-page (left edge) + Power (top-right)** for **2–5 s**. Release **Power first**, then Previous-page | — |
+> | 3 | Hands off, press nothing | **2 s** |
+> | 4 | Press **Previous-page** once (selection wraps to the last entry — your `.bin`) | **1 s** |
+> | 5 | Press **Confirm** (front row, second from the left) | **⏳ 90 s** |
+> | 6 | Press **Confirm** again | **⏳ 120 s** |
+> | 7 | Press **Reset**, then **hold Power** to boot | — |
 >
-> **Select and flash:** press **Confirm** once → **wait 2 minutes** → press the original's
-> **Button 8**, then **Confirm** → **wait 2 minutes** → press **Confirm** again. If nothing
-> happens, wait **3 more minutes** and press Button 8 or Previous-page.
+> **⛔ Only ever touch two buttons: Previous-page (left edge) and Confirm.** Never press the
+> front **Left** or **Back** buttons — on the confirmation screen both mean *cancel*.
 >
-> **Notes:** do nothing while it is flashing; **the timing is hard to hit, so try several times**;
-> to check the device is alive, press **Power + Next-page** (the screenshot combo) and look for a
-> screenshot file on the SD card; if it is still frozen, press **Reset** (top-left), hold Power for
-> 5 seconds, **wait 5 minutes** and start over. Getting it wrong does not make things worse, but it
-> is **not guaranteed to work** — some users have followed these steps and still not recovered.
+> **What each wait is for:** step 1 — the rescue combo is only read at the instant of boot, so if
+> the device is already on with a dead screen the combo does nothing; step 3 — releasing the
+> Previous-page button you were holding also counts as a press; step 5 — the device is checking
+> the file is not corrupt (it reads all ~6 MB; measured 30–60 s, and **nothing happens on screen**,
+> so do not press early); step 6 — writing (measured 60–90 s; **do not touch the device or remove
+> the card**); step 7 — the automatic restart after writing does **not** reset the screen chip, so
+> the display may stay blank until you press the physical Reset button.
 >
-> Threads: [issue #2](https://github.com/anki630/crossmosa/issues/2) · [CrossInk discussions #479](https://github.com/uxjulia/CrossInk/discussions/479)
-> (Procedure reported by @sk5s; not reproduced on the maintainer's own hardware.)
+> **If it does not work:** extra Confirm presses are harmless (input is ignored while writing);
+> start again from step 1 — the timing is fiddly and some people needed several attempts; to check
+> the device is alive, press **Power + Next-page** (the screenshot combo) and look for a screenshot
+> file on the card. A community write-up reports different timings (~7 s combo, release
+> Previous-page first, and flashing stock firmware first) — try that if the above fails:
+> [issue #2](https://github.com/anki630/crossmosa/issues/2) ·
+> [CrossInk discussions #479](https://github.com/uxjulia/CrossInk/discussions/479) (reported by @sk5s).
+> **It is not guaranteed to work** — some users have followed these steps and still not recovered.
+>
+> ℹ️ If a device is ever stuck on 2.0 (no reports so far), step 6 differs: press **Previous-page
+> once, then Confirm** — 2.0's confirmation screen starts on *Cancel*.
 
 Flashing the firmware only fixes the **menus**. **Book text needs fonts on the SD card.**
 The built-in fallback reader font is Latin-only, so **without the SD fonts every Chinese book
