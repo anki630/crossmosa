@@ -179,7 +179,7 @@ CrossMosa 是下班後的個人專案。如果它讓你的 X3 變好用了，幾
 | # | 動作 | 等多久 |
 |---|---|---|
 | 1 | 按一下**左上角的重置鍵** | — |
-| 2 | 按住**左側邊的「上一頁」鍵 ＋ 右上角的電源鍵**，維持 **2–5 秒**。放手時**先放電源，再放「上一頁」** | — |
+| 2 | 按住**左側邊的「上一頁」鍵 ＋ 右上角的電源鍵**，維持 **4 秒**。放手時**先放電源，再放「上一頁」** | — |
 | 3 | 手離開機器，什麼都別按 | **2 秒** |
 | 4 | 按一下**左側邊的「上一頁」鍵**（選取會從第一個繞到最後一個，也就是你的 `.bin`） | **1 秒** |
 | 5 | 按一下**確認鍵**（正面下緣，左起第二顆） | **⏳ 90 秒** |
@@ -204,7 +204,7 @@ CrossMosa 是下班後的個人專案。如果它讓你的 X3 變好用了，幾
 
 - 多按幾次確認鍵不會怎樣——寫入的時候按鍵根本不會被理會。
 - 從第 1 步整個重來。時間點不好抓，有人試了好幾次才成功。
-- 想確認機器還活著：按**電源鍵 ＋ 右側邊的「下一頁」鍵**（截圖組合鍵），成功的話 SD 卡上會多出截圖檔。
+- 想確認機器還活著：按**電源鍵 ＋ 右側邊的「下一頁」鍵**（截圖組合鍵）。**畫面凍住的狀態下這招仍然有效**（已實測），成功的話 SD 卡上會多出一個截圖檔。
 - 另一個社群回報的版本秒數不同（組合鍵約 7 秒、先放「上一頁」再放電源，並且先刷回原廠韌體）：
   [CrossInk discussions #479](https://github.com/uxjulia/CrossInk/discussions/479) 與
   [本專案 issue #2](https://github.com/anki630/crossmosa/issues/2)（由 @sk5s 回報）。
@@ -643,7 +643,7 @@ that upstream arduino-esp32 still carries**. See the [CHANGELOG](CHANGELOG.md) f
 > | # | Action | Wait |
 > |---|---|---|
 > | 1 | Press the **Reset button** (top-left corner) | — |
-> | 2 | Hold **Previous-page (left edge) + Power (top-right)** for **2–5 s**. Release **Power first**, then Previous-page | — |
+> | 2 | Hold **Previous-page (left edge) + Power (top-right)** for **4 s**. Release **Power first**, then Previous-page | — |
 > | 3 | Hands off, press nothing | **2 s** |
 > | 4 | Press **Previous-page** once (selection wraps to the last entry — your `.bin`) | **1 s** |
 > | 5 | Press **Confirm** (front row, second from the left) | **⏳ 90 s** |
@@ -663,8 +663,8 @@ that upstream arduino-esp32 still carries**. See the [CHANGELOG](CHANGELOG.md) f
 >
 > **If it does not work:** extra Confirm presses are harmless (input is ignored while writing);
 > start again from step 1 — the timing is fiddly and some people needed several attempts; to check
-> the device is alive, press **Power + Next-page** (the screenshot combo) and look for a screenshot
-> file on the card. A community write-up reports different timings (~7 s combo, release
+> the device is alive, press **Power + Next-page** (the screenshot combo) — **this still works with
+> a frozen screen** (verified) — and look for a screenshot file on the card. A community write-up reports different timings (~7 s combo, release
 > Previous-page first, and flashing stock firmware first) — try that if the above fails:
 > [issue #2](https://github.com/anki630/crossmosa/issues/2) ·
 > [CrossInk discussions #479](https://github.com/uxjulia/CrossInk/discussions/479) (reported by @sk5s).
