@@ -187,7 +187,7 @@ CrossMosa 是下班後的個人專案。如果它讓你的 X3 變好用了，幾
 | 7 | 按**左上角的重置鍵**，然後**長按電源鍵**開機 | — |
 
 **⛔ 全程只碰兩顆鍵：左側邊的「上一頁」和正面的「確認」。**
-正面的「左」鍵和「返回」鍵**一次都不要按**——在確認畫面上那兩顆是「取消」。
+正面的「返回」鍵（最左）和「左」鍵（左起第三顆）**一次都不要按**——在確認畫面上那兩顆都是「取消」。
 
 **每一步在等什麼**
 
@@ -650,8 +650,9 @@ that upstream arduino-esp32 still carries**. See the [CHANGELOG](CHANGELOG.md) f
 > | 6 | Press **Confirm** again | **⏳ 120 s** |
 > | 7 | Press **Reset**, then **hold Power** to boot | — |
 >
-> **⛔ Only ever touch two buttons: Previous-page (left edge) and Confirm.** Never press the
-> front **Left** or **Back** buttons — on the confirmation screen both mean *cancel*.
+> **⛔ Only ever touch two buttons: Previous-page (left edge) and Confirm** (front row, second
+> from the left; the row is Back / Confirm / Left / Right). Never press the front **Back**
+> (leftmost) or **Left** (third) — on the confirmation screen both mean *cancel*.
 >
 > **What each wait is for:** step 1 — the rescue combo is only read at the instant of boot, so if
 > the device is already on with a dead screen the combo does nothing; step 3 — releasing the
