@@ -440,16 +440,16 @@ UI 字型與內文字型是**完全獨立的兩套**。書的內文走 SD 卡字
 - 第 8 步：正在寫入（實測 60–90 秒），寫完會自己重開機。
   但那種重開**不會把螢幕晶片一起重來**，所以偶爾畫面還是黑的——按 ② 才會真的從頭開始。
 
-**不知道自己走到哪了**：按 **③ ＋ ④**（電源 ＋ 右側邊那顆）拍一張截圖 —— 螢幕雖然沒更新，機器心裡還是知道
-「現在該顯示什麼」。把卡拔到電腦上打開 `screenshot-*.bmp` 就看得到。
-只有畫面停著不動的時候有效；第 6 步檢查中、第 8 步寫入中按了不會有反應。
-
 **卡在 2.0 的話**（目前沒人遇到）步驟完全一樣，只是機器裡面走的路不同：
 2.0 問你要不要更新那一頁有兩個選項、一開始停在「取消」上，① 會把它移到「確認」，⑥ 再按下去。
 
 **其他版本的做法**：社群另有一版（組合鍵約 7 秒、先刷回原廠韌體）——
 [CrossInk #479](https://github.com/uxjulia/CrossInk/discussions/479) ·
 [本專案 issue #2](https://github.com/anki630/crossmosa/issues/2)（@sk5s 回報）。上面這套行不通時可以試。
+
+**不知道自己走到哪了**：按 **③ ＋ ④**（電源 ＋ 右側邊那顆）拍一張截圖 —— 螢幕雖然沒更新，機器心裡還是知道
+「現在該顯示什麼」。把卡拔到電腦上打開 `screenshot-*.bmp` 就看得到。
+只有畫面停著不動的時候有效；第 6 步檢查中、第 8 步寫入中按了不會有反應。
 
 **不保證每台都救得回來。** 已經有使用者照著做仍然沒救回。
 
@@ -777,16 +777,16 @@ Step 8: writing (measured 60–90 s), then it restarts by itself — but that re
 reset the screen chip, so occasionally the display stays blank until you press ②. All the waits
 above have margin built in; erring on the long side costs nothing.
 
-**Lost track?** Press **③ + ④** (power + the right-edge button) for a screenshot — the panel is not updating, but the device still
-knows what *should* be on screen. Read `screenshot-*.bmp` from the card. Static screens only;
-nothing happens during the check or the write.
-
 **Stuck on 2.0** (no reports so far): same steps. Different mechanism — 2.0's prompt has two
 options and starts on *Cancel*; ① moves it to *Confirm* and ⑥ selects.
 
 **Another community write-up** reports different timings (~7 s combo, stock firmware first):
 [CrossInk #479](https://github.com/uxjulia/CrossInk/discussions/479) ·
 [issue #2](https://github.com/anki630/crossmosa/issues/2) (by @sk5s). Try that if the above fails.
+
+**Lost track?** Press **③ + ④** (power + the right-edge button) for a screenshot — the panel is not updating, but the device still
+knows what *should* be on screen. Read `screenshot-*.bmp` from the card. Static screens only;
+nothing happens during the check or the write.
 
 **Not guaranteed** — some users have followed these steps and still not recovered.
 
