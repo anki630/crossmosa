@@ -83,7 +83,7 @@ CrossMosa 把範圍收窄，專心做三件事:
 3. **只針對 X3 調校**。原版同時支援 X3 與 X4;本分支的顯示波形時間、記憶體預算、
    字型尺寸全部照 X3 的 792×528 面板與這顆 ESP32-C3 實測而定。
    X3 有兩種螢幕驅動晶片：**UC8253**（較早的機器）與 **UC8279**（較新的機器）。
-   本版開機時會自己認出是哪一種，兩種都支援。
+   本版開機時會自己認出是哪一種，**兩種都已經在實機上刷過**。
 
 這是個人專案，不是產品。**沒有任何隸屬於 Xteink 或原版 CrossPoint 專案的關係。**
 
@@ -521,7 +521,8 @@ core 裡，不是本專案能改的)，兩次建置就會差幾十個位元組�
   開始之前請先讀安裝章開頭的「刷機無法保證成功」與 USB-locked 注意事項:
   SD 救援模式在韌體卡住開機迴圈時進不去，部分機器的 USB 也沒有資料傳輸。
 - **與 Xteink 無關，與原版 CrossPoint 專案也無隸屬關係。** 兩者都不為這個分支負責。
-- **驗證主力是一台 UC8279 新批次 X3。** 舊批次（UC8253）目前沒有實機可測。沒有 X4，沒有自動化的硬體測試。
+- **驗證主力是一台 UC8279 新批次 X3**，舊批次（UC8253）由使用者回報刷機成功。
+  沒有 X4，沒有自動化的硬體測試。
   很多改動的驗證方式就是「用了幾天沒出事」。
 - **沒有遙測。** 本韌體不會回報使用狀況給任何人。Wi-Fi 憑證、閱讀進度、書籤只存在你自己的
   SD 卡上(`/.crossmosa/`)。裝置只有在你主動要求時才連外:連 Wi-Fi 後對時(NTP)、
@@ -826,8 +827,8 @@ Issues for missing characters or bugs are welcome too.
 ## Disclaimer
 
 This project ships **no book content and no book sources** — bring your own legally obtained, DRM-free EPUBs (publisher or indie-store direct sales, public-domain libraries, your own documents). Support the authors. Flash at your own risk; third-party firmware can leave a device unbootable. Not affiliated
-with Xteink or upstream. Verified primarily on **one newer-batch UC8279 X3**; there is
-currently **no older-batch (UC8253) unit to test**, and no X4 — much of the verification is "used it for
+with Xteink or upstream. Verified primarily on **one newer-batch UC8279 X3**; an
+older-batch (UC8253) unit was **flashed successfully by a user**. No X4 — much of the verification is "used it for
 a few days and nothing broke". **No telemetry**: credentials, progress and bookmarks stay on
 your SD card, and the device only reaches the network when you ask it to (NTP after joining
 Wi-Fi, your own OPDS server, Calibre). The upstream OTA update check is removed, so this
