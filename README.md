@@ -200,7 +200,8 @@ CrossMosa 是下班後的個人專案。如果它讓你的 X3 變好用了，幾
 4. 按 **③**，再按 **⑥** —— 選取繞到你的 `.bin`，然後選擇它
 5. **等 60 秒**，再按一次 **③ ⑥** —— 保險，見下
 6. **等 90 秒** —— 機器在檢查檔案有沒有壞掉，完全沒有反應是正常的
-7. 按 **③**，再按 **⑥** —— 回答畫面上的「要更新韌體嗎？」
+7. 按 **⑥** —— 回答畫面上的「要更新韌體嗎？」
+   （這時通常第 5 步那輪就已經按下去了，這一下是保險。不確定的話按 **③ ⑥** 也可以。）
 8. **等 2 分鐘** —— 正在寫入，**絕對不要動機器、不要拔卡**
 9. 通常會自己重新開機。畫面還是黑的就按 **①**，再長按 **②**
 
@@ -215,7 +216,7 @@ CrossMosa 是下班後的個人專案。如果它讓你的 X3 變好用了，幾
 > | 檢查中／寫入中 | 忽略 | 忽略 |
 >
 > 所以看不到畫面時**不必知道自己在第幾步**——不確定就再按一次 ③ ⑥，
-> 每隔一分鐘按一輪也可以，不會弄壞任何東西。第 5 步就是這個道理。
+> 每隔一分鐘按一輪也可以，不會弄壞任何東西。第 5 步與第 7 步就是這個道理。
 
 **全程不要按的**
 
@@ -713,7 +714,8 @@ that upstream arduino-esp32 still carries**. See the [CHANGELOG](CHANGELOG.md) f
 > 4. Press **③**, then **⑥** — wraps to your `.bin` and selects it
 > 5. **Wait 60 seconds**, then press **③ ⑥** again — insurance, see below
 > 6. **Wait 90 seconds** — the device is checking the file is not corrupt; nothing happens on screen
-> 7. Press **③**, then **⑥** — answers the "Update firmware?" prompt
+> 7. Press **⑥** — answers the "Update firmware?" prompt (usually the round at step 5 has
+>    already done it; this one is insurance. Pressing **③ ⑥** instead is equally fine.)
 > 8. **Wait 2 minutes** — writing. **Do not touch the device or remove the card.**
 > 9. It usually reboots itself. If the screen is still blank, press **①**, then hold **②**
 >
