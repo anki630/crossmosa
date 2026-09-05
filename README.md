@@ -389,9 +389,9 @@ UI 字型與內文字型是**完全獨立的兩套**。書的內文走 SD 卡字
 
 <img src="docs/img/button-map.png" width="340" alt="X3 按鍵編號">
 
-| ① 左側邊 | ② 上緣左 | ③ 上緣右 | ④ 右側邊 | ⑥ 正面左2 |
-|---|---|---|---|---|
-| 上一頁 | 重置 | 電源 | 下一頁 | 確認 |
+| ① 左側邊 | ② 上緣左 | ③ 上緣右 | ⑥ 正面左2 |
+|---|---|---|---|
+| 上一頁 | 重置 | 電源 | 確認 |
 
 **只會用到 ① 和 ⑥。⑤⑦⑧（正面其餘三顆）一次都不要按。**
 
@@ -440,7 +440,7 @@ UI 字型與內文字型是**完全獨立的兩套**。書的內文走 SD 卡字
 - 第 8 步：正在寫入（實測 60–90 秒），寫完會自己重開機。
   但那種重開**不會把螢幕晶片一起重來**，所以偶爾畫面還是黑的——按 ② 才會真的從頭開始。
 
-**不知道自己走到哪了**：按 **③ ＋ ④** 拍一張截圖 —— 螢幕雖然沒更新，機器心裡還是知道
+**不知道自己走到哪了**：按 **③ ＋ ④**（電源 ＋ 右側邊那顆）拍一張截圖 —— 螢幕雖然沒更新，機器心裡還是知道
 「現在該顯示什麼」。把卡拔到電腦上打開 `screenshot-*.bmp` 就看得到。
 只有畫面停著不動的時候有效；第 6 步檢查中、第 8 步寫入中按了不會有反應。
 
@@ -725,9 +725,9 @@ no need to go back to stock firmware first. About five to six minutes when it go
 
 <img src="docs/img/button-map.png" width="340" alt="X3 button numbers">
 
-| ① left edge | ② top-left | ③ top-right | ④ right edge | ⑥ front, 2nd |
-|---|---|---|---|---|
-| Previous page | Reset | Power | Next page | Confirm |
+| ① left edge | ② top-left | ③ top-right | ⑥ front, 2nd |
+|---|---|---|---|
+| Previous page | Reset | Power | Confirm |
 
 **Only ① and ⑥ are used. Never press ⑤⑦⑧** (the other three on the front row).
 
@@ -777,7 +777,7 @@ Step 8: writing (measured 60–90 s), then it restarts by itself — but that re
 reset the screen chip, so occasionally the display stays blank until you press ②. All the waits
 above have margin built in; erring on the long side costs nothing.
 
-**Lost track?** Press **③ + ④** for a screenshot — the panel is not updating, but the device still
+**Lost track?** Press **③ + ④** (power + the right-edge button) for a screenshot — the panel is not updating, but the device still
 knows what *should* be on screen. Read `screenshot-*.bmp` from the card. Static screens only;
 nothing happens during the check or the write.
 
