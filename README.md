@@ -250,7 +250,10 @@ CrossMosa 是下班後的個人專案。如果它讓你的 X3 變好用了，幾
 
 **如果沒成功**
 
-- **從第 1 步整個重來。** 多試幾次，重現率很高。
+- **從第 1 步整個重來，多試幾次。** 這是最常見的解法。
+  失敗多半不是步驟錯了，而是**某一下按鍵沒按實**——你看不到畫面，
+  按下去有沒有被收到完全沒有回饋。實測反覆試幾輪之後成功率很高，
+  所以第一次沒成功不代表這條路不通，也不用改步驟。
 - ⛔ **不要改按方向鍵**（⑤⑦⑧）—— 那只會把選取移到別的項目，或是把畫面取消掉。
 - 想確認機器還活著：按 **③ ＋ ④**，卡上會多出一個截圖檔（已實測，畫面凍住也有效）。
 - 另一個社群回報的版本步驟不同（組合鍵約 7 秒、先刷回原廠韌體）：
@@ -747,8 +750,11 @@ that upstream arduino-esp32 still carries**. See the [CHANGELOG](CHANGELOG.md) f
 > computer. ⚠️ Only works on a **static screen** (the list, the prompt); during the check and the
 > write the main loop is busy and nothing happens.
 >
-> **If it does not work:** start again from step 1 — the timing is fiddly and some people needed
-> several attempts. ⛔ Do not switch to the direction buttons (⑤⑦⑧); they only move the selection
+> **If it does not work:** start again from step 1 and try a few times — this is usually all it
+> takes. Failures are most often not a wrong step but **a press that simply did not register**:
+> you cannot see the screen, so there is no feedback telling you whether a button was picked up.
+> Several rounds usually get there, so a first failure does not mean the procedure is wrong and
+> you should not start changing it. ⛔ Do not switch to the direction buttons (⑤⑦⑧); they only move the selection
 > somewhere wrong or cancel the prompt. To check the device is alive, press **③ + ④** and look for
 > a screenshot file (verified: works even with a frozen screen). A community write-up reports a
 > different procedure (~7 s combo, stock firmware first) — try that if the above fails:
