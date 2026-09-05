@@ -198,7 +198,7 @@ CrossMosa 是下班後的個人專案。如果它讓你的 X3 變好用了，幾
 
 1. 按 **②**（重置）
 2. 按住 **① ＋ ③**，維持 **4 秒**；**先放 ③，再放 ①**
-3. 手離開機器，**等 60 秒** —— 讓救援畫面完全準備好。等久不會有壞處，太早按等於白按
+3. 手離開機器，**等 2 秒**
 4. 按 **①**，再按 **⑥** —— 選取繞到你的 `.bin`，然後選擇它
 5. **等 60 秒**，再按一次 **① ⑥** —— 保險，見下
 6. **等 90 秒** —— 機器在檢查檔案有沒有壞掉，完全沒有反應是正常的
@@ -233,8 +233,7 @@ CrossMosa 是下班後的個人專案。如果它讓你的 X3 變好用了，幾
 
 - **第 1 步**：救援組合鍵只在**開機那一瞬間**才會被讀到。如果機器現在是「開著但沒畫面」，
   直接按組合鍵沒有用。先重置，確保它是從頭開機。
-- **第 3 步**：兩件事。一是剛剛按住不放的 ①，放開的瞬間也會被當成按了一下；
-  二是救援畫面本身要時間準備。實測等 60 秒以上才按最穩——**太早按等於沒按，而且你看不出來**。
+- **第 3 步**：剛剛按住不放的 ①，放開的瞬間也會被當成按了一下。等兩秒讓它過去。
 - **第 6 步**：機器正在檢查這個檔案有沒有壞掉（整個約 6 MB 都要讀一遍，實測 30–60 秒）。
 - **第 8 步**：正在寫入（實測 60–90 秒）。
 - **第 9 步**：寫完之後機器會自己重開，但那種重開**不會把螢幕晶片一起重來**，
@@ -716,8 +715,7 @@ that upstream arduino-esp32 still carries**. See the [CHANGELOG](CHANGELOG.md) f
 >
 > 1. Press **②** (Reset)
 > 2. Hold **① + ③** for **4 seconds**; release **③ first, then ①**
-> 3. Hands off, **wait 60 seconds** — let the rescue screen finish coming up. Waiting longer
->    never hurts; pressing too early does nothing and you cannot tell
+> 3. Hands off, **wait 2 seconds**
 > 4. Press **①**, then **⑥** — wraps to your `.bin` and selects it
 > 5. **Wait 60 seconds**, then press **① ⑥** again — insurance, see below
 > 6. **Wait 90 seconds** — the device is checking the file is not corrupt; nothing happens on screen
@@ -739,9 +737,8 @@ that upstream arduino-esp32 still carries**. See the [CHANGELOG](CHANGELOG.md) f
 > so use ① throughout.
 >
 > **What each wait is for:** step 1 — the rescue combo is only read at the instant of boot, so if
-> the device is already on with a dead screen the combo does nothing; step 3 — two things: releasing the ① you were
-> holding also counts as a press, and the rescue screen itself needs time (measured: waiting 60 s
-> or more before pressing is what works reliably — pressing too early does nothing, invisibly); step 6 — reading all ~6 MB to verify (measured 30–60 s);
+> the device is already on with a dead screen the combo does nothing; step 3 — releasing the ① you
+> were holding also counts as a press; step 6 — reading all ~6 MB to verify (measured 30–60 s);
 > step 8 — writing (measured 60–90 s); step 9 — the automatic restart does **not** reset the screen
 > chip, so the display may stay blank until you press ②.
 >
