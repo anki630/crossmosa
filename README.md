@@ -153,7 +153,7 @@ CrossMosa 是下班後的個人專案。如果它讓你的 X3 變好用了，幾
 3. **最壞的情況是機器救不回來。** 已經有使用者的機器變成磚，**照著救援程序也沒救回來**。
    救援是一條可能有用的路，不是保險。刷之前先假設這台機器可能就這樣沒了，你仍然願意，再開始。
 
-> 已經刷了 1.x、**畫面停住不動**的：[救援步驟在這裡](#螢幕停住了救援步驟)。順的話約五分鐘。
+> 已經刷了 1.x、**畫面停住不動**的：[救援步驟在這裡](#螢幕停住了救援步驟)。順的話約五到六分鐘。
 
 ### ⚠️ 一定要做兩件事，少做一件，中文書就是滿頁方塊
 
@@ -383,7 +383,7 @@ UI 字型與內文字型是**完全獨立的兩套**。書的內文走 SD 卡字
 ## 螢幕停住了？救援步驟
 
 刷了 1.x 之後畫面不再更新的，可以**直接盲刷成 2.0**，不必先回原廠韌體。
-順的話大約五分鐘。**全程看不到畫面，照秒數操作就好。**
+順的話大約五到六分鐘。**全程看不到畫面，照秒數操作就好——寧可多等，不要提早按。**
 
 **準備**：SD 卡根目錄放韌體的 `.bin`，**只放一個**。資料夾不用管。
 
@@ -399,14 +399,14 @@ UI 字型與內文字型是**完全獨立的兩套**。書的內文走 SD 卡字
 2. 按住 **① ＋ ③** 四秒 → **先放 ③，再放 ①**
 3. 等 **2 秒**
 4. 按 **①**，再按 **⑥**
-5. 等 **60 秒** → 再按一次 **① ⑥**
+5. 等 **90 秒** → 再按一次 **① ⑥**
 6. 等 **90 秒**
 7. 按 **⑥**
-8. 等 **2 分鐘**（正在寫入，別碰機器、別拔卡）
-9. 通常會自己開機。畫面還是黑的就按 **②**，再長按 **③**
+8. **耐心等** —— 正在寫入，別碰機器、別拔卡。**成功的話它會自己開機**
+9. 等很久還是沒動靜，就從第 1 步重來
 
-**沒成功就從第 1 步重來，多試幾次。** 失敗多半只是某一下沒按實——你看不到畫面，
-按鍵有沒有被收到完全沒有回饋。反覆試幾輪成功率很高。
+**多試幾次。** 失敗多半只是某一下沒按實——你看不到畫面，按鍵有沒有被收到完全沒有回饋。
+反覆試幾輪成功率很高。（開機了但畫面還是黑的，按 **②** 再長按 **③**。）
 
 <details>
 <summary>細節：為什麼這樣按、每一步在等什麼</summary>
@@ -432,9 +432,10 @@ UI 字型與內文字型是**完全獨立的兩套**。書的內文走 SD 卡字
 - 第 1 步：救援組合鍵只在**開機那一瞬間**被讀到。機器若已「開著但沒畫面」，直接按組合鍵沒用。
 - 第 3 步：剛放開的 ① 會被算成一次按鍵，等兩秒讓它過去。
 - 第 5 步：保險。第 4 步沒按實就由它補上；已經成功的話這一輪會被忽略。兩種情況都沒差。
+- 第 6 步之後：檢查約 30–60 秒、寫入約 60–90 秒，都是實測值。**上面的等待都留了餘裕，寧可多等。**
 - 第 6 步：機器在檢查檔案有沒有壞掉（約 6 MB 全部讀一遍，實測 30–60 秒）。
-- 第 8 步：寫入（實測 60–90 秒）。
-- 第 9 步：寫完的自動重開**不會把螢幕晶片一起重來**，所以畫面不一定會亮。按 ② 才會。
+- 第 8 步：寫入（實測 60–90 秒）。寫完會自動重開機。
+- 那個自動重開**不會把螢幕晶片一起重來**，所以偶爾畫面還是黑的——按 ② 才會真的從頭來過。
 
 **迷路了**：按 **③ ＋ ④** 截圖 —— 畫面沒更新，但機器仍知道「現在該顯示什麼」。
 拔卡到電腦看 `screenshot-*.bmp`。只在靜止畫面有效，檢查中和寫入中按了沒反應。
@@ -631,7 +632,7 @@ that upstream arduino-esp32 still carries**. See the [CHANGELOG](CHANGELOG.md) f
 > Assume the device might not come back, and only proceed if you still accept that.
 >
 > Already flashed 1.x and **the screen is frozen**? [Rescue steps below](#screen-stopped-updating-rescue).
-> About five minutes when it goes smoothly.
+> About five to six minutes when it goes smoothly.
 
 Flashing the firmware only fixes the **menus**. **Book text needs fonts on the SD card.**
 The built-in fallback reader font is Latin-only, so **without the SD fonts every Chinese book
@@ -711,8 +712,8 @@ already 90.9% full.
 ## Screen stopped updating? Rescue
 
 If you flashed 1.x and the screen no longer updates, you can **blind-flash straight to 2.0** —
-no need to go back to stock firmware first. About five minutes when it goes smoothly.
-**You will see nothing the whole time; just work by the clock.**
+no need to go back to stock firmware first. About five to six minutes when it goes smoothly.
+**You will see nothing the whole time — work by the clock, and err on the long side.**
 
 **Prepare:** put the firmware `.bin` in the SD card root — **just one**. Folders do not matter.
 
@@ -728,14 +729,16 @@ no need to go back to stock firmware first. About five minutes when it goes smoo
 2. Hold **① + ③** for 4 s → release **③ first, then ①**
 3. Wait **2 s**
 4. Press **①**, then **⑥**
-5. Wait **60 s** → press **① ⑥** again
+5. Wait **90 s** → press **① ⑥** again
 6. Wait **90 s**
 7. Press **⑥**
-8. Wait **2 minutes** (writing — do not touch the device or remove the card)
-9. It usually reboots itself. If the screen is still blank, press **②**, then hold **③**
+8. **Be patient** — writing; do not touch the device or remove the card. **On success it reboots
+   by itself**
+9. If nothing has happened after a good while, start again from step 1
 
-**If it fails, start again from step 1 and try a few times.** Failures are usually just a press
-that did not register — you cannot see the screen, so there is no feedback either way.
+**Try a few times.** Failures are usually just a press that did not register — you cannot see the
+screen, so there is no feedback either way. (If it boots but the screen stays blank, press **②**
+then hold **③**.)
 
 <details>
 <summary>Details: why these buttons, and what each wait is for</summary>
@@ -762,8 +765,9 @@ cancels — **and the screen does not say so**.
 the device is already on with a dead screen the combo does nothing. Step 3: releasing the ① you
 were holding also counts as a press. Step 5: insurance — it covers step 4 not registering, and is
 ignored if step 4 already worked. Step 6: reading all ~6 MB to verify (measured 30–60 s).
-Step 8: writing (measured 60–90 s). Step 9: the automatic restart does **not** reset the screen
-chip, so the display may stay blank until you press ②.
+Step 8: writing (measured 60–90 s), then it restarts by itself — but that restart does **not**
+reset the screen chip, so occasionally the display stays blank until you press ②. All the waits
+above have margin built in; erring on the long side costs nothing.
 
 **Lost track?** Press **③ + ④** for a screenshot — the panel is not updating, but the device still
 knows what *should* be on screen. Read `screenshot-*.bmp` from the card. Static screens only;
