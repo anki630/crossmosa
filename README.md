@@ -554,6 +554,7 @@ core 裡，不是本專案能改的)，兩次建置就會差幾十個位元組�
 [Install](#install--you-must-do-both-steps) ·
 [Highlights](#highlights-vs-upstream) ·
 [Character-set limits](#ui-character-set-limits-please-read) ·
+[Screen frozen?](#screen-stopped-updating-rescue) ·
 [Vs upstream](#relationship-to-upstream) ·
 [Download](https://github.com/anki630/crossmosa/releases/latest)
 
