@@ -169,20 +169,22 @@ CrossMosa 是下班後的個人專案。如果它讓你的 X3 變好用了，幾
 **按鍵編號**
 
 畫面沒有反應時，按鍵的「名字」幫不上忙——同一顆鍵在不同畫面上的螢幕標示會變。
-所以下面一律用位置編號，由左到右、由上到下：
+所以下面一律用編號：
+
+<img src="docs/img/button-map.png" width="380" alt="X3 按鍵編號圖">
 
 | 編號 | 位置 | 平常的身分 |
 |---|---|---|
-| **①** | 上緣左 | 重置 |
-| **②** | 上緣右 | 電源 |
-| **③** | 左側邊 | 上一頁 |
+| **①** | 左側邊 | 上一頁 |
+| **②** | 上緣左 | 重置 |
+| **③** | 上緣右 | 電源 |
 | **④** | 右側邊 | 下一頁 |
 | ⑤ | 正面下緣 左1 | 返回 ⛔ |
 | **⑥** | 正面下緣 左2 | 確認 |
 | ⑦ | 正面下緣 左3 | ⛔ 見下 |
 | ⑧ | 正面下緣 左4 | ⛔ 見下 |
 
-**整個流程只會用到 ③ 和 ⑥**（加上開頭結尾的 ① 和 ②）。
+**整個流程只會用到 ① 和 ⑥**（加上開頭結尾的 ② 和 ③）。
 
 **準備**
 
@@ -190,32 +192,32 @@ CrossMosa 是下班後的個人專案。如果它讓你的 X3 變好用了，幾
 - **最好只放一個**。若有好幾個，**會選到檔名排序最後的那一個**
 - 資料夾不用管，有幾個都沒關係
   （救援畫面的清單只顯示 `.bin`，而且資料夾一律排在前面，所以你的 `.bin` 一定在最後。
-  下面的 ③ 就是靠這一點找到它——按一下，選取會從第一項繞到最後一項。）
+  按 ① 會讓選取從第一項繞到最後一項，就是靠這一點找到它。）
 
-**步驟**
+**步驟**（順的話大約 5 分鐘）
 
-1. 按 **①**（重置）
-2. 按住 **③ ＋ ②**，維持 **4 秒**；**先放 ②，再放 ③**
+1. 按 **②**（重置）
+2. 按住 **① ＋ ③**，維持 **4 秒**；**先放 ③，再放 ①**
 3. 手離開機器，**等 2 秒**
-4. 按 **③**，再按 **⑥** —— 選取繞到你的 `.bin`，然後選擇它
-5. **等 60 秒**，再按一次 **③ ⑥** —— 保險，見下
+4. 按 **①**，再按 **⑥** —— 選取繞到你的 `.bin`，然後選擇它
+5. **等 60 秒**，再按一次 **① ⑥** —— 保險，見下
 6. **等 90 秒** —— 機器在檢查檔案有沒有壞掉，完全沒有反應是正常的
 7. 按 **⑥** —— 回答畫面上的「要更新韌體嗎？」
-   （這時通常第 5 步那輪就已經按下去了，這一下是保險。不確定的話按 **③ ⑥** 也可以。）
+   （通常第 5 步那輪就已經按下去了，這一下是保險。不確定的話按 **① ⑥** 也可以。）
 8. **等 2 分鐘** —— 正在寫入，**絕對不要動機器、不要拔卡**
-9. 通常會自己重新開機。畫面還是黑的就按 **①**，再長按 **②**
+9. 通常會自己重新開機。畫面還是黑的就按 **②**，再長按 **③**
 
-> **為什麼要重複按 ③ ⑥**
+> **為什麼可以重複按 ① ⑥**
 >
-> 因為 **③ 和 ⑥ 在任何畫面上都不會把事情弄糟**：
+> 因為這兩顆**在任何畫面上都不會把事情弄糟**：
 >
-> | 當下畫面 | ③ | ⑥ |
+> | 當下畫面 | ① | ⑥ |
 > |---|---|---|
 > | 檔案清單 | 選取繞到 `.bin` | 選擇它 |
 > | 「要更新韌體嗎？」 | 沒有作用 | 確認 |
 > | 檢查中／寫入中 | 忽略 | 忽略 |
 >
-> 所以看不到畫面時**不必知道自己在第幾步**——不確定就再按一次 ③ ⑥，
+> 所以看不到畫面時**不必知道自己在第幾步**——不確定就再按一次 ① ⑥，
 > 每隔一分鐘按一輪也可以，不會弄壞任何東西。第 5 步與第 7 步就是這個道理。
 
 **全程不要按的**
@@ -223,23 +225,23 @@ CrossMosa 是下班後的個人專案。如果它讓你的 X3 變好用了，幾
 - ⛔ **⑤** 和 **⑦** —— 在「要更新韌體嗎？」那個畫面上，這兩顆都是**取消**
 - ⛔ **⑧** —— 在那個畫面上是確認，但在清單畫面會把選取移到錯的地方
 
-> ⚠️ **⑦ 最容易中招**：它在清單畫面上螢幕會標「上」，跟 ③ 做同樣的事；
+> ⚠️ **⑦ 最容易中招**：它在清單畫面上螢幕會標「上」，跟 ① 做同樣的事；
 > 但到了「要更新韌體嗎？」，它變成取消，**而且畫面上不會標出來**。
-> 看不到螢幕時分不出來，所以整份流程請只用 ③。
+> 看不到螢幕時分不出來，所以整份流程請只用 ①。
 
 **每一步在等什麼**
 
 - **第 1 步**：救援組合鍵只在**開機那一瞬間**才會被讀到。如果機器現在是「開著但沒畫面」，
   直接按組合鍵沒有用。先重置，確保它是從頭開機。
-- **第 3 步**：剛剛按住不放的 ③，放開的瞬間也會被當成按了一下。等兩秒讓它過去。
+- **第 3 步**：剛剛按住不放的 ①，放開的瞬間也會被當成按了一下。等兩秒讓它過去。
 - **第 6 步**：機器正在檢查這個檔案有沒有壞掉（整個約 6 MB 都要讀一遍，實測 30–60 秒）。
 - **第 8 步**：正在寫入（實測 60–90 秒）。
 - **第 9 步**：寫完之後機器會自己重開，但那種重開**不會把螢幕晶片一起重來**，
-  所以畫面不一定會亮。按 ① 才會真的從頭來過。
+  所以畫面不一定會亮。按 ② 才會真的從頭來過。
 
 **不確定自己走到哪一步時**
 
-按 **② ＋ ④** 可以拍一張截圖 —— 畫面雖然沒更新，機器內部仍然知道「現在該顯示什麼」。
+按 **③ ＋ ④** 可以拍一張截圖 —— 畫面雖然沒更新，機器內部仍然知道「現在該顯示什麼」。
 把卡拔到電腦上打開 `screenshot-*.bmp`，就看得到自己停在哪裡。
 
 ⚠️ 只在**靜止畫面**有效（清單、「要更新韌體嗎？」）。
@@ -247,9 +249,9 @@ CrossMosa 是下班後的個人專案。如果它讓你的 X3 變好用了，幾
 
 **如果沒成功**
 
-- **從第 1 步整個重來。** 時間點不好抓，有人試了好幾次才成功。
+- **從第 1 步整個重來。** 多試幾次，重現率很高。
 - ⛔ **不要改按方向鍵**（⑤⑦⑧）—— 那只會把選取移到別的項目，或是把畫面取消掉。
-- 想確認機器還活著：按 **② ＋ ④**，卡上會多出一個截圖檔（已實測，畫面凍住也有效）。
+- 想確認機器還活著：按 **③ ＋ ④**，卡上會多出一個截圖檔（已實測，畫面凍住也有效）。
 - 另一個社群回報的版本步驟不同（組合鍵約 7 秒、先刷回原廠韌體）：
   [CrossInk discussions #479](https://github.com/uxjulia/CrossInk/discussions/479) 與
   [本專案 issue #2](https://github.com/anki630/crossmosa/issues/2)（由 @sk5s 回報）。
@@ -257,8 +259,8 @@ CrossMosa 是下班後的個人專案。如果它讓你的 X3 變好用了，幾
 - **不保證每台都救得回來。** 已經有使用者照著做仍然沒救回。
 
 > ℹ️ **上面是寫給「卡在 1.x」的人的**（絕大多數情況）。
-> 同一套 ③ ⑥ 在 2.0 上也成立，只是機制不同：2.0 的「要更新韌體嗎？」有兩個選項且預設停在
-> 「取消」，③ 會把它移到「確認」，⑥ 再選中。所以不管你卡在哪一版，按 ③ ⑥ 都對。
+> 同一套 ① ⑥ 在 2.0 上也成立，只是機制不同：2.0 的「要更新韌體嗎？」有兩個選項且預設停在
+> 「取消」，① 會把它移到「確認」，⑥ 再選中。所以不管你卡在哪一版，按 ① ⑥ 都對。
 
 > ℹ️ **如果哪天是卡在 2.0**（目前沒有這種回報）：第 6 步要改成
 > **先按一下左側邊的「上一頁」，再按確認鍵**——2.0 的確認畫面預設停在「取消」上。
@@ -684,76 +686,76 @@ that upstream arduino-esp32 still carries**. See the [CHANGELOG](CHANGELOG.md) f
 > and we checked in the source what each button actually does. **You will see nothing on screen
 > the whole time — you are working by the clock.**
 >
-> **Button numbers.** With a dead screen the buttons' *names* are useless — the same button is
+> **Button numbers.** See the diagram above (`docs/img/button-map.png`). With a dead screen the buttons' *names* are useless — the same button is
 > labelled differently on different screens. So the steps below use position numbers, left to
 > right and top to bottom:
 >
 > | # | Position | Normal role |
 > |---|---|---|
-> | **①** | top-left | Reset |
-> | **②** | top-right | Power |
-> | **③** | left edge | Previous page |
+> | **①** | left edge | Previous page |
+> | **②** | top-left | Reset |
+> | **③** | top-right | Power |
 > | **④** | right edge | Next page |
 > | ⑤ | front row, 1st | Back ⛔ |
 > | **⑥** | front row, 2nd | Confirm |
 > | ⑦ | front row, 3rd | ⛔ see below |
 > | ⑧ | front row, 4th | ⛔ see below |
 >
-> **The whole procedure only uses ③ and ⑥** (plus ① and ② at each end).
+> **The whole procedure only uses ① and ⑥** (plus ② and ③ at each end).
 >
 > **Prepare:** put the firmware `.bin` in the SD card root. **Ideally just one** — if there are
 > several, **the one that sorts last by name is the one you get**. Folders do not matter, however
 > many. (The rescue list shows only `.bin` files and always sorts folders first, so your `.bin` is
-> necessarily last; pressing ③ wraps the selection from the first entry round to the last.)
+> necessarily last; pressing ① wraps the selection from the first entry round to the last.)
 >
 > **Steps**
 >
-> 1. Press **①** (Reset)
-> 2. Hold **③ + ②** for **4 seconds**; release **② first, then ③**
+> 1. Press **②** (Reset)
+> 2. Hold **① + ③** for **4 seconds**; release **③ first, then ①**
 > 3. Hands off, **wait 2 seconds**
-> 4. Press **③**, then **⑥** — wraps to your `.bin` and selects it
-> 5. **Wait 60 seconds**, then press **③ ⑥** again — insurance, see below
+> 4. Press **①**, then **⑥** — wraps to your `.bin` and selects it
+> 5. **Wait 60 seconds**, then press **① ⑥** again — insurance, see below
 > 6. **Wait 90 seconds** — the device is checking the file is not corrupt; nothing happens on screen
 > 7. Press **⑥** — answers the "Update firmware?" prompt (usually the round at step 5 has
->    already done it; this one is insurance. Pressing **③ ⑥** instead is equally fine.)
+>    already done it; this one is insurance. Pressing **① ⑥** instead is equally fine.)
 > 8. **Wait 2 minutes** — writing. **Do not touch the device or remove the card.**
-> 9. It usually reboots itself. If the screen is still blank, press **①**, then hold **②**
+> 9. It usually reboots itself. If the screen is still blank, press **②**, then hold **③**
 >
-> **Why press ③ ⑥ repeatedly?** Because **neither button can make things worse, on any screen**:
-> in the list ③ wraps to your `.bin` and ⑥ selects it; on the "Update firmware?" prompt ③ does
+> **Why press ① ⑥ repeatedly?** Because **neither button can make things worse, on any screen**:
+> in the list ① wraps to your `.bin` and ⑥ selects it; on the "Update firmware?" prompt ① does
 > nothing and ⑥ confirms; while checking or writing both are ignored. So you never need to know
-> which step you are on — if in doubt, press ③ ⑥ again, once a minute if you like.
+> which step you are on — if in doubt, press ① ⑥ again, once a minute if you like.
 >
 > **Never press:** ⛔ **⑤** and **⑦** — on the "Update firmware?" prompt both mean *cancel*;
 > ⛔ **⑧** — it confirms there but moves the selection wrongly in the list.
 >
-> ⚠️ **⑦ is the trap**: in the list the screen labels it "up" and it does exactly what ③ does, but
+> ⚠️ **⑦ is the trap**: in the list the screen labels it "up" and it does exactly what ① does, but
 > on the prompt it becomes *cancel* — **and the screen does not say so**. You cannot tell blind,
-> so use ③ throughout.
+> so use ① throughout.
 >
 > **What each wait is for:** step 1 — the rescue combo is only read at the instant of boot, so if
-> the device is already on with a dead screen the combo does nothing; step 3 — releasing the ③ you
+> the device is already on with a dead screen the combo does nothing; step 3 — releasing the ① you
 > were holding also counts as a press; step 6 — reading all ~6 MB to verify (measured 30–60 s);
 > step 8 — writing (measured 60–90 s); step 9 — the automatic restart does **not** reset the screen
-> chip, so the display may stay blank until you press ①.
+> chip, so the display may stay blank until you press ②.
 >
-> **If you lose track:** press **② + ④** for a screenshot — the panel is not updating, but the
+> **If you lose track:** press **③ + ④** for a screenshot — the panel is not updating, but the
 > device still knows what *should* be on screen. Read `screenshot-*.bmp` from the card on a
 > computer. ⚠️ Only works on a **static screen** (the list, the prompt); during the check and the
 > write the main loop is busy and nothing happens.
 >
 > **If it does not work:** start again from step 1 — the timing is fiddly and some people needed
 > several attempts. ⛔ Do not switch to the direction buttons (⑤⑦⑧); they only move the selection
-> somewhere wrong or cancel the prompt. To check the device is alive, press **② + ④** and look for
+> somewhere wrong or cancel the prompt. To check the device is alive, press **③ + ④** and look for
 > a screenshot file (verified: works even with a frozen screen). A community write-up reports a
 > different procedure (~7 s combo, stock firmware first) — try that if the above fails:
 > [issue #2](https://github.com/anki630/crossmosa/issues/2) ·
 > [CrossInk discussions #479](https://github.com/uxjulia/CrossInk/discussions/479) (by @sk5s).
 > **It is not guaranteed to work** — some users have followed these steps and still not recovered.
 >
-> ℹ️ **The above is written for devices stuck on 1.x** (almost always the case). The same ③ ⑥ also
+> ℹ️ **The above is written for devices stuck on 1.x** (almost always the case). The same ① ⑥ also
 > works if you are stuck on 2.0, by a different mechanism: 2.0's prompt has two options and starts
-> on *Cancel*, ③ moves it to *Confirm*, and ⑥ selects. So ③ ⑥ is right either way.
+> on *Cancel*, ① moves it to *Confirm*, and ⑥ selects. So ① ⑥ is right either way.
 
 > ℹ️ If a device is ever stuck on 2.0 (no reports so far), step 6 differs: press **Previous-page
 > once, then Confirm** — 2.0's confirmation screen starts on *Cancel*.
