@@ -163,7 +163,7 @@ CrossMosa 是下班後的個人專案。如果它讓你的 X3 變好用了，幾
 只是舊韌體不會跟新晶片說話，所以畫面停在最後一張不動。**可以直接盲刷成 2.0，不必先繞回原廠韌體。**
 
 > 下面的步驟來自一台故意用 1.2 弄壞的機器，走過好幾遍才定案：
-> **等待秒數是實際計時出來的**，每顆按鍵按下去會發生什麼**都翻程式確認過**。
+> **檢查與寫入的秒數是實際計時出來的**，每顆按鍵按下去會發生什麼**都翻程式確認過**。
 > **全程看不到畫面，只能照秒數操作。**
 
 **按鍵編號**
@@ -234,6 +234,8 @@ CrossMosa 是下班後的個人專案。如果它讓你的 X3 變好用了，幾
 - **第 1 步**：救援組合鍵只在**開機那一瞬間**才會被讀到。如果機器現在是「開著但沒畫面」，
   直接按組合鍵沒有用。先重置，確保它是從頭開機。
 - **第 3 步**：剛剛按住不放的 ①，放開的瞬間也會被當成按了一下。等兩秒讓它過去。
+- **第 5 步**：這一輪是保險。第 4 步如果沒按實、或是救援畫面還沒好，這一輪會補上；
+  如果第 4 步已經成功，這時候機器正在檢查檔案，這一輪會被忽略。**兩種情況都沒差。**
 - **第 6 步**：機器正在檢查這個檔案有沒有壞掉（整個約 6 MB 都要讀一遍，實測 30–60 秒）。
 - **第 8 步**：正在寫入（實測 60–90 秒）。
 - **第 9 步**：寫完之後機器會自己重開，但那種重開**不會把螢幕晶片一起重來**，
@@ -264,9 +266,6 @@ CrossMosa 是下班後的個人專案。如果它讓你的 X3 變好用了，幾
 > ℹ️ **上面是寫給「卡在 1.x」的人的**（絕大多數情況）。
 > 同一套 ① ⑥ 在 2.0 上也成立，只是機制不同：2.0 的「要更新韌體嗎？」有兩個選項且預設停在
 > 「取消」，① 會把它移到「確認」，⑥ 再選中。所以不管你卡在哪一版，按 ① ⑥ 都對。
-
-> ℹ️ **如果哪天是卡在 2.0**（目前沒有這種回報）：第 6 步要改成
-> **先按一下左側邊的「上一頁」，再按確認鍵**——2.0 的確認畫面預設停在「取消」上。
 
 畫面回來之後，就可以照下面的方式正常刷機了。
 
@@ -762,9 +761,6 @@ that upstream arduino-esp32 still carries**. See the [CHANGELOG](CHANGELOG.md) f
 > ℹ️ **The above is written for devices stuck on 1.x** (almost always the case). The same ① ⑥ also
 > works if you are stuck on 2.0, by a different mechanism: 2.0's prompt has two options and starts
 > on *Cancel*, ① moves it to *Confirm*, and ⑥ selects. So ① ⑥ is right either way.
-
-> ℹ️ If a device is ever stuck on 2.0 (no reports so far), step 6 differs: press **Previous-page
-> once, then Confirm** — 2.0's confirmation screen starts on *Cancel*.
 
 Flashing the firmware only fixes the **menus**. **Book text needs fonts on the SD card.**
 The built-in fallback reader font is Latin-only, so **without the SD fonts every Chinese book
