@@ -399,7 +399,7 @@ UI 字型與內文字型是**完全獨立的兩套**。書的內文走 SD 卡字
 2. 按住 **① ＋ ③** 四秒 → **先放 ③，再放 ①**
 3. 等 **2 秒**
 4. 按 **①**，再按 **⑥**
-5. 等 **90 秒** → 再按一次 **① ⑥**
+5. 等 **90 秒** → 再做一次第 4 步（先 **①**，再 **⑥**）
 6. 等 **90 秒**
 7. 按 **⑥**
 8. **耐心等** —— 正在寫入，別碰機器、別拔卡。**成功的話它會自己開機**
@@ -411,7 +411,7 @@ UI 字型與內文字型是**完全獨立的兩套**。書的內文走 SD 卡字
 <details>
 <summary>細節：為什麼這樣按、每一步在等什麼</summary>
 
-**為什麼可以一直重複按 ① ⑥**：因為這兩顆不管機器停在哪一頁，都不會把事情弄糟。
+**為什麼可以一直重複「先 ① 再 ⑥」**：因為這兩顆不管機器停在哪一頁，都不會把事情弄糟。
 
 | 當下畫面 | ① | ⑥ |
 |---|---|---|
@@ -419,7 +419,9 @@ UI 字型與內文字型是**完全獨立的兩套**。書的內文走 SD 卡字
 | 「要更新韌體嗎？」 | 沒有作用 | 確認 |
 | 檢查中／寫入中 | 忽略 | 忽略 |
 
-所以不必知道自己在第幾步，不確定就再按一輪。第 5、7 步就是這個道理。
+所以不必知道自己在第幾步，不確定就再來一輪。第 5、7 步就是這個道理。
+**這兩顆是【一顆一顆按】，不是同時按住**——本文裡只有 **① ＋ ③**（進救援）和
+**③ ＋ ④**（截圖）這兩組才是要同時按住的。
 
 **為什麼 `.bin` 只放一個**：救援畫面的清單只會列出 `.bin`，而且資料夾一定排在前面，
 所以你那個 `.bin` 一定是最後一個。按 ① 會從第一個繞到最後一個，剛好就選到它。
@@ -733,7 +735,7 @@ no need to go back to stock firmware first. About five to six minutes when it go
 2. Hold **① + ③** for 4 s → release **③ first, then ①**
 3. Wait **2 s**
 4. Press **①**, then **⑥**
-5. Wait **90 s** → press **① ⑥** again
+5. Wait **90 s** → do step 4 again (**①** first, then **⑥**)
 6. Wait **90 s**
 7. Press **⑥**
 8. **Be patient** — writing; do not touch the device or remove the card. **On success it reboots
@@ -747,7 +749,7 @@ then hold **③**.)
 <details>
 <summary>Details: why these buttons, and what each wait is for</summary>
 
-**Why ① ⑥ can be repeated safely** — neither can make things worse on any screen:
+**Why "① then ⑥" can be repeated safely** — neither can make things worse on any screen:
 
 | Screen | ① | ⑥ |
 |---|---|---|
@@ -756,6 +758,8 @@ then hold **③**.)
 | Checking / writing | ignored | ignored |
 
 So you never need to know which step you are on. That is what steps 5 and 7 are for.
+**Press these one after the other, not together** — the only combinations you hold down at the
+same time are **① + ③** (entering rescue) and **③ + ④** (screenshot).
 
 **Why only one `.bin`** — the rescue list shows only `.bin` files and always sorts folders first,
 so your `.bin` is necessarily the last entry; ① wraps the selection from the first round to the
