@@ -78,6 +78,10 @@ class HalGPIO {
   // 主任務的 update() 在 tick 期間跑不到，這是唯一能在按下去的那一步就把鎖還出去的辦法。
   // 非 const：InputManager::getState() 會順路跑 touch 狀態機（X3 無 touch，直接回 0）。
   bool anyButtonDownRaw();
+
+  // v198：電源鍵的【瞬時原始電平】。getState() 讀電源鍵走的是直接 digitalRead()
+  // （InputManager.cpp:151-155），不經去彈跳、不經 ADC ladder，所以這個值不會有延遲。
+  bool powerDownRaw();
   // v189：「使用者的手還在按鍵上」——原始電平為真，【或】去彈跳尚未收斂（放開之後 5ms 內
   // currentState 仍是按著的）。複查抓到：只看原始電平，放開的那一瞬間電平已經是 0，tick 會照跑
   // 整頁，release 邊緣要等它跑完才被 update() 認列——放開觸發的動作多等一個 tick、而且
@@ -98,7 +102,19 @@ class HalGPIO {
   // Verify power button was held long enough after wakeup.
   // Returns true if verification succeeded, false if device should return to sleep.
   // Should only be called when wakeup reason is PowerButton.
-  bool verifyPowerButtonWakeup(uint16_t requiredDurationMs, bool shortPressAllowed);
+  // v197 診斷：驗證失敗時分不出「等不到按下」與「按太短」，兩者的修法完全不同。
+  // 純輸出參數，不影響判定邏輯;傳 nullptr 即維持原行為。
+  struct PowerVerifyDiag {
+    // 255=沒執行（reason 不是 PowerButton）；0=通過 1=等不到 isPressed 2=握持不足 3=快速路徑
+    // ⚠️ 不要讓 0 同時代表「通過」與「沒跑過」—— v191 的哨兵撞號就是這樣來的。
+    uint8_t outcome = 255;
+    uint16_t waitedMs = 0; // 等 isPressed 花的毫秒
+    uint16_t heldMs = 0;   // getPowerButtonHeldTime() 的最終值
+    uint16_t requiredMs = 0;      // 設定值（400 或 10）
+    uint16_t calibratedMs = 0;    // 實際比較的門檻 = required - millis()，下限 1
+  };
+  bool verifyPowerButtonWakeup(uint16_t requiredDurationMs, bool shortPressAllowed,
+                               PowerVerifyDiag* diag = nullptr);
 
   // Check if USB is connected
   bool isUsbConnected() const;
@@ -108,7 +124,10 @@ class HalGPIO {
 
   enum class WakeupReason { PowerButton, AfterFlash, AfterUSBPower, Other };
 
-  WakeupReason getWakeupReason() const;
+  // v197：usbOut 讓呼叫端拿到【本次判定所依據的】USB 狀態，不必再做一次 BQ27220 I2C 讀取
+  // （那會把電源鍵驗證往後推）。不用隱藏的 mutable 快照 —— 那種東西沒先呼叫本函式時
+  // 會安靜地回傳看似有效的 false。
+  WakeupReason getWakeupReason(bool* usbOut = nullptr) const;
 
   // Button indices
   static constexpr uint8_t BTN_BACK = 0;

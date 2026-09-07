@@ -1,6 +1,7 @@
 #include "ActivityManager.h"
 
 #include <FontCacheManager.h>
+#include <FontDecompressor.h>
 #include <HalPowerManager.h>
 
 #include <algorithm>
@@ -51,7 +52,28 @@ void ActivityManager::renderTaskLoop() {
     RenderLock lock;
     if (currentActivity) {
       HalPowerManager::Lock powerLock;  // Ensure we don't go into low-power mode while rendering
+      // v204 instrument: v202 compressed the UI fonts and list scrolling went sluggish.
+      // This is the single choke point every screen render passes through -- unlike
+      // Theme::drawList, which has three implementations (v203's instrument went into
+      // LyraTheme while the device runs Formosa Pro, so it never executed).
+      extern FontCacheManager fontCacheManager;
+      FontDecompressor* fd = fontCacheManager.getDecompressor();
+      const uint32_t t0 = micros();
+      const FontDecompressor::Stats s0 = fd ? fd->getStats() : FontDecompressor::Stats{};
+      const std::string who = currentActivity->name;
+
       currentActivity->render(std::move(lock));
+
+      const uint32_t us = micros() - t0;
+      if (fd) {
+        const auto& s1 = fd->getStats();
+        DiagLog::line("UIDRAW %s us=%lu glyphs=%lu miss=%lu dec=%lums", who.c_str(), (unsigned long)us,
+                      (unsigned long)(s1.getBitmapCalls - s0.getBitmapCalls),
+                      (unsigned long)(s1.cacheMisses - s0.cacheMisses),
+                      (unsigned long)(s1.decompressTimeMs - s0.decompressTimeMs));
+      } else {
+        DiagLog::line("UIDRAW %s us=%lu nofd", who.c_str(), (unsigned long)us);
+      }
     }
     // Notify any task blocked in requestUpdateAndWait() that the render is done.
     TaskHandle_t waiter = nullptr;
@@ -356,4 +378,8 @@ void RenderLock::unlock() {
  * @return true if renderingMutex is busy, otherwise false.
  *
  */
+bool RenderLock::heldByCurrentTask() {
+  return xSemaphoreGetMutexHolder(activityManager.renderingMutex) == xTaskGetCurrentTaskHandle();
+}
+
 bool RenderLock::peek() { return xQueuePeek(activityManager.renderingMutex, NULL, 0) != pdTRUE; };

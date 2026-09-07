@@ -58,6 +58,13 @@ class OpdsBookBrowserActivity final : public Activity {
 
   OpdsServer server;  // Copied at construction — safe even if the store changes during browsing
 
+  // v200：render 在另一個 task 讀這些字串（對它們呼叫 .c_str()），主任務重新配置就是
+  // 與 entries 同一類的 UAF。集中成 helper，比在 16 個地方各開一個作用域不容易漏。
+  // ⚠️ 只能從【未持鎖】的路徑呼叫（onEnter／loop／fetchFeed／result handler 都是，已逐一查證）；
+  //    renderingMutex 非遞迴，從持鎖的 onExit 呼叫會永久死鎖。
+  void setStatus(std::string v);
+  void setError(std::string msg, std::string detail = {});
+
   void checkAndConnectWifi();
   void launchWifiSelection();
   void onWifiSelectionComplete(bool connected);

@@ -267,6 +267,57 @@ void setupDisplayAndFonts(bool seamless = false) {
 // 這裡只記時間戳（純 RAM，零 I/O），等過了那一段再一行印出來。
 static uint32_t g_wakeT[6] = {0, 0, 0, 0, 0, 0};
 
+// v197：19% 的開機會在 BENCH 之後、RESUME 之前無聲地睡回去（v196 soak：64 次裡 12 次）。
+// 那個窗口裡【恰好】有兩個 startDeepSleep()，而兩條路以前都不寫任何東西 —— log 上分不出是哪一個。
+// ⚠️ 證人只能放在「已經決定要睡」之後：在 verifyPowerButtonWakeup() 【之前】寫 SD，
+//    等於把電源鍵驗證往後推，會讓正在診斷的問題變嚴重（同 v196 複查抓到的形狀）。
+//    成功路徑的旗標一律先進 RAM，跟著既有的 WAKE steps 一起印。
+static uint8_t g_wakeReason = 255;
+static uint8_t g_wakeUsb = 0;
+static HalGPIO::PowerVerifyDiag g_pwrDiag;
+
+// v198：**只加量測，不改判定。** v197 證明夭折全是「問的那一刻按鍵沒被按著」
+// （11/11 outcome=1 waited=1000），但沒告訴我們按壓是【多早】結束的。
+// ⚠️ 兩個離散快照【定不出放開的邊緣】（複查指出，成立）。它們回答的是一個更小、
+//    但足以決定修法的問題：**開機途中的這兩個時刻，按鍵還在不在？**
+//      每個取樣點都 0 → 按壓在第一個取樣點之前就結束了 → 那個時刻之後判定救不了
+//      某個取樣點是 1 → 按壓至少撐到那裡 → 在那裡判定就能修好這一類
+//    沒有這個分辨，任何修法都是猜的 —— 對抗式複查正是這樣打掉 v198 的第一版：
+// 用離散取樣點去推「按住多久」，既可能被一個毛刺誤判成按滿（接受集合變寬、
+// 新增口袋誤觸開機），也可能整個錯過真正的放開窗口。
+//
+// 所以這一版只做一件事：在開機途中的幾個既有位置記下電源鍵的瞬時原始電平與時刻，
+// 事後一起印出來。**判定邏輯一個字都沒動。**
+// ⚠️ 取樣全部排在 boot_recovery::checkBootCombo()【之後】—— 逃生口沒動。
+// ⚠️ 只寫 RAM、無配置、無 I/O、無延遲;不參與任何分支。
+static constexpr uint8_t PWR_TRACE_MAX = 6;
+static uint32_t g_pwrTraceMs[PWR_TRACE_MAX] = {0};
+static uint8_t g_pwrTraceDown[PWR_TRACE_MAX] = {0};
+static uint8_t g_pwrTraceN = 0;
+static const char* powerTraceStr() {
+  static char buf[80];
+  int off = 0;
+  for (uint8_t i = 0; i < g_pwrTraceN && off < static_cast<int>(sizeof(buf)) - 1; ++i) {
+    const int w = snprintf(buf + off, sizeof(buf) - off, "%s%lu:%u", i ? " " : "",
+                           static_cast<unsigned long>(g_pwrTraceMs[i]),
+                           static_cast<unsigned>(g_pwrTraceDown[i]));
+    if (w <= 0) break;
+    off += w;
+  }
+  buf[off < 0 ? 0 : (off < static_cast<int>(sizeof(buf)) ? off : static_cast<int>(sizeof(buf)) - 1)] = '\0';
+  return buf;
+}
+
+static void tracePower() {
+  if (g_pwrTraceN >= PWR_TRACE_MAX) return;
+  // 先讀再記時刻:getState() 內含兩次 analogRead，先記 millis() 的話那個時刻是下界、
+  // 不是取樣發生的時刻（複查指出）。
+  const bool down = gpio.powerDownRaw();
+  g_pwrTraceDown[g_pwrTraceN] = down ? 1 : 0;
+  g_pwrTraceMs[g_pwrTraceN] = millis();
+  ++g_pwrTraceN;
+}
+
 void setup() {
   BoardConfig::holdPowerRails();
 
@@ -314,9 +365,16 @@ void setup() {
   silentRebootTarget = 0;
 
   gpio.begin();
+  // v199 取樣 1：`gpio.begin()` 的最後一行就是 `inputMgr.begin()`，所以它一返回就讀得到按鍵——
+  // 這是【逃生口之後】最早的可能時刻。v198 把取樣放在下面三個 I2C 裝置之後，量到約 500ms，
+  // 而四筆軌跡裡有兩筆是「500ms 就已放開」——看不到就修不了。這一版要問的是：
+  // 那 500ms 有多少是這三個 I2C 花掉的？若能提早兩三百毫秒，可救回的短按就變多。
+  tracePower();
   powerManager.begin();
   halTiltSensor.begin();
   halClock.begin();
+
+  tracePower();  // v199 取樣 2：＝ v198 的取樣 1 位置（約 500ms），保留以便直接對照
 
   LOG_INF("MAIN", "Hardware detect: %s", gpio.deviceIsX3() ? (gpio.displayIsUc8279() ? "X3 (UC8279)" : "X3 (UC8253)") : "X4");
 
@@ -351,6 +409,7 @@ void setup() {
 
   // v196：BENCH→RESUME 黑盒補證人（純觀測，不改順序／行為）。
   HalSystem::checkPanic();
+  tracePower();  // v199 取樣 3（＝ v198 的取樣 2）
   g_wakeT[0] = millis();
 
   SETTINGS.loadFromFile();
@@ -367,18 +426,32 @@ void setup() {
   ButtonNavigator::setMappedInputManager(mappedInputManager);
   g_wakeT[3] = millis();
 
-  const auto wakeupReason = gpio.getWakeupReason();
+  bool wakeUsb = false;
+  const auto wakeupReason = gpio.getWakeupReason(&wakeUsb);
+  // v197：純 RAM，零 I/O。usb 取自 getWakeupReason() 內部那次 I2C 的結果，不重讀。
+  g_wakeReason = static_cast<uint8_t>(wakeupReason);
+  g_wakeUsb = wakeUsb ? 1 : 0;
   switch (wakeupReason) {
     case HalGPIO::WakeupReason::PowerButton:
       LOG_DBG("MAIN", "Verifying power button press duration");
       if (!gpio.verifyPowerButtonWakeup(SETTINGS.getPowerButtonDuration(),
-                                        SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::SLEEP)) {
+                                        SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::SLEEP,
+                                        &g_pwrDiag)) {
+        // 判定已經結束，這時候寫 SD 不會再影響它。outcome:1=等不到 isPressed 2=握持不足
+        DiagLog::line("WAKE abort why=verify usb=%u outcome=%u waited=%u held=%u req=%u cal=%u t=%lu trace=%s",
+                      static_cast<unsigned>(g_wakeUsb), static_cast<unsigned>(g_pwrDiag.outcome),
+                      static_cast<unsigned>(g_pwrDiag.waitedMs), static_cast<unsigned>(g_pwrDiag.heldMs),
+                      static_cast<unsigned>(g_pwrDiag.requiredMs), static_cast<unsigned>(g_pwrDiag.calibratedMs),
+                      static_cast<unsigned long>(millis()), powerTraceStr());
         powerManager.startDeepSleep(gpio);
       }
       break;
     case HalGPIO::WakeupReason::AfterUSBPower:
       // If USB power caused a cold boot, go back to sleep
       LOG_DBG("MAIN", "Wakeup reason: After USB Power");
+      // v197：這條就是「充電時按電源鍵被判成是 USB 叫醒的」的嫌犯。
+      DiagLog::line("WAKE abort why=usbpower usb=%u t=%lu", static_cast<unsigned>(g_wakeUsb),
+                    static_cast<unsigned long>(millis()));
       powerManager.startDeepSleep(gpio);
       break;
     case HalGPIO::WakeupReason::AfterFlash:
@@ -493,6 +566,13 @@ void setup() {
   // v196：證人——兩種情況都印，對照 willResumeToReader 與實際有無畫 logo。
   DiagLog::line("WAKE splash skipped=%d", (resume == BootResume::Splash && willResumeToReader) ? 1 : 0);
   // v196（複查）：開機前段的時間戳集中在這裡印 —— 此時電源鍵驗證與 recovery 判定都已經過去。
+  // v197：reason 0=PowerButton 1=AfterFlash 2=AfterUSBPower 3=Other
+  //       verify 255=沒執行（reason 不是 PowerButton）0=通過 1=等不到 2=握持不足 3=快速路徑
+  DiagLog::line("WAKE why reason=%u usb=%u verify=%u waited=%u held=%u req=%u cal=%u trace=%s",
+                static_cast<unsigned>(g_wakeReason), static_cast<unsigned>(g_wakeUsb),
+                static_cast<unsigned>(g_pwrDiag.outcome), static_cast<unsigned>(g_pwrDiag.waitedMs),
+                static_cast<unsigned>(g_pwrDiag.heldMs), static_cast<unsigned>(g_pwrDiag.requiredMs),
+                static_cast<unsigned>(g_pwrDiag.calibratedMs), powerTraceStr());
   DiagLog::line("WAKE steps panic=%lu settings=%lu appstate=%lu stores=%lu wakeup=%lu settle=%lu",
                 static_cast<unsigned long>(g_wakeT[0]), static_cast<unsigned long>(g_wakeT[1]),
                 static_cast<unsigned long>(g_wakeT[2]), static_cast<unsigned long>(g_wakeT[3]),

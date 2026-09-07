@@ -21,6 +21,7 @@ parser.add_argument("fontstack", action="store", nargs='+', help="list of font f
 parser.add_argument("--2bit", dest="is2Bit", action="store_true", help="generate 2-bit greyscale bitmap instead of 1-bit black and white.")
 parser.add_argument("--additional-intervals", dest="additional_intervals", action="append", help="Additional code point intervals to export as min,max. This argument can be repeated.")
 parser.add_argument("--compress", dest="compress", action="store_true", help="Compress glyph bitmaps using DEFLATE with group-based compression.")
+parser.add_argument("--group-max-bytes", dest="group_max_bytes", type=int, default=65536, help="Cap on a compression group's uncompressed size. Bounds the decompressor's transient malloc; smaller groups also make random glyph access cheaper (a miss inflates one group).")
 parser.add_argument("--force-autohint", dest="force_autohint", action="store_true", help="Force FreeType auto-hinter instead of native font hinting. Improves stem width consistency for fonts with weak or no native TrueType hints.")
 parser.add_argument("--pnum", dest="pnum", action="store_true", help="Use proportional numerals (pnum OpenType feature) instead of default tabular figures. Reduces visual gaps between digits in running prose.")
 args = parser.parse_args()
@@ -763,7 +764,7 @@ print(f"ligatures: {len(ligature_pairs)} pairs extracted", file=sys.stderr)
 compress = args.compress
 
 
-def to_byte_aligned(packed, width, height):
+def to_byte_aligned(packed, width, height, is2Bit):
     """Convert packed 2-bit bitmap to byte-aligned format (rows padded to byte boundary).
 
     In packed format, pixels flow continuously across row boundaries (4 pixels/byte).
@@ -773,27 +774,27 @@ def to_byte_aligned(packed, width, height):
     """
     if width == 0 or height == 0:
         return b''
-    row_stride = (width + 3) // 4  # bytes per byte-aligned row
+    px_per_byte = 4 if is2Bit else 8
+    bpp = 2 if is2Bit else 1
+    mask = 0x3 if is2Bit else 0x1
+    row_stride = (width + px_per_byte - 1) // px_per_byte  # bytes per byte-aligned row
     aligned = bytearray(row_stride * height)
     for y in range(height):
         for x in range(width):
             # Read pixel from packed format (continuous bit stream)
             packed_pos = y * width + x
-            packed_byte_idx = packed_pos // 4
-            packed_shift = (3 - (packed_pos % 4)) * 2
-            pixel = (packed[packed_byte_idx] >> packed_shift) & 0x3
+            packed_byte_idx = (packed_pos * bpp) // 8
+            packed_shift = 8 - bpp - ((packed_pos * bpp) % 8)
+            pixel = (packed[packed_byte_idx] >> packed_shift) & mask
 
             # Write pixel to byte-aligned format (row-aligned)
-            aligned_byte_idx = y * row_stride + x // 4
-            aligned_shift = (3 - (x % 4)) * 2
+            aligned_byte_idx = y * row_stride + x // px_per_byte
+            aligned_shift = 8 - bpp - ((x % px_per_byte) * bpp)
             aligned[aligned_byte_idx] |= (pixel << aligned_shift)
     return bytes(aligned)
 
 
 # Build groups for compression
-if compress and not is2Bit:
-    print("Error: --compress requires --2bit (byte-aligned compression only supports 2-bit format)", file=sys.stderr)
-    sys.exit(1)
 if compress:
     # Script-based grouping: glyphs that co-occur in typical text rendering
     # are grouped together for efficient LRU caching on the embedded target.
@@ -828,7 +829,7 @@ if compress:
     # 64 KB cap: large enough to hold any single built-in script group with
     # headroom, small enough to be a comfortable transient malloc on the
     # ESP32-C3.
-    GROUP_MAX_UNCOMPRESSED_BYTES = 65536
+    GROUP_MAX_UNCOMPRESSED_BYTES = args.group_max_bytes
 
     def get_script_group(code_point):
         for i, (start, end) in enumerate(SCRIPT_GROUP_RANGES):
@@ -847,7 +848,8 @@ if compress:
         # Use the byte-aligned size (4-pixel-aligned row stride) rather than
         # the packed length, since the decompressor consumes byte-aligned
         # buffers. Empty glyphs contribute zero.
-        glyph_aligned_size = (((props.width + 3) // 4) * props.height
+        _ppb = 4 if is2Bit else 8
+        glyph_aligned_size = ((((props.width + _ppb - 1) // _ppb) * props.height)
                               if props.width > 0 and props.height > 0 else 0)
         if glyph_aligned_size > GROUP_MAX_UNCOMPRESSED_BYTES:
             raise ValueError(
@@ -900,7 +902,7 @@ if compress:
                 code_point=old_props.code_point,
             )
             packed_len += len(packed)
-            group_aligned.extend(to_byte_aligned(packed, old_props.width, old_props.height))
+            group_aligned.extend(to_byte_aligned(packed, old_props.width, old_props.height, is2Bit))
 
         # Compress byte-aligned data with raw DEFLATE (no zlib/gzip header)
         compressor = zlib.compressobj(level=9, wbits=-15)

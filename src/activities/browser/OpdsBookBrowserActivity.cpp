@@ -1,3 +1,4 @@
+#include <cassert>
 #include <algorithm>
 #include "OpdsBookBrowserActivity.h"
 
@@ -48,15 +49,23 @@ void OpdsBookBrowserActivity::onEnter() {
   Activity::onEnter();
 
   state = BrowserState::CHECK_WIFI;
-  entries.clear();
+  {
+    // v200：render 跑在獨立 task（ActivityManager::renderTaskLoop），而 render() 裡的
+    // lambda 是【延遲】讀 entries[index] 的 —— 主任務在那當中改動 entries 就是 UAF。
+    // crash_report199（rst=4、panic reason 空 = 硬體例外不是 abort）的堆疊正是
+    // renderTaskLoop → render():293 → drawList → vector<OpdsEntry>::operator[]。
+    // ⚠️ 鎖的範圍要小：onEnter 後面的 checkAndConnectWifi() 實測要 3.9 秒，絕不能包進來。
+    RenderLock lock;
+    entries.clear();
+  }
   navigationHistory.clear();
   searchTemplate = "";
   currentPath = "";
   selectorIndex = 0;
   consumeConfirm = false;
   consumeBack = false;
-  errorMessage.clear();
-  statusMessage = tr(STR_CHECKING_WIFI);
+  setError({});
+  setStatus(tr(STR_CHECKING_WIFI));
   requestUpdate();
 
   // v5/v100 → v185 搬回：連 WiFi 前卸載 SD 內文字型（舊樹 OpdsBookBrowserActivity:71 原有，
@@ -75,6 +84,10 @@ void OpdsBookBrowserActivity::onEnter() {
 
 void OpdsBookBrowserActivity::onExit() {
   Activity::onExit();
+  // ⛔ v200：這裡【不可以】拿 RenderLock。onExit 是由 ActivityManager::exitActivity(const
+  // RenderLock&) 呼叫的，而那個函式的註解白紙黑字寫著「lock must be held by the caller」。
+  // renderingMutex 是 xSemaphoreCreateMutex()（**非**遞迴），再拿一次就是永久死鎖。
+  // 對比 onEnter：管理器在呼叫它之前明確 lock.unlock()（ActivityManager.cpp:150），所以那裡要加。
   entries.clear();
   navigationHistory.clear();
 
@@ -117,7 +130,7 @@ void OpdsBookBrowserActivity::loop() {
       DiagLog::line("OPDS retry connected=%d", static_cast<int>(WiFi.status() == WL_CONNECTED));
       if (WiFi.status() == WL_CONNECTED && WiFi.localIP() != IPAddress(0, 0, 0, 0)) {
         state = BrowserState::LOADING;
-        statusMessage = tr(STR_LOADING);
+        setStatus(tr(STR_LOADING));
         requestUpdate();
         fetchFeed(currentPath);
       } else {
@@ -271,7 +284,10 @@ void OpdsBookBrowserActivity::render(RenderLock&&) {
   }
 
   const char* confirmLabel =
-      (!entries.empty() && entries[selectorIndex].type == OpdsEntryType::BOOK) ? tr(STR_DOWNLOAD) : tr(STR_OPEN);
+      (selectorIndex >= 0 && selectorIndex < static_cast<int>(entries.size()) &&
+       entries[selectorIndex].type == OpdsEntryType::BOOK)
+          ? tr(STR_DOWNLOAD)
+          : tr(STR_OPEN);  // v200：selectorIndex 在鎖外被寫，這裡自己夾限，不依賴它的時序
   const char* searchLabel = (!searchTemplate.empty() && selectorIndex == 0) ? tr(STR_SEARCH) : tr(STR_DIR_UP);
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), confirmLabel, searchLabel, tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
@@ -306,7 +322,7 @@ void OpdsBookBrowserActivity::fetchFeed(const std::string& path) {
   if (server.url.empty()) {
     DiagLog::line("OPDS no server url");
     state = BrowserState::ERROR;
-    errorMessage = tr(STR_NO_SERVER_URL);
+    setError(tr(STR_NO_SERVER_URL));
     requestUpdate();
     return;
   }
@@ -320,15 +336,14 @@ void OpdsBookBrowserActivity::fetchFeed(const std::string& path) {
   OpdsParser parser;
   {
     OpdsParserStream stream{parser};
-    errorDetail.clear();
+    setError({});  // v200：連同 errorMessage 一起在鎖內清
     if (!HttpDownloader::fetchUrl(url, stream, server.username, server.password)) {
       // v101：畫面原本只有一句「failed to fetch feed」，真因（TLS 失敗、狀態碼、短讀…）
       // 全走 LOG_ERR = 這台沒有序列埠的機器上等於丟棄。寫進 DiagLog 並顯示在畫面上。
       DiagLog::line("OPDS fetch FAILED: %s", HttpDownloader::lastError);
       DiagLog::mem("opds-fetch-fail");
       state = BrowserState::ERROR;
-      errorMessage = tr(STR_FETCH_FEED_FAILED);
-      errorDetail = HttpDownloader::lastError;
+      setError(tr(STR_FETCH_FEED_FAILED), HttpDownloader::lastError);
       requestUpdate();
       return;
     }
@@ -337,7 +352,7 @@ void OpdsBookBrowserActivity::fetchFeed(const std::string& path) {
   if (!parser) {
     DiagLog::line("OPDS parse FAILED");
     state = BrowserState::ERROR;
-    errorMessage = tr(STR_PARSE_FEED_FAILED);
+    setError(tr(STR_PARSE_FEED_FAILED));
     requestUpdate();
     return;
   }
@@ -347,10 +362,17 @@ void OpdsBookBrowserActivity::fetchFeed(const std::string& path) {
   // 從【唯一的來源】切斷：searchTemplate 恆空，其餘 8 個 !empty() 的站點
   // （按鍵、觸控、圖示、標題內縮、按鈕提示、performSearch）全部自動失效，
   // 不留任何按了沒反應的死路徑。要還原就把這行改回來。
-  searchTemplate = "";  // was: parser.getSearchTemplate();
+  // v200：原本這裡有第二次 `searchTemplate = "";`。onEnter 已經設空，而本分支搜尋恆停用，
+  // 那次寫入純屬多餘 —— 拿掉它就【完全不再】於 render 執行期間寫這個字串，競態自然消失。
+  // 要是哪天把搜尋打開，這裡要改成走 setStatus/setError 那樣的鎖內 helper。
   const auto& nextUrl = parser.getNextPageUrl();
   const auto& prevUrl = parser.getPrevPageUrl();
   const bool feedTruncated = parser.truncated();
+  {
+    // v200：從這裡到 selectorIndex 定案為止，entries 與 selectorIndex 必須對 render task
+    // 原子地一起換掉 —— drawList 拿的是 entries.size() 與 selectorIndex，兩者不一致就會
+    // 索引越界。這一段全是記憶體操作，沒有 I/O，鎖的時間很短。
+    RenderLock lock;
   entries = std::move(parser).getEntries();
 
   entries.reserve(entries.size() + (prevUrl.empty() ? 0 : 1) + (nextUrl.empty() ? 0 : 1));
@@ -383,11 +405,30 @@ void OpdsBookBrowserActivity::fetchFeed(const std::string& path) {
     pendingRestoreIndex = -1;
     pendingRestoreHref.clear();
   }
+  }  // v200：RenderLock 作用域結束
   state = BrowserState::BROWSING;  // 空 feed 也是 BROWSING：render 畫空狀態版面（空分類≠錯誤）
   requestUpdate();
 }
 
-void OpdsBookBrowserActivity::releaseEntries() { std::vector<OpdsEntry>().swap(entries); }
+void OpdsBookBrowserActivity::setStatus(std::string v) {
+  assert(!RenderLock::heldByCurrentTask());  // 從持鎖路徑呼叫＝永久死鎖，斷在現場而不是掛在那裡
+  RenderLock lock;
+  statusMessage = std::move(v);
+}
+
+void OpdsBookBrowserActivity::setError(std::string msg, std::string detail) {
+  assert(!RenderLock::heldByCurrentTask());
+  RenderLock lock;
+  errorMessage = std::move(msg);
+  errorDetail = std::move(detail);
+}
+
+void OpdsBookBrowserActivity::releaseEntries() {
+  // v200：swap 會【釋放】舊緩衝區，而 render task 的 lambda 可能正在讀它。
+  // 三個呼叫點（navigateToEntry／navigateBack／performSearch）都由 loop() 觸發、未持鎖。
+  RenderLock lock;
+  std::vector<OpdsEntry>().swap(entries);
+}
 
 void OpdsBookBrowserActivity::navigateToEntry(const OpdsEntry& entry) {
   navigationHistory.push_back({currentPath, selectorIndex, entry.href});
@@ -396,7 +437,7 @@ void OpdsBookBrowserActivity::navigateToEntry(const OpdsEntry& entry) {
   currentPath = UrlUtils::buildUrl(feedUrl, entry.href);
 
   state = BrowserState::LOADING;
-  statusMessage = tr(STR_LOADING);
+  setStatus(tr(STR_LOADING));
   releaseEntries();
   selectorIndex = 0;
   pendingRestoreIndex = -1;  // 前進到新層：不還原任何舊游標
@@ -415,7 +456,7 @@ void OpdsBookBrowserActivity::navigateBack() {
     pendingRestoreHref = navigationHistory.back().href;
     navigationHistory.pop_back();
     state = BrowserState::LOADING;
-    statusMessage = tr(STR_LOADING);
+    setStatus(tr(STR_LOADING));
     releaseEntries();
     selectorIndex = 0;
     requestUpdate();
@@ -425,7 +466,7 @@ void OpdsBookBrowserActivity::navigateBack() {
 
 void OpdsBookBrowserActivity::downloadBook(const OpdsEntry& book) {
   state = BrowserState::DOWNLOADING;
-  statusMessage = book.title;
+  setStatus(book.title);
   downloadProgress = downloadTotal = 0;
   requestUpdate(true);
 
@@ -480,7 +521,7 @@ void OpdsBookBrowserActivity::downloadBook(const OpdsEntry& book) {
     LOG_ERR("OPDS", "Download failed: %d", static_cast<int>(result));
     DiagLog::line("OPDS download FAILED code=%d %s", static_cast<int>(result), HttpDownloader::lastError);
     state = BrowserState::ERROR;
-    errorMessage = tr(STR_DOWNLOAD_FAILED);
+    setError(tr(STR_DOWNLOAD_FAILED));
   }
   requestUpdate();
 }
@@ -533,7 +574,7 @@ void OpdsBookBrowserActivity::performSearch(const std::string& query) {
   currentPath = url;                         // <-- add this
 
   state = BrowserState::LOADING;
-  statusMessage = tr(STR_LOADING);
+  setStatus(tr(STR_LOADING));
   releaseEntries();
   selectorIndex = 0;
   requestUpdate(true);
@@ -543,7 +584,7 @@ void OpdsBookBrowserActivity::performSearch(const std::string& query) {
 void OpdsBookBrowserActivity::checkAndConnectWifi() {
   if (WiFi.status() == WL_CONNECTED && WiFi.localIP() != IPAddress(0, 0, 0, 0)) {
     state = BrowserState::LOADING;
-    statusMessage = tr(STR_LOADING);
+    setStatus(tr(STR_LOADING));
     requestUpdate();
     fetchFeed(currentPath);
     return;
@@ -563,13 +604,13 @@ void OpdsBookBrowserActivity::onWifiSelectionComplete(const bool connected) {
   DiagLog::line("OPDS wifi-stage connected=%d", static_cast<int>(connected));
   if (connected) {
     state = BrowserState::LOADING;
-    statusMessage = tr(STR_LOADING);
+    setStatus(tr(STR_LOADING));
     requestUpdate(true);
     fetchFeed(currentPath);
   } else {
     // Leave WiFi up; onExit's silent reboot handles teardown without fragmenting.
     state = BrowserState::ERROR;
-    errorMessage = tr(STR_WIFI_CONN_FAILED);
+    setError(tr(STR_WIFI_CONN_FAILED));
     requestUpdate();
   }
 }

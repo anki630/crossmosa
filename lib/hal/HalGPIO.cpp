@@ -159,6 +159,8 @@ bool HalGPIO::wasAnyReleased() const { return inputMgr.wasAnyReleased(); }
 
 bool HalGPIO::anyButtonDownRaw() { return inputMgr.getState() != 0; }
 
+bool HalGPIO::powerDownRaw() { return (inputMgr.getState() & (1u << BTN_POWER)) != 0u; }
+
 bool HalGPIO::inputActive() {
   // 三段都要：原始電平（按下瞬間）、去彈跳中（放開後 5ms 內）、已認列按著（放開落在 update() 取樣
   // 之後、tick 進場之前的那一段——第二輪驗證抓到：這一段佔了每圈的九成，只看前兩項等於沒擋）。
@@ -203,7 +205,17 @@ bool HalGPIO::isXteinkDevice() const {
          BoardConfig::ACTIVE.board == BoardConfig::Board::XteinkX4;
 }
 
-bool HalGPIO::verifyPowerButtonWakeup(uint16_t requiredDurationMs, bool shortPressAllowed) {
+bool HalGPIO::verifyPowerButtonWakeup(uint16_t requiredDurationMs, bool shortPressAllowed,
+                                     PowerVerifyDiag* diag) {
+  // v197：純診斷輸出。下面的判定邏輯與回傳值一個字都沒動 —— 只在既有的出口各記一筆。
+  // ⚠️ 複查質疑「多幾個指令會不會擾動時序」。算術上不會:本函式在開機約 744ms 才被呼叫
+  //    （實測 WAKE steps stores=744），而 requiredDurationMs 是 400 或 10 —— 兩者都 < 744，
+  //    所以下面的 calibratedDuration 恆為 1，飽和在下限，不隨數十奈秒的差異改變。
+  //    真正的時間都花在 isPressed() 的去彈跳輪詢（最多 1,000ms），那是毫秒級的迴圈。
+  if (diag) {
+    *diag = PowerVerifyDiag{};  // 重置:同一物件重用時不可留下上一輪的 outcome
+    diag->requiredMs = requiredDurationMs;
+  }
   // Boards without a power button (or M5Paper's latch circuit) cannot verify a
   // hold; treat the wake as valid.
   if (BoardConfig::ACTIVE.input.power < 0) {
@@ -214,6 +226,9 @@ bool HalGPIO::verifyPowerButtonWakeup(uint16_t requiredDurationMs, bool shortPre
 #endif
   if (shortPressAllowed) {
     // Fast path - no duration check needed
+    if (diag) {
+      diag->outcome = 3;
+    }
     return true;
   }
   // TODO: Intermittent edge case remains: a single tap followed by another single tap
@@ -222,6 +237,9 @@ bool HalGPIO::verifyPowerButtonWakeup(uint16_t requiredDurationMs, bool shortPre
   // Calibrate: subtract boot time already elapsed, assuming button held since boot.
   const unsigned long calibration = millis();
   const unsigned long calibratedDuration = (calibration < requiredDurationMs) ? (requiredDurationMs - calibration) : 1;
+  if (diag) {
+    diag->calibratedMs = static_cast<uint16_t>(calibratedDuration);  // log 要印真正比較的門檻
+  }
 
   const auto start = millis();
   inputMgr.update();
@@ -230,16 +248,31 @@ bool HalGPIO::verifyPowerButtonWakeup(uint16_t requiredDurationMs, bool shortPre
     delay(10);
     inputMgr.update();
   }
+  if (diag) {
+    diag->waitedMs = static_cast<uint16_t>(millis() - start);
+  }
   if (inputMgr.isPressed(BTN_POWER)) {
     do {
       delay(10);
       inputMgr.update();
     } while (inputMgr.isPressed(BTN_POWER) && inputMgr.getPowerButtonHeldTime() < calibratedDuration);
+    if (diag) {
+      diag->heldMs = static_cast<uint16_t>(inputMgr.getPowerButtonHeldTime());
+    }
     if (inputMgr.getPowerButtonHeldTime() < calibratedDuration) {
+      if (diag) {
+        diag->outcome = 2;  // 按了，但握持時間不足 calibratedDuration
+      }
       return false;
     }
   } else {
+    if (diag) {
+      diag->outcome = 1;  // 等滿 1,000ms 也沒等到 isPressed 變 true
+    }
     return false;
+  }
+  if (diag) {
+    diag->outcome = 0;  // 通過
   }
   return true;
 }
@@ -263,11 +296,14 @@ bool HalGPIO::isUsbConnected() const {
   return digitalRead(BoardConfig::ACTIVE.usbDetect) == HIGH;
 }
 
-HalGPIO::WakeupReason HalGPIO::getWakeupReason() const {
+HalGPIO::WakeupReason HalGPIO::getWakeupReason(bool* usbOut) const {
   const auto wakeupCause = esp_sleep_get_wakeup_cause();
   const auto resetReason = esp_reset_reason();
 
   const bool usbConnected = isUsbConnected();
+  if (usbOut) {
+    *usbOut = usbConnected;  // v197：把本次判定所依據的值交出去，避免再做一次 I2C
+  }
 
   if (resetReason == ESP_RST_DEEPSLEEP &&
       (wakeupCause == ESP_SLEEP_WAKEUP_GPIO || wakeupCause == ESP_SLEEP_WAKEUP_EXT1)) {

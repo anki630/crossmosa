@@ -59,11 +59,24 @@ uint16_t FontDecompressor::getGroupIndex(const EpdFontData* fontData, uint32_t g
     return fontData->glyphToGroup[glyphIndex];
   }
 
-  // Contiguous-group fonts: linear scan
-  for (uint16_t i = 0; i < fontData->groupCount; i++) {
-    uint32_t first = fontData->groups[i].firstGlyphIndex;
-    if (glyphIndex >= first && glyphIndex < first + fontData->groups[i].glyphCount) {
-      return i;
+  // Contiguous-group fonts: groups partition the glyph array in increasing
+  // firstGlyphIndex order, so binary search.
+  //
+  // This is called once per glyph drawn, including on hot-group hits. The old
+  // linear scan read on average half the group table out of flash every time:
+  // with the v202 compressed UI fonts that is ~1,000 groups x 20 bytes = ~10 KB
+  // of flash traffic PER GLYPH, an order of magnitude more than the ~1 KB the
+  // group inflate itself costs. That is what made list scrolling sluggish.
+  uint16_t lo = 0, hi = fontData->groupCount;
+  while (lo < hi) {
+    const uint16_t mid = lo + (hi - lo) / 2;
+    const EpdFontGroup& g = fontData->groups[mid];
+    if (glyphIndex < g.firstGlyphIndex) {
+      hi = mid;
+    } else if (glyphIndex >= g.firstGlyphIndex + g.glyphCount) {
+      lo = mid + 1;
+    } else {
+      return mid;
     }
   }
   return fontData->groupCount;  // sentinel = not found
@@ -87,13 +100,19 @@ bool FontDecompressor::decompressGroup(const EpdFontData* fontData, uint16_t gro
 
 // --- Byte-aligned helpers ---
 
+// Byte-aligned row stride. 2-bit packs 4 px/byte, 1-bit packs 8 px/byte.
+static inline uint32_t alignedRowStride(uint8_t width, bool is2Bit) {
+  return is2Bit ? ((width + 3u) / 4u) : ((width + 7u) / 8u);
+}
+static inline uint32_t alignedGlyphSize(const EpdGlyph& g, bool is2Bit) {
+  return (g.width > 0 && g.height > 0) ? alignedRowStride(g.width, is2Bit) * g.height : 0u;
+}
+
 uint32_t FontDecompressor::getAlignedOffset(const EpdFontData* fontData, uint16_t groupIndex, uint32_t glyphIndex) {
   uint32_t offset = 0;
 
   auto accumGlyph = [&](const EpdGlyph& g) {
-    if (g.width > 0 && g.height > 0) {
-      offset += ((g.width + 3) / 4) * g.height;
-    }
+    offset += alignedGlyphSize(g, fontData->is2Bit);
   };
 
   if (fontData->glyphToGroup) {
@@ -115,10 +134,12 @@ uint32_t FontDecompressor::getAlignedOffset(const EpdFontData* fontData, uint16_
 }
 
 void FontDecompressor::compactSingleGlyph(const uint8_t* alignedSrc, uint8_t* packedDst, uint8_t width,
-                                          uint8_t height) {
+                                          uint8_t height, bool is2Bit) {
   if (width == 0 || height == 0) return;
-  const uint32_t rowStride = (width + 3) / 4;
-  if (width % 4 == 0) {
+  const uint32_t rowStride = alignedRowStride(width, is2Bit);
+  const uint8_t bpp = is2Bit ? 2 : 1;
+  const uint8_t pxPerByte = is2Bit ? 4 : 8;
+  if (width % pxPerByte == 0) {
     memcpy(packedDst, alignedSrc, rowStride * height);
     return;
   }
@@ -126,8 +147,10 @@ void FontDecompressor::compactSingleGlyph(const uint8_t* alignedSrc, uint8_t* pa
   uint32_t writeIdx = 0;
   for (uint8_t y = 0; y < height; y++) {
     for (uint8_t x = 0; x < width; x++) {
-      outByte = (outByte << 2) | ((alignedSrc[y * rowStride + x / 4] >> ((3 - (x % 4)) * 2)) & 0x3);
-      outBits += 2;
+      const uint8_t px = is2Bit ? ((alignedSrc[y * rowStride + x / 4] >> ((3 - (x % 4)) * 2)) & 0x3)
+                                : ((alignedSrc[y * rowStride + x / 8] >> (7 - (x % 8))) & 0x1);
+      outByte = (outByte << bpp) | px;
+      outBits += bpp;
       if (outBits == 8) {
         packedDst[writeIdx++] = outByte;
         outByte = 0;
@@ -214,8 +237,22 @@ const uint8_t* FontDecompressor::getBitmap(const EpdFontData* fontData, const Ep
     return nullptr;
   }
 
-  uint32_t alignedOff = getAlignedOffset(fontData, groupIndex, glyphIndex);
-  compactSingleGlyph(&hotGroup[alignedOff], hotGlyphBuf, glyph->width, glyph->height);
+  // The offset/size arithmetic and glyph->dataLength come from generated metadata.
+  // If they ever disagree (wrong is2Bit on a descriptor, truncated group) compaction
+  // would read past the inflated group and write past hotGlyphBuf. Check, don't trust.
+  const uint32_t alignedOff = getAlignedOffset(fontData, groupIndex, glyphIndex);
+  const uint32_t alignedNeed = alignedGlyphSize(*glyph, fontData->is2Bit);
+  const EpdFontGroup& grp = fontData->groups[groupIndex];
+  const uint32_t packedNeed =
+      (static_cast<uint32_t>(glyph->width) * glyph->height * (fontData->is2Bit ? 2u : 1u) + 7u) / 8u;
+  if (alignedOff > grp.uncompressedSize || alignedNeed > grp.uncompressedSize - alignedOff ||
+      packedNeed > glyph->dataLength) {
+    LOG_ERR("FDC", "Glyph %u metadata inconsistent (aligned %u+%u vs %u, packed %u vs %u)", glyphIndex,
+            alignedOff, alignedNeed, grp.uncompressedSize, packedNeed, (unsigned)glyph->dataLength);
+    stats.getBitmapTimeUs += micros() - tStart;
+    return nullptr;
+  }
+  compactSingleGlyph(&hotGroup[alignedOff], hotGlyphBuf, glyph->width, glyph->height, fontData->is2Bit);
   stats.getBitmapTimeUs += micros() - tStart;
   return hotGlyphBuf;
 }
@@ -338,6 +375,10 @@ int FontDecompressor::prewarmCache(const EpdFontData* fontData, const char* utf8
   for (uint16_t i = 0; i < glyphCount; i++) {
     totalBytes += fontData->glyph[neededGlyphs[i]].dataLength;
     uint16_t gi = getGroupIndex(fontData, neededGlyphs[i]);
+    // getGroupIndex() returns groupCount as a "not found" sentinel, and a corrupt
+    // glyphToGroup entry can be anything. Recording either would make steps 3b/4
+    // index fontData->groups out of bounds. Skip; the glyph falls back to the hot path.
+    if (gi >= fontData->groupCount) continue;
     bool found = false;
     for (uint8_t j = 0; j < groupCount; j++) {
       if (neededGroups[j] == gi) {
@@ -427,9 +468,7 @@ int FontDecompressor::prewarmCache(const EpdFontData* fontData, const char* utf8
           right = mid - 1;
       }
 
-      if (glyph.width > 0 && glyph.height > 0) {
-        groupAlignedTracker[gpPos] += ((glyph.width + 3) / 4) * glyph.height;
-      }
+      groupAlignedTracker[gpPos] += alignedGlyphSize(glyph, fontData->is2Bit);
     }
   } else {
     // Contiguous-group: iterate each needed group's glyphs directly
@@ -453,9 +492,7 @@ int FontDecompressor::prewarmCache(const EpdFontData* fontData, const char* utf8
             right = mid - 1;
         }
 
-        if (glyph.width > 0 && glyph.height > 0) {
-          alignedOff += ((glyph.width + 3) / 4) * glyph.height;
-        }
+        alignedOff += alignedGlyphSize(glyph, fontData->is2Bit);
       }
     }
   }
@@ -491,7 +528,8 @@ int FontDecompressor::prewarmCache(const EpdFontData* fontData, const char* utf8
       if (getGroupIndex(fontData, slot.glyphs[i].glyphIndex) != groupIdx) continue;
 
       const EpdGlyph& glyph = fontData->glyph[slot.glyphs[i].glyphIndex];
-      compactSingleGlyph(&tempBuf[slot.glyphs[i].alignedOffset], &slot.buffer[writeOffset], glyph.width, glyph.height);
+      compactSingleGlyph(&tempBuf[slot.glyphs[i].alignedOffset], &slot.buffer[writeOffset], glyph.width,
+                         glyph.height, fontData->is2Bit);
       slot.glyphs[i].bufferOffset = writeOffset;
       writeOffset += glyph.dataLength;
     }
