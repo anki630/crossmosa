@@ -399,7 +399,20 @@ UI 字型與內文字型是**完全獨立的兩套**。書的內文走 SD 卡字
 刷完 1.x 之後畫面就不動了的，**看不到畫面也能直接刷成 2.0**，不必先刷回原廠韌體。
 順的話大約五到六分鐘。**全程看不到畫面，照秒數操作就好——寧可多等，不要提早按。**
 
-**準備**：把韌體的 `.bin` 放進 SD 卡最外層，**只放一個**。資料夾不用管。
+### 先把 SD 卡準備好
+
+| | |
+|---|---|
+| **格式** | **FAT32 或 exFAT 都可以，不用重新格式化。** 大容量卡出廠多半是 exFAT，直接用 |
+| **放什麼** | 從 Releases 下載的 **`update.bin`**，**原檔直接放**——不用解壓縮、不用改名 |
+| **放哪裡** | SD 卡**最外層**（根目錄），**只放一個 `.bin`**。其他資料夾（`books`、`.crossmosa` 之類）不用清 |
+| **電力** | **先充飽再開始。** 全程約五到六分鐘，而且你看不到電池圖示 |
+
+⚠️ **為什麼只能放一個 `.bin`**：盲按時是靠「往上一個」繞到清單**最後一項**來選檔案。
+清單只列 `.bin`，所以只有一個的時候，那一項必定就是它。放兩個就會選到錯的。
+
+ℹ️ **寫到一半沒電不會變磚。** 機器是整份檢查、整份寫完之後才切換開機目標，
+中途斷電只會開回原本的韌體，再來一次就好。充飽電是為了**不用重來**，不是怕壞掉。
 
 <img src="docs/img/button-map.png" width="340" alt="X3 按鍵編號">
 
@@ -746,7 +759,22 @@ If you flashed 1.x and the screen no longer updates, you can **blind-flash strai
 no need to go back to stock firmware first. About five to six minutes when it goes smoothly.
 **You will see nothing the whole time — work by the clock, and err on the long side.**
 
-**Prepare:** put the firmware `.bin` in the SD card root — **just one**. Folders do not matter.
+### Get the SD card ready first
+
+| | |
+|---|---|
+| **Format** | **FAT32 or exFAT — either works. No need to reformat.** Large cards ship as exFAT; use them as they are |
+| **What to put on it** | **`update.bin`** from Releases, **exactly as downloaded** — do not unzip it, do not rename it |
+| **Where** | The **root** of the card, and **only one `.bin`**. Other folders (`books`, `.crossmosa`, …) can stay |
+| **Battery** | **Charge it first.** The whole thing takes five to six minutes and you cannot see the battery icon |
+
+⚠️ **Why only one `.bin`:** blind, you select the file by pressing "previous" once, which wraps
+to the **last** entry in the list. The list only shows `.bin` files, so with exactly one on the
+card that entry is guaranteed to be yours. Two files and you pick the wrong one.
+
+ℹ️ **Losing power mid-write will not brick it.** The device verifies and writes the whole image
+before it switches the boot target, so an interrupted write just boots the firmware you already
+had. Charging first is so you don't have to start over — not because it breaks.
 
 <img src="docs/img/button-map.png" width="340" alt="X3 button numbers">
 
