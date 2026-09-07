@@ -139,9 +139,9 @@
   <p class="lead">刷一次機，從選單、內文到翻頁，一路順到底。口袋裡那台 X3，這下是一台真正的中文閱讀器了。</p>
   <p class="axis">零碎時間已經夠少了，不該花在跟機器搏鬥上。</p>
   <div class="btns" style="margin-bottom:10px">
-    <a class="btn primary" href="https://github.com/anki630/crossmosa/releases/tag/v2.0.0-rc.2">下載 CrossMosa 2.0</a>
+    <a class="btn primary" href="https://github.com/anki630/crossmosa/releases/latest">下載 CrossMosa 2.0.1</a>
     <a class="btn ghost" href="#install">怎麼安裝？三步驟 →</a>
-    <a class="btn ghost" href="https://github.com/anki630/crossmosa/releases/latest">1.2.0（給已經刷過舊版的機器）</a>
+    <a class="btn ghost" href="https://github.com/anki630/crossmosa/blob/main/CHANGELOG.md">看完整的變更紀錄 →</a>
   </div>
   <p class="note" style="margin:0 0 10px">免費開源・機器免接電腦</p>
   <p class="note" style="margin:0 0 10px"><strong>不知道該刷哪一版？直接刷 2.0。</strong>它會自己認出你的螢幕是哪一種，新舊機器都認得。
@@ -183,19 +183,19 @@
   <div class="wrap">
     <p class="kicker">TYPEFACES</p>
     <h2>換一套字，換一種心情</h2>
-    <p class="sub">明體耐讀、黑體耐小、硬筆楷書像手寫。字型放在 SD 卡上，隨時換，不用重刷機。挑一套，開始暢讀。</p>
+    <p class="sub">明體耐讀、黑體耐小、硬筆楷書像手寫。字型放在 SD 卡上，隨時換，不用重刷機。挑一套，開始暢讀。<br>看不清小字的話，另有大字版（24 / 26 / 28），裝法一樣。</p>
     <div class="trio">
       <figure>
         <img src="promo/compare-serif.jpg" alt="明體 NotoSerifTC" loading="lazy">
-        <figcaption>明體<div class="cap-sub">22,219 個漢字，再冷僻的字幾乎都在。長篇首選</div></figcaption>
+        <figcaption>明體<div class="cap-sub">27,950 個漢字，再冷僻的字幾乎都在。長篇首選</div></figcaption>
       </figure>
       <figure>
         <img src="promo/compare-sans.jpg" alt="黑體 NotoSansTC" loading="lazy">
-        <figcaption>黑體<div class="cap-sub">粗細一致，小字級最不糊</div></figcaption>
+        <figcaption>黑體<div class="cap-sub">粗細一致，小字級最不糊。同樣 27,950 個漢字</div></figcaption>
       </figure>
       <figure>
         <img src="promo/compare-iansui.jpg" alt="硬筆楷書 芫荽" loading="lazy">
-        <figcaption>硬筆楷書（芫荽）<div class="cap-sub">像原子筆寫在紙上。5,366 個常用字。冷僻字多的書，建議用明體</div></figcaption>
+        <figcaption>硬筆楷書（芫荽）<div class="cap-sub">像原子筆寫在紙上。同樣 27,950 個漢字</div></figcaption>
       </figure>
     </div>
   </div>
@@ -262,29 +262,33 @@
   <div class="wrap">
     <p class="kicker">WHAT&#39;S NEW</p>
     <h2>這一版更新了什麼</h2>
-    <p class="sub">1.2.0 · 2026 年 8 月。完整紀錄見 <a href="https://github.com/anki630/crossmosa/blob/main/CHANGELOG.md">CHANGELOG</a>。<br>
-    最新的 <a href="https://github.com/anki630/crossmosa/releases/tag/v2.0.0-rc.2">2.0.0-rc.2</a>（測試版）支援新批次 X3 的 UC8279 面板，換章與翻頁也快了不少。</p>
+    <p class="sub">2.0.1 · 2026 年 9 月。完整紀錄見 <a href="https://github.com/anki630/crossmosa/blob/main/CHANGELOG.md">CHANGELOG</a>。<br>
+    上一個大版本 2.0.0 讓新批次 X3（UC8279 面板）能正常顯示；這一版是修正版。</p>
     <div class="log">
 
-      <h3>有些書打不開，現在打得開了</h3>
+      <h3>書名裡的黑方塊</h3>
       <ul>
-        <li><strong>開書直接顯示「全書完」。</strong>有些 EPUB 開起來書在、頁數是零、一個字都讀不到。原因是目次檔的元素名帶了命名空間前綴(<code>&lt;ns0:package&gt;</code>)。EPUB 規格允許這樣寫，只是不常見。解析器只認裸名，於是收到 0 筆章節——而 0 筆章節在閱讀器裡看起來，就是「你已經讀完了」。</li>
-        <li><strong>書名與作者就這樣不見了。</strong>上面那個修法本身有個陷阱:書目欄位的目標字串自己就帶前綴，只改一半會讓它們永遠對不上。一併處理了。</li>
-        <li><strong>主畫面的封面變成空框。</strong>這是前一個問題的後遺症:書「壞掉」期間縮圖產生失敗，程式寫了一個 0 byte 的檔案當作「這本沒有封面」的記號，於是修好之後封面也回不來。現在會辨認出這種記號並重新產生。</li>
+        <li><strong>系統字型多收了 496 個罕用字。</strong>檔案清單和書名裡本來是黑方塊的字（像「羣」「倂」）現在都有字了。</li>
+        <li><strong>挑字的方法也換了。</strong>以前照 BIG5 的字頻表排名次挑，但那份表反映的是一般用字、不是<strong>書名</strong>用字。現在改成掃整個電子書庫的內文，看真正會出現在書名和檔名裡的是哪些字。</li>
+        <li>系統字型是編在韌體裡的，<strong>要重刷才會生效</strong>。書的內文不受影響，那走 SD 卡字型。</li>
       </ul>
 
-      <h3>閱讀選單重整</h3>
+      <h3>逛書單時偶爾會當機</h3>
       <ul>
-        <li><strong>14 項 → 12 項</strong>，並依「你為什麼開這個選單」重排:先是位置（選擇章節、註腳、書籤、跳至指定進度），接著是邊看邊調的排版（字級、行距、粗體），一次性的設定與工具放最後。</li>
-        <li><strong>拿掉「回主畫面」與「截圖」。</strong>這兩項的功能都還在，拿掉的是重複的入口:閱讀中按 Back 鍵本來就回得了主畫面，截圖有全域組合鍵<strong>電源 + 下</strong>在任何畫面都有效。原本的路徑比開選單快。</li>
-        <li>設定裡那個按下去沒有反應的「藍牙翻頁器」也移除了。藍牙功能早就關閉，只有這個條目忘了跟著拿掉。</li>
+        <li><strong>用 OPDS 抓書時的偶發當機。</strong>畫面在畫書單的同時，抓下一頁的程式會把書單換掉，兩邊撞在一起就會讀到已經清掉的資料。現在換書單一定等畫完才做。</li>
+        <li>另外修了字型解壓縮的兩個潛在當機點（上線前複查時找到的，還沒有人回報中招）。</li>
+      </ul>
+
+      <h3>字型包重做了，請重新下載</h3>
+      <ul>
+        <li><strong>五套內文字型全部重做。</strong>補上中文電子書實際會用到、但先前漏掉的符號：圈圈數字、注音、<strong>直排標點</strong>、方框幾何，以及 CJK 擴充 A 整個區塊。抽 60 本書掃描，<strong>漢字一個都不缺</strong>。</li>
+        <li><strong>新增大字版</strong>：黑體與明體，字級 24 / 26 / 28。複製到 SD 卡即可，不必刷韌體。停在 28 是刻意的——字太大反而不好讀，真正決定舒不舒服的是一頁剩幾個字（22pt 約 138 字、28pt 剩 85 字、36pt 只剩 52 字）。</li>
       </ul>
 
       <h3>升級注意</h3>
       <ul>
         <li><strong>沒有變更任何快取格式</strong>——既有的書不會重新排版，閱讀進度、書籤、設定都不受影響。</li>
-        <li>之前遇過「全書完」或「封面空框」的書，刷完會自己復原，<strong>不需要手動刪 SD 卡上的 <code>/.crossmosa</code></strong>。</li>
-        <li>閱讀選單的順序變了，習慣用位置記憶按的話第一次要看一眼。</li>
+        <li>已經下載過字型包的<strong>請重新下載</strong>，否則那些補回來的字仍然是方塊。</li>
       </ul>
 
     </div>
@@ -339,7 +343,7 @@
     <p class="sub" style="margin:0 auto 14px">三件事任何一件都是支持：到 <a href="https://github.com/anki630/crossmosa/discussions">Discussions</a> 留句話說你用得如何；推薦給另一個有 X3 的朋友；或請維護者喝杯咖啡（連結籌備中）。</p>
     <p class="sub" style="margin:0 auto 30px">這一頁沒有使用者見證——因為我們不編故事。第一句真話，可以是你的。</p>
     <div class="btns" style="margin-bottom:18px">
-      <a class="btn primary" href="https://github.com/anki630/crossmosa/releases/tag/v2.0.0-rc.2">下載 CrossMosa 2.0</a>
+      <a class="btn primary" href="https://github.com/anki630/crossmosa/releases/latest">下載 CrossMosa 2.0.1</a>
     </div>
     <p style="font-weight:600">接下來，把零碎時間還給書。</p>
   </div>
@@ -348,7 +352,7 @@
 <section style="padding:56px 0">
   <div class="wrap fnotes" id="fnotes">
     <p id="fn-p1">1. 機制：面板刷新的空檔預先載入下一頁字型。實機量測（320 次翻頁）:預載完成的頁面繪製中位 952ms，未完成 1,278ms；未完成時走原路徑，無額外代價。</p>
-    <p id="fn-p2">2. 介面字集共 7,413 字 = BIG5 一級全收 + 依教育部標準字體表選出的二級常用字 + 書庫掃描補字；內文另由 SD 卡字型涵蓋（明體 22,219 字）。常見人名用字「喆」「堃」「彣」已於 1.0 補入;其餘 BIG5 範圍外的字為已知缺口。</p>
+    <p id="fn-p2">2. 介面字集共 7,973 字 = BIG5 一級全收 + 掃描整個電子書庫內文挑出的常用字；內文另由 SD 卡字型涵蓋（27,950 字，含 CJK 擴充 A 整個區塊）。BIG5 範圍外的罕用字仍是已知缺口，碰到請回報，補字是例行維護。</p>
     <p id="fn-p3">3. 名畫皆取自公共領域(Wikimedia Commons)，逐張調整對比與構圖裁切以適配 4 階灰階電子紙。</p>
     <p id="fn-p4">4. 完整版本紀錄公開於 <a href="https://github.com/anki630/crossmosa/blob/main/CHANGELOG.md">GitHub 的 CHANGELOG</a>。</p>
   </div>
