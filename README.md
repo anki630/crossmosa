@@ -401,13 +401,16 @@ UI 字型與內文字型是**完全獨立的兩套**。書的內文走 SD 卡字
 
 ### 先把 SD 卡準備好
 
-1. **卡不用重新格式化**——FAT32 或 exFAT 都可以，大容量卡出廠多半是 exFAT，直接用。
-2. 從 Releases 下載 **`update.bin`**，**原檔直接丟進卡的最外層**——不用解壓縮、不用改名。
-3. **卡的最外層只留這一個 `.bin`**，其他都不用管。
-4. **先充飽電**——全程五到六分鐘，而且你看不到電池圖示。
+**不用格式化。** 三步：
 
-⚠️ **只放一個 `.bin` 是關鍵**：盲按時是靠「往上一個」繞到清單最後一項來選檔案，
-而清單只列 `.bin`。只有一個的時候，那一項必定就是它。
+1. 把卡插到電腦上，**內容全部刪掉**（想留書就先複製一份到電腦）。
+2. 到 [Releases](https://github.com/anki630/crossmosa/releases/latest) 下載 **`update.bin`**，
+   **原檔直接丟進卡的最外層**——不用解壓縮、不用改名。（2.0.0 以上都可以，建議用最新版。）
+3. **先充飽電**——全程五到六分鐘，而且你看不到電池圖示。
+
+⚠️ **為什麼要全部刪掉**：盲按時是靠「往上一個」繞到清單**最後一項**來選檔案，而清單只列 `.bin`。
+卡上只有一個 `.bin`，那一項就必定是它。**上次刷機留下的舊 `.bin` 最容易害人**——
+選到它你完全看不出來。
 
 ℹ️ 寫到一半沒電**不會變磚**，只會開回原本的韌體，再來一次就好。
 
@@ -758,14 +761,19 @@ no need to go back to stock firmware first. About five to six minutes when it go
 
 ### Get the SD card ready first
 
-1. **No need to reformat the card** — FAT32 and exFAT both work. Large cards ship as exFAT; use them as they are.
-2. Download **`update.bin`** from Releases and **drop it in the card's root exactly as downloaded** — do not unzip, do not rename.
-3. **Leave exactly one `.bin` in the root.** Nothing else matters.
-4. **Charge the device first** — this takes five to six minutes and you cannot see the battery icon.
+**No formatting needed.** Three steps:
 
-⚠️ **One `.bin` is the part that matters:** blind, you select the file by pressing "previous"
-once, which wraps to the last entry. The list only shows `.bin` files, so with exactly one on
-the card that entry is guaranteed to be yours.
+1. Put the card in a computer and **delete everything on it** (copy your books off first if you
+   want to keep them).
+2. Download **`update.bin`** from [Releases](https://github.com/anki630/crossmosa/releases/latest)
+   and **drop it in the card's root exactly as downloaded** — do not unzip, do not rename.
+   (Anything 2.0.0 or newer works; use the latest.)
+3. **Charge the device first** — this takes five to six minutes and you cannot see the battery icon.
+
+⚠️ **Why delete everything:** blind, you select the file by pressing "previous" once, which wraps
+to the **last** entry. The list only shows `.bin` files, so with exactly one on the card that
+entry is guaranteed to be yours. **An old `.bin` left over from a previous update is what catches
+people out** — pick that one and you cannot tell.
 
 ℹ️ Losing power mid-write **will not brick it** — it just boots the firmware you already had, so
 you start over.
