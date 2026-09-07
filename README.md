@@ -22,8 +22,8 @@
 
 CrossMosa 只做一件事:**讓 X3 把繁體中文書讀好。**
 
-- **書名、選單、目錄，說中文**——內建 7,413 個漢字（BIG5 一級全收+二級常用 2,000 字），連「憨」「璐」這類冷僻字都有。
-- **內文想用什麼字體就用什麼**——明體、黑體、硬筆楷書三套中文字型，各四個字級。
+- **書名、選單、目錄，說中文**——內建 7,973 個漢字，連「憨」「璐」「羣」「倂」這類冷僻字都有。
+- **內文想用什麼字體就用什麼**——明體、黑體、硬筆楷書、直排楷書，五套中文字型。看不清小字另有大字版。
 - **翻頁更快了**——下一頁的字趁你還在讀時先備好;備妥的頁面快 0.3 秒，沒備妥也不會更慢。
 - **讀到最精彩的一章，不會突然重開機**——排版、圖片、字型快取全都有記憶體不足時的退路。
 - **闔上機器，它是一幅畫**——50 張世界名畫待機壁紙，每一張都為這塊 4 階灰階螢幕挑過、裁過、調過;今天梵谷，明天北齋。
@@ -45,7 +45,7 @@ CrossMosa 只做一件事:**讓 X3 把繁體中文書讀好。**
 - 長篇小說讀到後半，翻頁越來越卡。
 - 選單是英文或簡體;內文沒有台灣讀者習慣的明體。
 
-這五條，CrossMosa 各有一個具體的修法，而且都在真機上驗證過:內建 7,413 個漢字（方塊）、
+這五條，CrossMosa 各有一個具體的修法，而且都在真機上驗證過:內建 7,973 個漢字（方塊）、
 排版與記憶體護欄（打不開/突然重開）、連線前自動騰出記憶體（Wi-Fi 當機）、
 背景預先排版（後段卡頓）、繁中介面+三套中文字型（語言與字型）。
 細節在下面的特色表;每一項的來龍去脈都在 [CHANGELOG](CHANGELOG.md)。
@@ -94,8 +94,8 @@ CrossMosa 把範圍收窄，專心做三件事:
 | | 內容 |
 |---|---|
 | **全繁中介面** | 446 個 UI 字串完整翻譯，台灣用語;經過一輪逐字串對照實際畫面的情境複查 |
-| **內建 UI 字型含漢字** | BIG5 一級全部 + BIG5 二級常用 2,000 字 = **7,413 個漢字**，檔名 / 書名 / 選單不再是方塊 |
-| **SD 卡中文內文字型** | 黑體 (Noto Sans TC) / 明體 (Noto Serif TC) / 硬筆楷書 （芫荽 Iansui），各四個字級 16/18/20/22 |
+| **內建 UI 字型含漢字** | **7,973 個漢字**（BIG5 一級全部，加上掃全書庫挑出來的常用字），檔名 / 書名 / 選單不再是方塊 |
+| **SD 卡中文內文字型** | 五套:黑體、明體、硬筆楷書、直排楷書，各四個字級 16/18/20/22。另有大字版 24/26/28 |
 | **字型預取** | 下一頁要用的字趁你還在讀這一頁的空檔先從 SD 讀好，翻頁中位數 1,278 ms → 952 ms（省約 330 ms） |
 | **CJK 排版** | 逐字斷行、中文行距校正、重組文字時不插多餘空格 |
 | **記憶體護欄群** | 章節排版、斷字、圖片解碼、字型快取、TLS 握手全部有記憶體不足時的降級路徑，不再直接重開機 |
@@ -164,8 +164,8 @@ CrossMosa 是下班後的個人專案。如果它讓你的 X3 變好用了，幾
 
 | 步驟 | 檔案 | 去哪 |
 |---|---|---|
-| **1. 刷韌體** | `crossmosa-2.0.0-firmware.zip` | 裝置的 flash |
-| **2. 複製字型** | `crossmosa-2.0.0-sd-fonts.zip` | SD 卡的 `/.fonts/` |
+| **1. 刷韌體** | `crossmosa-2.0.1-firmware.zip` | 裝置的 flash |
+| **2. 複製字型** | `crossmosa-2.0.1-sd-fonts.zip` | SD 卡的 `/.fonts/` |
 
 兩個檔案都在同一個 [Release](../../releases) 頁面。
 
@@ -221,7 +221,7 @@ esptool.py --chip esp32c3 --port /dev/ttyACM0 --baud 921600 \
 
 ### 步驟 2:複製 SD 卡字型
 
-解開 `crossmosa-2.0.0-sd-fonts.zip`，把**整個字型資料夾**複製到 SD 卡的 `/.fonts/` 底下:
+解開 `crossmosa-2.0.1-sd-fonts.zip`，把**整個字型資料夾**複製到 SD 卡的 `/.fonts/` 底下:
 
 ```
 SD 卡根目錄
@@ -238,16 +238,27 @@ SD 卡根目錄
 
 | 字型 | 風格 | 漢字涵蓋 | 大小 | 說明 |
 |---|---|---|---|---|
-| **NotoSerifTC** | 明體 | 20,992（完整） | 65 MB | 建議先裝這套 |
-| **NotoSansTC** | 黑體 | 20,976（完整） | 64 MB | 有粗體，1-bit 下筆畫最穩 |
-| **Iansui** 芫荽 | 硬筆楷書 | 20,992（完整） | 31 MB | 只有 Regular（粗體會退回一般字） |
-| **GuanKiapTsingKhai-90** 原俠正楷 | 楷書·**偽直排** | 20,992（完整） | 30 MB | 字形預先轉了 90 度，見下 |
-| IBMPlexSansTC | 黑體 | 20,976（完整） | 62 MB | 保留的舊選項 |
+| **NotoSerifTC** | 明體 | 27,950 | 88 MB | 建議先裝這套 |
+| **NotoSansTC** | 黑體 | 27,950 | 85 MB | 有粗體，1-bit 下筆畫最穩 |
+| **Iansui** 芫荽 | 硬筆楷書 | 27,950 | 41 MB | 只有 Regular（粗體會退回一般字） |
+| **GuanKiapTsingKhai-90** 原俠正楷 | 楷書·**偽直排** | 27,950 | 41 MB | 字形預先轉了 90 度，見下 |
+| IBMPlexSansTC | 黑體 | 27,950 | 84 MB | 保留的舊選項 |
 
-**2026-08-31 起五套都是完整漢字涵蓋**——台語文、古文、人名的冷僻字以前會變黑框，現在都有字。
-（做法是替每套掛一個同風格的備援字型來補洞，不是把字裁掉。）
+**五套都收了完整的中文字**——台語文、古文、人名的冷僻字以前會變黑框，現在都有字。
+2.0.1 又補上了電子書實際會用到的符號:圈圈數字 `① ㈠`、注音 `ㄅㄆㄇ`、
+**直排標點 `︿ ﹀ ﹃ ﹄`**、方框幾何 `─ ■ ○ ☆`，以及 CJK 擴充 A 整個區塊。
+⚠️ **2.0.1 之前下載過的請重新下載**，否則那些字仍然是方塊。
 
-**只裝一套也可以**——空間有限就先裝 `NotoSerifTC`。五套全裝約 252 MB。
+### 看不清小字:大字版
+
+另外下載 `crossmosa-<版本>-sd-fonts-large.zip`,裡面是黑體與明體的大字版，
+字級 **24 / 26 / 28**，裝法完全一樣。
+
+字太大反而不好讀——真正決定舒不舒服的是**一頁剩幾個字**:
+22pt 一頁約 138 字、28pt 剩 85 字（翻頁量 1.6 倍）。再往上翻頁會多到讓人分心，所以停在 28。
+
+**只裝一套也可以**——空間有限就先裝 `NotoSerifTC`。五套全裝約 340 MB，
+但**每個字級是獨立檔案**，只複製你要的那一個就好。
 不影響 RAM:字型是按需從 SD 讀的，不會整份載進記憶體。
 
 > **想直排讀中文**:選 `GuanKiapTsingKhai-90`，再把螢幕轉成橫向，
@@ -296,9 +307,9 @@ SD 韌體選擇畫面（救援模式）——這條路只要機器上還是 Cros
 1. **開機就是繁體中文**（要英文介面:**設定 → 系統 → 語言 → English**;從原版升級、之前選過英文的，設定會保留，同一路徑可切）。
 2. **選內文字型**:**設定 → 閱讀器 → 閱讀字型**，選剛剛複製的那套。
    （沒看到就代表 SD 卡路徑不對，檢查是 `/.fonts/字型名/` 而不是 `/.fonts/`。）
-3. 選字級:**設定 → 閱讀器 → 閱讀字級**（對應 SD 字型的 16/18/20/22）。
+3. 選字級:**設定 → 閱讀器 → 閱讀字級**。清單上會出現你選的那套字型實際有的尺寸（標準包是 16/18/20/22，大字版是 24/26/28）。
 4. 裝置會在 SD 卡建 `/.crossmosa/` 放進度、書籤、Wi-Fi 憑證與快取。**不要刪它。**
-5. 版號顯示在**開機畫面**與**設定頁**，確認是 `2.0.0`。
+5. 版號顯示在**開機畫面**與**設定頁**，確認是 `2.0.1`。
 
 ### 傳書進去
 
@@ -328,22 +339,23 @@ SD 韌體選擇畫面（救援模式）——這條路只要機器上還是 Cros
 
 這是本分支最需要事先講清楚的取捨。
 
-**內建 UI 字型涵蓋 7,413 個漢字**:BIG5 一級全部，加上 BIG5 二級裡最常用的 2,000 字。
+**內建 UI 字型涵蓋 7,973 個漢字**:BIG5 一級全部，加上掃描整個電子書庫挑出來的常用字。
 **不是全部的中文字。** 完整的 BIG5 有 13,060 字，Unicode 的中日韓統一表意文字更多。
 
 沒被涵蓋到的字，會在**選單、檔名、書名、OPDS 書目、章節目錄**顯示成方塊 □。
 
-### 兩種會踩到的情況
+### 還是會踩到的情況
 
-1. **BIG5 二級的罕用字**——落在 2,000 名額之外的部分。
-2. **BIG5 範圍外的字**。這是**已知的缺口**:很多台灣人名用字根本不在 BIG5 裡。
-   最常見的三個（**喆、堃、彣**）已在 build 115 補上;其餘 BIG5 外的字仍缺——
-   系統性補齊需要換一套候選字源（現在的候選池與字頻表都以 BIG5 為界），1.0 沒做。
+**罕用字，尤其是 BIG5 範圍外的**——很多台灣人名用字根本不在 BIG5 裡。
+
+2.0.1 補了 496 個字，挑法也換了:以前是照 BIG5 的字頻表挑，
+現在改成**掃整個電子書庫的內文**，看真正會出現在書名和檔名裡的是哪些字。
+但只要有人的書用到沒被掃到的字，還是會是方塊。**碰到就回報，補字是例行維護。**
 
 ### 書的內文不受影響
 
 UI 字型與內文字型是**完全獨立的兩套**。書的內文走 SD 卡字型，
-而 **2026-08-31 起五套 SD 字型都是完整漢字涵蓋**（約 21,000 字）——
+而五套 SD 字型都收了 **27,950 個漢字**（含 CJK 擴充 A 整個區塊）——
 台語文、古文、BIG5 外的人名用字，內文都有字。
 
 也就是說:**書名在檔案清單上是方塊、打開之後內文正常**，是預期中的行為，不是 bug。
@@ -360,9 +372,10 @@ UI 字型與內文字型是**完全獨立的兩套**。書的內文走 SD 卡字
 | 東西 | 路徑 |
 |---|---|
 | 目前的 UI 字集（含完整出處與選字規則，寫在檔頭） | `fonts/charsets/charset-ui-v5.txt` |
+| 2.0.1 補的 496 個字（掃書庫挑出來的） | `fonts/charsets/charset-ui-v5-additions.txt` |
 | UI 字型重產腳本 | `fonts/regen-ui-fonts.sh` |
 | 二級字選字程式（候選池 + 字頻排序） | `fonts/pick-big5-l2-chars.py` |
-| SD 卡字型產生器（原版的，未修改） | `lib/EpdFont/scripts/fontconvert_sdcard.py` |
+| SD 卡字型產生器 | `lib/EpdFont/scripts/fontconvert_sdcard.py`（加了 `tc-reading` 字集） |
 
 流程是:把字加進字集檔 → 跑重產腳本 → 重新編譯韌體 → 重刷。
 **UI 字型無法用 SD 卡替換，只能重編韌體。**
@@ -372,9 +385,9 @@ UI 字型與內文字型是**完全獨立的兩套**。書的內文走 SD 卡字
 
 ### 為什麼不乾脆全部收進去
 
-全 BIG5 加進 UI 字型大約要多 2 MB，而 app 分割區只有 6.5 MB，目前已經用掉 90.9%
-（5,955,789 bytes，剩約 584 KB）。要放得下就得先重新分割 flash——有變磚風險。
-現在這 7,413 字，就是塞得進去的最大值。
+全 BIG5 加進 UI 字型大約要多 2 MB，而 app 分割區只有 6.5 MB，目前已經用掉 96.4%
+（6,320,803 bytes，剩約 227 KB）。要放得下就得先重新分割 flash——有變磚風險。
+現在這 7,973 字，就是塞得進去的最大值。
 
 ---
 
@@ -567,7 +580,7 @@ core 裡，不是本專案能改的)，兩次建置就會差幾十個位元組�
 
 ![CrossMosa on real hardware: Traditional Chinese home menu, serif body text, masterpiece sleep screen](docs/promo/hero-photo.jpg)
 
-Version: `2.0.0`
+Version: `2.0.1`
 
 ## What it is
 
@@ -583,7 +596,7 @@ Not affiliated with Xteink or with the upstream CrossPoint project.
 - Joining Wi-Fi to fetch a book hangs the device.
 - Page turns get slower the deeper you are into a long novel.
 
-CrossMosa has a specific, device-verified fix for each: 7,413 built-in Han characters,
+CrossMosa has a specific, device-verified fix for each: 7,973 built-in Han characters,
 out-of-memory guards through layout and rendering, freeing memory before the radio comes up,
 and background pre-pagination. Four things here are, as far as we know, not in any other X3
 system: **glyph prefetch** (~0.3 s off prefetched page turns, never slower), the **curated 50-masterpiece sleep
@@ -593,9 +606,10 @@ that upstream arduino-esp32 still carries**. See the [CHANGELOG](CHANGELOG.md) f
 ## Highlights vs upstream
 
 - Fully translated Traditional Chinese UI (446 strings, Taiwan usage).
-- Built-in UI font carries **7,413 Han characters** (all of BIG5 Level 1 + the 2,000 most
-  common Level 2 characters), so filenames, book titles and menus render.
-- Chinese reading fonts for the SD card: Serif / Sans / handwriting-style, four sizes each.
+- Built-in UI font carries **7,973 Han characters** (all of BIG5 Level 1, plus the ones that
+  actually turn up when you scan whole ebook libraries), so filenames, titles and menus render.
+- Five Chinese reading fonts for the SD card — serif, sans, two brush faces (one pre-rotated
+  for vertical text) — four sizes each. A large-print pack (24/26/28) is a separate download.
 - **Glyph prefetch**: the next page's SD reads happen while you are still reading the current page —
   median page turn 1,278 ms → 952 ms.
 - CJK line breaking, corrected CJK line spacing, no spurious spaces when re-joining text.
@@ -672,13 +686,21 @@ renders as boxes (□□□□)**.
    **Settings → System → SD Card Firmware Update** — or
    the rescue combo (power off, hold the left side button, press power) straight into the
    SD firmware picker.
-2. **Copy the fonts** from `crossmosa-2.0.0-sd-fonts.zip` into `/.fonts/` on the SD card,
+2. **Copy the fonts** from `crossmosa-2.0.1-sd-fonts.zip` into `/.fonts/` on the SD card,
    keeping one folder per family (`/.fonts/NotoSerifTC/…`). One family is enough;
-   **NotoSerifTC** is the recommended first choice. As of 2026-08-31 all five families
-   cover the full Han block (~21,000 characters), so rare characters no longer render as
-   black boxes. `GuanKiapTsingKhai-90` is a pre-rotated brush face: pick it and turn the
-   screen to landscape to read Chinese vertically.
-   Folder names must not contain spaces.
+   **NotoSerifTC** is the recommended first choice. All five carry **27,950 Han characters**,
+   including the whole CJK Extension A block, so rare characters no longer render as black
+   boxes. 2.0.1 also added the symbols Chinese ebooks actually use: circled numbers,
+   bopomofo, **vertical punctuation `︿ ﹀ ﹃ ﹄`**, box drawing.
+   **If you downloaded the fonts before 2.0.1, download them again** — otherwise those
+   characters are still boxes.
+   `GuanKiapTsingKhai-90` is a pre-rotated brush face: pick it and turn the screen to
+   landscape to read Chinese vertically. Folder names must not contain spaces.
+
+   **Can't read small text?** `crossmosa-2.0.1-sd-fonts-large.zip` has sans and serif at
+   **24 / 26 / 28** — same install, no reflash. It stops at 28 on purpose: what makes reading
+   comfortable is not how big the type is but how much text is left on a page. 22pt fits
+   about 138 characters, 28pt about 85. Past that you spend the evening turning pages.
 
 While you have the card out, also copy 《歡迎使用CrossMosa.epub》 from the firmware zip onto
 it — a thirteen-chapter guided tour (in Traditional Chinese) that teaches the device by making
@@ -688,7 +710,7 @@ First boot: the UI defaults to **Traditional Chinese** (this fork's whole point)
 **Settings → Reader → Reader Font Family** to pick the SD font. The device creates
 `/.crossmosa/` on the card for progress, bookmarks and Wi-Fi credentials — don't delete it.
 
-**Optional — sleep wallpapers.** `crossmosa-2.0.0-wallpapers.zip` holds **50 public-domain
+**Optional — sleep wallpapers.** `crossmosa-2.0.1-wallpapers.zip` holds **50 public-domain
 masterpieces** from Wikimedia Commons, each individually checked and tuned for this panel's
 4 grey levels. Copy the `.bmp` files to `/.sleep/` on the SD card (two or more to rotate),
 then **Settings → Display → Sleep Screen → Custom**. The converter, the curation manifest and
@@ -696,22 +718,24 @@ the reasoning behind the selection are in [`wallpapers/`](wallpapers/).
 
 ## UI character-set limits (please read)
 
-The built-in UI font covers **7,413 Han characters**, not all of Chinese. Characters outside
+The built-in UI font covers **7,973 Han characters**, not all of Chinese. Characters outside
 that set render as boxes **in menus, filenames and titles only** — book *text* uses the SD
-font and is unaffected (fully so with NotoSerifTC; NotoSansTC and Iansui have smaller sets).
+font and is unaffected. All five SD families carry 27,950 Han characters.
 
-Two known gaps: rare BIG5 Level 2 characters outside the 2,000 chosen, and characters
-**outside BIG5 entirely**. The three most common Taiwanese given-name characters
-（喆， 堃， 彣） were added in build 115; the rest still need a different character source
-and are not in 1.0.
+What still bites: rare characters, especially ones **outside BIG5 entirely** — plenty of
+Taiwanese given names are. 2.0.1 added 496 more and changed how they are chosen: instead of
+ranking BIG5 by frequency, it scans the text of whole ebook libraries and takes the
+characters that really show up in titles and filenames. Someone's book will still use one
+that was not in the scan. **Report it — adding characters is routine maintenance.**
 
 Report missing characters as a GitHub issue (paste the character itself and say where it
 appeared). To regenerate the UI fonts yourself: edit `fonts/charsets/charset-ui-v5.txt`
-(its ASCII header documents the exact sources and selection rule), run
-`fonts/regen-ui-fonts.sh`, rebuild and reflash. UI fonts cannot be replaced from the SD card.
+(its ASCII header documents the exact sources and selection rule; the 2.0.1 additions are in
+`charset-ui-v5-additions.txt`), run `fonts/regen-ui-fonts.sh`, rebuild and reflash.
+UI fonts cannot be replaced from the SD card.
 
 Why not include everything: full BIG5 would add ~2 MB to a 6.5 MB app partition that is
-already 90.9% full.
+already 96.4% full.
 
 <a id="screen-halted-en"></a>
 

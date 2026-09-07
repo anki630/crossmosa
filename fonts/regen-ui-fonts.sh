@@ -29,7 +29,10 @@
 # THE THREE SUBSET LAYERS (all three feed every face; see the "Command used:" header
 # inside each .h for the exact argument list)
 #   UI-NotoSans-*   main Han layer, subset of Noto Sans TC        -- regenerated here
-#   UI-CJKextra-*   357 chars Noto Sans TC lacks, from Noto Sans CJK TC face[3]
+#   UI-CJKextra-*   853 chars Noto Sans TC lacks, from Noto Sans CJK TC face[3]
+#                   (was 357; 2.0.1 added 496 more, picked by scanning whole ebook
+#                    libraries rather than a BIG5-only frequency table -- see
+#                    fonts/charsets/charset-ui-v5-additions.txt)
 #   UI-Symextra-*   3 symbols neither Noto face has, from DejaVu Sans
 #   The latter two are static inputs; this script does not touch them.
 #
