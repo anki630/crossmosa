@@ -401,18 +401,15 @@ UI 字型與內文字型是**完全獨立的兩套**。書的內文走 SD 卡字
 
 ### 先把 SD 卡準備好
 
-| | |
-|---|---|
-| **格式** | **FAT32 或 exFAT 都可以，不用重新格式化。** 大容量卡出廠多半是 exFAT，直接用 |
-| **放什麼** | 從 Releases 下載的 **`update.bin`**，**原檔直接放**——不用解壓縮、不用改名 |
-| **放哪裡** | SD 卡**最外層**（根目錄），**只放一個 `.bin`**。其他資料夾（`books`、`.crossmosa` 之類）不用清 |
-| **電力** | **先充飽再開始。** 全程約五到六分鐘，而且你看不到電池圖示 |
+1. **卡不用重新格式化**——FAT32 或 exFAT 都可以，大容量卡出廠多半是 exFAT，直接用。
+2. 從 Releases 下載 **`update.bin`**，**原檔直接丟進卡的最外層**——不用解壓縮、不用改名。
+3. **卡的最外層只留這一個 `.bin`**，其他都不用管。
+4. **先充飽電**——全程五到六分鐘，而且你看不到電池圖示。
 
-⚠️ **為什麼只能放一個 `.bin`**：盲按時是靠「往上一個」繞到清單**最後一項**來選檔案。
-清單只列 `.bin`，所以只有一個的時候，那一項必定就是它。放兩個就會選到錯的。
+⚠️ **只放一個 `.bin` 是關鍵**：盲按時是靠「往上一個」繞到清單最後一項來選檔案，
+而清單只列 `.bin`。只有一個的時候，那一項必定就是它。
 
-ℹ️ **寫到一半沒電不會變磚。** 機器是整份檢查、整份寫完之後才切換開機目標，
-中途斷電只會開回原本的韌體，再來一次就好。充飽電是為了**不用重來**，不是怕壞掉。
+ℹ️ 寫到一半沒電**不會變磚**，只會開回原本的韌體，再來一次就好。
 
 <img src="docs/img/button-map.png" width="340" alt="X3 按鍵編號">
 
@@ -761,20 +758,17 @@ no need to go back to stock firmware first. About five to six minutes when it go
 
 ### Get the SD card ready first
 
-| | |
-|---|---|
-| **Format** | **FAT32 or exFAT — either works. No need to reformat.** Large cards ship as exFAT; use them as they are |
-| **What to put on it** | **`update.bin`** from Releases, **exactly as downloaded** — do not unzip it, do not rename it |
-| **Where** | The **root** of the card, and **only one `.bin`**. Other folders (`books`, `.crossmosa`, …) can stay |
-| **Battery** | **Charge it first.** The whole thing takes five to six minutes and you cannot see the battery icon |
+1. **No need to reformat the card** — FAT32 and exFAT both work. Large cards ship as exFAT; use them as they are.
+2. Download **`update.bin`** from Releases and **drop it in the card's root exactly as downloaded** — do not unzip, do not rename.
+3. **Leave exactly one `.bin` in the root.** Nothing else matters.
+4. **Charge the device first** — this takes five to six minutes and you cannot see the battery icon.
 
-⚠️ **Why only one `.bin`:** blind, you select the file by pressing "previous" once, which wraps
-to the **last** entry in the list. The list only shows `.bin` files, so with exactly one on the
-card that entry is guaranteed to be yours. Two files and you pick the wrong one.
+⚠️ **One `.bin` is the part that matters:** blind, you select the file by pressing "previous"
+once, which wraps to the last entry. The list only shows `.bin` files, so with exactly one on
+the card that entry is guaranteed to be yours.
 
-ℹ️ **Losing power mid-write will not brick it.** The device verifies and writes the whole image
-before it switches the boot target, so an interrupted write just boots the firmware you already
-had. Charging first is so you don't have to start over — not because it breaks.
+ℹ️ Losing power mid-write **will not brick it** — it just boots the firmware you already had, so
+you start over.
 
 <img src="docs/img/button-map.png" width="340" alt="X3 button numbers">
 
