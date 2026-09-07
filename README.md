@@ -401,16 +401,14 @@ UI 字型與內文字型是**完全獨立的兩套**。書的內文走 SD 卡字
 
 ### 先把 SD 卡準備好
 
-**不用格式化。** 三步：
+1. SD 卡插到電腦上
+2. 卡裡的東西**全部刪掉**（不用格式化。想留書就先複製一份到電腦）
+3. 下載 **`update.bin`**（2.0.0 以上，建議用[最新版](https://github.com/anki630/crossmosa/releases/latest)）
+4. **原檔直接丟進卡的最外層**——不用解壓縮、不用改名
+5. 卡裡只剩這一個 `update.bin`
+6. 卡插回機器，**充飽電**
 
-1. 把卡插到電腦上，**內容全部刪掉**（想留書就先複製一份到電腦）。
-2. 到 [Releases](https://github.com/anki630/crossmosa/releases/latest) 下載 **`update.bin`**，
-   **原檔直接丟進卡的最外層**——不用解壓縮、不用改名。（2.0.0 以上都可以，建議用最新版。）
-3. **先充飽電**——全程五到六分鐘，而且你看不到電池圖示。
-
-⚠️ **為什麼要全部刪掉**：盲按時是靠「往上一個」繞到清單**最後一項**來選檔案，而清單只列 `.bin`。
-卡上只有一個 `.bin`，那一項就必定是它。**上次刷機留下的舊 `.bin` 最容易害人**——
-選到它你完全看不出來。
+⚠️ 最重要的是第 2 步。卡上如果還留著上次刷機的舊 `.bin`，盲按會選到它，而你完全看不出來。
 
 ℹ️ 寫到一半沒電**不會變磚**，只會開回原本的韌體，再來一次就好。
 
@@ -761,19 +759,15 @@ no need to go back to stock firmware first. About five to six minutes when it go
 
 ### Get the SD card ready first
 
-**No formatting needed.** Three steps:
+1. Put the SD card in a computer
+2. **Delete everything on it** (no formatting needed; copy your books off first if you want them)
+3. Download **`update.bin`** (2.0.0 or newer — use the [latest release](https://github.com/anki630/crossmosa/releases/latest))
+4. **Drop it in the card's root exactly as downloaded** — do not unzip, do not rename
+5. That one `update.bin` is the only thing left on the card
+6. Put the card back in the device and **charge it fully**
 
-1. Put the card in a computer and **delete everything on it** (copy your books off first if you
-   want to keep them).
-2. Download **`update.bin`** from [Releases](https://github.com/anki630/crossmosa/releases/latest)
-   and **drop it in the card's root exactly as downloaded** — do not unzip, do not rename.
-   (Anything 2.0.0 or newer works; use the latest.)
-3. **Charge the device first** — this takes five to six minutes and you cannot see the battery icon.
-
-⚠️ **Why delete everything:** blind, you select the file by pressing "previous" once, which wraps
-to the **last** entry. The list only shows `.bin` files, so with exactly one on the card that
-entry is guaranteed to be yours. **An old `.bin` left over from a previous update is what catches
-people out** — pick that one and you cannot tell.
+⚠️ Step 2 is the one that matters. An old `.bin` left over from a previous update will be picked
+instead, and you cannot tell.
 
 ℹ️ Losing power mid-write **will not brick it** — it just boots the firmware you already had, so
 you start over.
