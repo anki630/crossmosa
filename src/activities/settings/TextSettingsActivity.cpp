@@ -38,6 +38,9 @@ int findCurrentFontIndex(const SdCardFontRegistry* registry, const char* sdFontF
 }
 
 constexpr StrId LINE_SPACING_IDS[] = {StrId::STR_TIGHT, StrId::STR_NORMAL, StrId::STR_WIDE};
+constexpr StrId COLUMN_PITCH_IDS[] = {StrId::STR_TIGHT, StrId::STR_NORMAL, StrId::STR_WIDE};
+constexpr StrId TEXT_DIRECTION_IDS[] = {StrId::STR_TEXT_DIR_HORIZONTAL, StrId::STR_TEXT_DIR_VERTICAL,
+                                        StrId::STR_TEXT_DIR_PUBLISHER};
 constexpr StrId ALIGNMENT_IDS[] = {StrId::STR_JUSTIFY, StrId::STR_ALIGN_LEFT, StrId::STR_CENTER, StrId::STR_ALIGN_RIGHT,
                                    StrId::STR_BOOK_S_STYLE};
 constexpr int MARGIN_MIN = CrossPointSettings::SCREEN_MARGIN_MIN;
@@ -264,7 +267,8 @@ void TextSettingsActivity::render(RenderLock&&) {
 
     case Tab::Layout: {
       constexpr int LAYOUT_ROWS = static_cast<int>(LayoutRow::Count);
-      static constexpr StrId ROW_NAME_IDS[LAYOUT_ROWS] = {StrId::STR_LINE_SPACING, StrId::STR_EXTRA_SPACING,
+      static constexpr StrId ROW_NAME_IDS[LAYOUT_ROWS] = {StrId::STR_TEXT_DIRECTION, StrId::STR_LINE_SPACING,
+                                                          StrId::STR_COLUMN_SPACING, StrId::STR_EXTRA_SPACING,
                                                           StrId::STR_ALIGNMENT, StrId::STR_SCREEN_MARGIN};
       GUI.drawList(
           renderer, listRect, LAYOUT_ROWS, selectedItem,
@@ -405,6 +409,22 @@ void TextSettingsActivity::confirmLayoutRow(int row) {
                         });
       requestUpdate();
       break;
+    case LayoutRow::TextDirection:
+      optionPopup_.show(StrId::STR_TEXT_DIRECTION, TEXT_DIRECTION_IDS,
+                        static_cast<int>(std::size(TEXT_DIRECTION_IDS)), SETTINGS.readerVerticalLayout, [](int idx) {
+                          SETTINGS.readerVerticalLayout = static_cast<uint8_t>(idx);
+                          SETTINGS.saveToFile();
+                        });
+      requestUpdate();
+      break;
+    case LayoutRow::ColumnSpacing:
+      optionPopup_.show(StrId::STR_COLUMN_SPACING, COLUMN_PITCH_IDS, static_cast<int>(std::size(COLUMN_PITCH_IDS)),
+                        SETTINGS.readerColumnPitch, [](int idx) {
+                          SETTINGS.readerColumnPitch = static_cast<uint8_t>(idx);
+                          SETTINGS.saveToFile();
+                        });
+      requestUpdate();
+      break;
     case LayoutRow::ScreenMargin: {
       std::vector<std::string> options;
       options.reserve((MARGIN_MAX - MARGIN_MIN) / MARGIN_STEP + 1);
@@ -437,6 +457,15 @@ std::string TextSettingsActivity::layoutValueText(int row) const {
     }
     case LayoutRow::ScreenMargin:
       return std::to_string(SETTINGS.screenMargin);
+    case LayoutRow::TextDirection: {
+      const uint8_t v = SETTINGS.readerVerticalLayout;
+      return v < std::size(TEXT_DIRECTION_IDS) ? I18N.get(TEXT_DIRECTION_IDS[v])
+                                               : I18N.get(StrId::STR_TEXT_DIR_HORIZONTAL);
+    }
+    case LayoutRow::ColumnSpacing: {
+      const uint8_t v = SETTINGS.readerColumnPitch;
+      return v < std::size(COLUMN_PITCH_IDS) ? I18N.get(COLUMN_PITCH_IDS[v]) : I18N.get(StrId::STR_NORMAL);
+    }
 
     default:
       return "";
@@ -490,7 +519,14 @@ std::string TextSettingsActivity::styleValueText(int row) const {
 // Only Focus Reading shows in the preview (bold prefixes); the other Style rows
 // have no distinct preview.
 bool TextSettingsActivity::focusedRowHasNoPreview() const {
-  if (selectedIndex() == 0 || tab_ != Tab::Style) return false;
+  if (selectedIndex() == 0) return false;
+  // ⚠️ 預覽窗**永遠是橫排**（TextSettingsPreview.cpp 明確用 `VerticalScope horizontal(renderer, false)`），
+  //    所以文字方向與欄距在預覽裡看不出任何效果 —— 必須標示，否則使用者會以為設定沒生效。
+  if (tab_ == Tab::Layout) {
+    const LayoutRow row = static_cast<LayoutRow>(selectedIndex() - 1);
+    return row == LayoutRow::TextDirection || row == LayoutRow::ColumnSpacing;
+  }
+  if (tab_ != Tab::Style) return false;
   const StyleRow row = static_cast<StyleRow>(selectedIndex() - 1);
   return row == StyleRow::Hyphenation || row == StyleRow::EmbeddedStyle || row == StyleRow::AntiAliasing;
 }

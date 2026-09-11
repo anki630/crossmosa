@@ -1,5 +1,7 @@
 #include "GfxRenderer.h"
 
+#include "../Epub/Epub/VerticalText.h"  // 直排西文的座標映射（與桌面測試共用同一份）
+
 #include <BidiUtils.h>
 #include <BuildScratch.h>
 #include <FontDecompressor.h>
@@ -307,7 +309,15 @@ static AlignedMemRect screenRectToAlignedMemRect(GfxRenderer::Orientation orient
   return out;
 }
 
-enum class TextRotation { None, Rotated90CW };
+// ⚠️ Rotated90CW 這個名字會誤導：它的映射是 screenY = innerBase − glyphX（字串往【上】走）
+//    ＋ screenX = outerBase + glyphY（字頂朝【左】）＝ 視覺上逆時針。它服務的是側鍵標籤。
+//    直排要的是相反的方向，所以另開 VerticalCW，不是重用它。
+//    （帳本原本寫「drawTextRotated90CW 已經存在，所以直排的英數解決了」——那是錯的。）
+enum class TextRotation {
+  None,
+  Rotated90CW,  // 側鍵標籤：字頂朝左、字串往上
+  VerticalCW,   // 直排的英數：字頂朝右、字串往下（真正的順時針）
+};
 
 // Shared glyph rendering logic for normal and rotated text.
 // Coordinate mapping and cursor advance direction are selected at compile time via the template parameter.
@@ -411,6 +421,14 @@ static void renderCharImpl(const GfxRenderer& renderer, GfxRenderer::RenderMode 
     if (!renderer.glyphIntersectsStrip(ob, ib - (width - 1), ob + height - 1, ib)) {
       return;
     }
+  } else if constexpr (rotation == TextRotation::VerticalCW) {
+    // 字頂朝右：screenX ∈ [ob − (height−1), ob]；字串往下：screenY ∈ [ib, ib + width−1]
+    const auto o = vtext::verticalCwOrigin(cursorX, cursorY, left, top);
+    const int ob = o.outerBase;
+    const int ib = o.innerBase;
+    if (!renderer.glyphIntersectsStrip(ob - (height - 1), ib, ob, ib + width - 1)) {
+      return;
+    }
   } else {
     const int gx0 = cursorX + left;
     const int gy0 = cursorY - top;
@@ -428,6 +446,12 @@ static void renderCharImpl(const GfxRenderer& renderer, GfxRenderer::RenderMode 
     if constexpr (rotation == TextRotation::Rotated90CW) {
       outerBase = cursorX + fontData->ascender - top;  // screenX = outerBase + glyphY
       innerBase = cursorY - left;                      // screenY = innerBase - glyphX
+    } else if constexpr (rotation == TextRotation::VerticalCW) {
+      // ⭐ 用 VerticalText.h 的共用式子，不要在這裡再寫一次 ——
+      //    那份有桌面測試（tools/vertical-oracle/cross_check）逐點比對過。
+      const auto o = vtext::verticalCwOrigin(cursorX, cursorY, left, top);
+      outerBase = o.outerBase;  // screenX = outerBase − glyphY
+      innerBase = o.innerBase;  // screenY = innerBase + glyphX
     } else {
       outerBase = cursorY - top;   // screenY = outerBase + glyphY
       innerBase = cursorX + left;  // screenX = innerBase + glyphX
@@ -435,16 +459,19 @@ static void renderCharImpl(const GfxRenderer& renderer, GfxRenderer::RenderMode 
 
     if (is2Bit) {
       int pixelPosition = 0;
+      // 兩個 step 都是 constexpr → 乘法在編譯期折掉，逐像素熱迴圈零額外成本。
+      constexpr int outerStep = (rotation == TextRotation::VerticalCW) ? -1 : 1;
+      constexpr int innerStep = (rotation == TextRotation::VerticalCW) ? 1 : -1;
       for (int glyphY = 0; glyphY < height; glyphY++) {
-        const int outerCoord = outerBase + glyphY;
+        const int outerCoord = outerBase + outerStep * glyphY;
         for (int glyphX = 0; glyphX < width; glyphX++, pixelPosition++) {
           int screenX, screenY;
-          if constexpr (rotation == TextRotation::Rotated90CW) {
-            screenX = outerCoord;
-            screenY = innerBase - glyphX;
-          } else {
+          if constexpr (rotation == TextRotation::None) {
             screenX = innerBase + glyphX;
             screenY = outerCoord;
+          } else {
+            screenX = outerCoord;
+            screenY = innerBase + innerStep * glyphX;
           }
 
           const uint8_t byte = bitmap[pixelPosition >> 2];
@@ -472,16 +499,19 @@ static void renderCharImpl(const GfxRenderer& renderer, GfxRenderer::RenderMode 
       }
     } else {
       int pixelPosition = 0;
+      // 兩個 step 都是 constexpr → 乘法在編譯期折掉，逐像素熱迴圈零額外成本。
+      constexpr int outerStep = (rotation == TextRotation::VerticalCW) ? -1 : 1;
+      constexpr int innerStep = (rotation == TextRotation::VerticalCW) ? 1 : -1;
       for (int glyphY = 0; glyphY < height; glyphY++) {
-        const int outerCoord = outerBase + glyphY;
+        const int outerCoord = outerBase + outerStep * glyphY;
         for (int glyphX = 0; glyphX < width; glyphX++, pixelPosition++) {
           int screenX, screenY;
-          if constexpr (rotation == TextRotation::Rotated90CW) {
-            screenX = outerCoord;
-            screenY = innerBase - glyphX;
-          } else {
+          if constexpr (rotation == TextRotation::None) {
             screenX = innerBase + glyphX;
             screenY = outerCoord;
+          } else {
+            screenX = outerCoord;
+            screenY = innerBase + innerStep * glyphX;
           }
 
           const uint8_t byte = bitmap[pixelPosition >> 3];
@@ -2154,6 +2184,19 @@ int32_t GfxRenderer::getCodepointAdvanceFP(const int fontId, const uint32_t cp, 
   return isSupSub ? (advFP + 1) / 2 : advFP;
 }
 
+bool GfxRenderer::getGlyphInkBox(const int fontId, const uint32_t cp, const EpdFontFamily::Style style, int* width,
+                                 int* height, int* left, int* top) const {
+  const auto fontIt = fontMap.find(fontId);
+  if (fontIt == fontMap.end()) return false;
+  const EpdGlyph* g = fontIt->second.getGlyph(cp, style);
+  if (!g) return false;
+  *width = g->width;
+  *height = g->height;
+  *left = g->left;
+  *top = g->top;
+  return true;
+}
+
 int GfxRenderer::getTextAdvanceX(const int fontId, const char* text, EpdFontFamily::Style style) const {
   // Match the font drawText would use for CJK-bearing strings (see resolveTextFontId).
   const int resolvedFontId = resolveTextFontId(fontId, text, style);
@@ -2331,6 +2374,62 @@ void GfxRenderer::drawTextRotated90CW(const int fontId, const int x, const int y
     prevAdvanceFP = glyph ? glyph->advanceX : 0;  // 12.4 fixed-point
 
     renderCharImpl<TextRotation::Rotated90CW>(*this, renderMode, font, cp, x, lastBaseY, black, style);
+    prevCp = cp;
+  }
+}
+
+// 直排中的西文：整串順時針旋轉 90°，字頂朝右、字串往下走。
+//
+// ⚠️ **這不是 drawTextRotated90CW 的別名。** 那一個服務側鍵標籤，方向是相反的
+//    （字頂朝左、字串往上＝視覺逆時針）。兩者的差別在 renderCharImpl 的映射與這裡的
+//    `lastBaseY +=`（那邊是 `-=`）。
+//
+// 依據 clreq §2.1.2 ②：「文字以順時針方向旋轉 90°，主要用於**西文的單詞、語句**。」
+// ⚠️ 單一字母／數字／首字母縮略詞走 ①（直立逐字，不呼叫這裡）；
+//    二位數字走 ③（縦中横）。判準見 lib/Epub/Epub/VerticalText.h。
+void GfxRenderer::drawTextVerticalCW(const int fontId, const int x, const int y, const char* text, const bool black,
+                                     const EpdFontFamily::Style style) const {
+  ++verticalRotCount;  // 證人：旋轉繪製確實執行（見 GfxRenderer.h 的 B-22 註解）
+  if (text == nullptr || *text == '\0') {
+    return;
+  }
+
+  const int resolvedFontId = resolveTextFontId(fontId, text, style);
+  const auto fontIt = fontMap.find(resolvedFontId);
+  if (fontIt == fontMap.end()) {
+    LOG_ERR("GFX", "Font %d not found", resolvedFontId);
+    return;
+  }
+
+  const auto& font = fontIt->second;
+
+  int lastBaseY = y;
+  int32_t prevAdvanceFP = 0;  // 12.4 fixed-point
+  uint32_t cp;
+  uint32_t prevCp = 0;
+  while ((cp = utf8NextCodepoint(reinterpret_cast<const uint8_t**>(&text)))) {
+    // 合成記號（希伯來 niqqud／阿拉伯 harakat）：直排的西文串裡實務上不會出現，
+    // 不做特殊錨定，就畫在基字位置。⚠️ 若日後真的需要，要寫 anchorOverVerticalCW，
+    // 不可重用 anchorOverRotated90CW —— 那一個的座標系是反的。
+    if (utf8IsCombiningMark(cp) || BidiUtils::isTransparentMark(cp)) {
+      if (font.getGlyph(cp, style)) {
+        renderCharImpl<TextRotation::VerticalCW>(*this, renderMode, font, cp, x, lastBaseY, black, style);
+      }
+      continue;
+    }
+
+    cp = font.applyLigatures(cp, text, style);
+
+    // 與 drawTextRotated90CW 對稱的差分捨入，但方向相反（那邊 -=，這裡 +=）。
+    if (prevCp != 0) {
+      const auto kernFP = font.getKerning(prevCp, cp, style);
+      lastBaseY += fp4::toPixel(prevAdvanceFP + kernFP);
+    }
+
+    const EpdGlyph* glyph = font.getGlyph(cp, style);
+    prevAdvanceFP = glyph ? glyph->advanceX : 0;
+
+    renderCharImpl<TextRotation::VerticalCW>(*this, renderMode, font, cp, x, lastBaseY, black, style);
     prevCp = cp;
   }
 }

@@ -56,6 +56,15 @@ class GfxRenderer {
   uint32_t frameBufferSize = HalDisplay::BUFFER_SIZE;
   std::vector<uint8_t*> bwBufferChunks;
   std::map<int, EpdFontFamily> fontMap;
+  // 直排模式旗標。mutable：排版與繪製都在 const 路徑上呼叫。
+  mutable bool verticalLayout = false;
+  // 直排的證人計數器。⚠️ 教訓 B-22（本專案已犯三次：v121／v125／v204）——
+  // 儀器要先證明【自己會被執行】。旗標設對不等於旋轉繪製真的跑過：
+  // 一整頁純漢字會走 drawText（Cell 直立），一個旋轉的西文都沒有也很正常。
+  // 所以分開數兩件事：直排頁畫過幾次（vdraw）、其中旋轉繪製幾次（vrot）。
+  mutable uint16_t verticalDrawCount = 0;
+  mutable uint16_t verticalRotCount = 0;
+
   // Mutable because ensureSdCardFontReady() is const (called from layout code
   // that holds a const GfxRenderer&) but triggers SD card reads and heap
   // allocation inside the SdCardFont objects. Same pragmatic compromise as
@@ -132,6 +141,49 @@ class GfxRenderer {
   void setFontCacheManager(FontCacheManager* m) { fontCacheManager_ = m; }
   FontCacheManager* getFontCacheManager() const { return fontCacheManager_; }
   bool isFontCacheScanning() const;
+
+  // 直排（縦書き）模式。⭐ 旗標放在 renderer 而不是 BlockStyle —— 後者會改 SD 上的
+  // 持久格式，觸發 SECTION_FILE_VERSION bump ＋全書庫重排，而重排視窗正是記憶體壓力
+  // 最高的時候（教訓 A-11）。直排的快取**與橫排共用同一個 .bin**，靠 section 檔頭的
+  // `verticalLayout` + `columnPitchTier` 兩個欄位比對失效（v104）。
+  // ⚠️ 曾規劃走側檔 `.v1.bin`，已放棄 —— 側檔要靠一個全域「目前是哪個變體」，設晚一步
+  //    就會把橫排快取當直排讀；檔頭欄位讓 ProgressMapper 那四個建構點自動正確。
+  void setVerticalLayout(const bool v) const { verticalLayout = v; }
+  bool isVerticalLayout() const { return verticalLayout; }
+  void noteVerticalDraw() const { ++verticalDrawCount; }
+  uint16_t takeVerticalDrawCount() const {
+    const uint16_t n = verticalDrawCount;
+    verticalDrawCount = 0;
+    return n;
+  }
+  uint16_t takeVerticalRotCount() const {
+    const uint16_t n = verticalRotCount;
+    verticalRotCount = 0;
+    return n;
+  }
+
+  // 直排旗標的 RAII 作用域。
+  //
+  // ⚠️ **這個旗標不能是「設定一次的全域」。** `TextBlock::render` 有五組呼叫者，
+  //    而它們的區塊【不是同一種編碼】：
+  //      · 閱讀器（EpubReaderActivity ×3、DictionaryWordSelect ×2）—— 編碼跟著書走
+  //      · 設定預覽（TextSettingsPreview）—— **永遠是橫排**，它有自己的排版路徑
+  //    旗標若留在「開」的狀態飄進設定預覽，就會把橫排編碼當直排座標畫
+  //    （xpos 被當成沿欄、focusSuffixX 被當成跨軸）＝ 一團亂碼，而且不會報錯。
+  //    → 每個呼叫點都用這個作用域【明寫】自己要哪一種，離開自動還原。
+  //      教訓「修缺陷類別不是修實例」：新增第六個呼叫者時，忘了寫的那個會沿用
+  //      呼叫者的狀態而不是沉默地繼承閱讀器的。
+  class VerticalScope {
+   public:
+    VerticalScope(const GfxRenderer& r, const bool v) : r_(r), prev_(r.isVerticalLayout()) { r.setVerticalLayout(v); }
+    ~VerticalScope() { r_.setVerticalLayout(prev_); }
+    VerticalScope(const VerticalScope&) = delete;
+    VerticalScope& operator=(const VerticalScope&) = delete;
+
+   private:
+    const GfxRenderer& r_;
+    bool prev_;
+  };
   const std::map<int, EpdFontFamily>& getFontMap() const { return fontMap; }
   void registerSdCardFont(int fontId, SdCardFont* font) { sdCardFonts_[fontId] = font; }
   void unregisterSdCardFont(int fontId) { removeFont(fontId); }
@@ -284,6 +336,11 @@ class GfxRenderer {
   // 沒有正確的逐碼位答案，呼叫端必須退回整條量寬的舊做法。
   static constexpr int32_t kAdvanceUnavailable = -1;
   int32_t getCodepointAdvanceFP(int fontId, uint32_t cp, EpdFontFamily::Style style) const;
+  // 單一字形的墨水外框（bitmap 寬高與相對游標的 left/top）。
+  // 直排要把句讀挪到格子正中央，而「正中央在哪」是**每個字形自己的外框決定的**，
+  // 不是一個可以猜的常數 —— 五套字型的句讀外框並不相同。回傳 false 表示沒有這個字形。
+  bool getGlyphInkBox(int fontId, uint32_t cp, EpdFontFamily::Style style, int* width, int* height, int* left,
+                      int* top) const;
   int getTextAdvanceX(int fontId, const char* text, EpdFontFamily::Style style) const;
   int getFontAscenderSize(int fontId) const;
   int getLineHeight(int fontId) const;
@@ -297,8 +354,14 @@ class GfxRenderer {
                                        EpdFontFamily::Style style = EpdFontFamily::REGULAR) const;
 
   // Helper for drawing rotated text (90 degrees clockwise, for side buttons)
+  // ⚠️ 名字會誤導：它的映射是字頂朝【左】、字串往【上】＝視覺逆時針。直排不要用它。
   void drawTextRotated90CW(int fontId, int x, int y, const char* text, bool black = true,
                            EpdFontFamily::Style style = EpdFontFamily::REGULAR) const;
+
+  // 直排中的西文：整串【真正的】順時針旋轉 90°，字頂朝右、字串往下走。
+  // clreq §2.1.2 ② —— 用於西文的單詞、語句；單一字母／縮略詞走①直立，二位數走③縦中横。
+  void drawTextVerticalCW(int fontId, int x, int y, const char* text, bool black = true,
+                          EpdFontFamily::Style style = EpdFontFamily::REGULAR) const;
   int getTextHeight(int fontId) const;
 
   // Grayscale functions

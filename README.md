@@ -61,6 +61,11 @@ Wi-Fi 連線當機**，這裡先修掉了（細節見 CHANGELOG 的 1.0.0 節）
 
 版本:[`2.0.1`](https://github.com/anki630/crossmosa/releases/latest)
 
+> 🧪 **想試直排？** 有一個測試版 **2.1.0-beta.1**，加了直排（縦書き）閱讀。
+> 它是預發佈版，**第一次刷 CrossMosa 的人請不要從它開始**——
+> 先刷 2.0.1，確認一切正常之後再換上來。
+> 詳情與已知限制見 [2.1.0-beta.1 的說明](https://github.com/anki630/crossmosa/releases/tag/v2.1.0-beta.1)。
+
 **我該刷哪一版？**
 
 | | |

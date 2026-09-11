@@ -13,6 +13,9 @@
 #include "Epub/ParsedText.h"
 #include "Epub/blocks/ImageBlock.h"
 #include "Epub/blocks/TextBlock.h"
+#include <Logging.h>
+
+#include "Epub/VerticalText.h"
 #include "Epub/css/CssParser.h"
 #include "Epub/css/CssStyle.h"
 
@@ -46,8 +49,29 @@ class ChapterHtmlSlimParser {
   std::string rubyTextBuffer;
   std::unique_ptr<Page> currentPage = nullptr;
   int16_t currentPageNextY = 0;
+  // 直排：欄的位置，從右緣往【左】遞減（欄由右往左）。橫排不使用。
+  int16_t currentPageNextX = 0;
   int fontId;
   float lineCompression;
+  // 直排的欄距係數（em 的倍數）。⭐ **不能從 lineCompression 反推** ——
+  // getReaderLineCompression() 對 SD 字型與 NOTOSERIF 回 0.95/1.0/1.1、對 NOTOSANS 回
+  // 0.90/0.95/1.0，同一個 1.0 在前者是「標準」、後者是「寬」。所以另外送進來。
+  // ⚠️ 而它【必須進 section 檔頭】，否則換檔位會讀到用舊幾何排的快取。
+  //    已在 Section.cpp 的 columnPitchTier 欄位（v104）。曾規劃摺進側檔檔名，已放棄。
+  float columnPitchFactor = 1.50f;
+  bool vertColLogged = false;  // VERTCOL 每次建置只印一行
+  uint8_t vertImgDropLogged = 0;  // VERTIMGDROP 上限 3 筆
+  // 直排欄頂。由 layoutCurrentBlock 夾限後寫入，addColumnToPage 直接用 ——
+  // 兩處各自讀 BlockStyle 就可能不一致，而 colTop + colLen <= viewportHeight 靠它們一致。
+  int16_t verticalColTop = 0;
+  // 直排的段落間距（跨欄軸）。由 CSS margin／padding 換算：先表達成「幾行」，
+  // 再套成「幾個欄距」——一行空白 → 一欄空白。見 .cpp layoutCurrentBlock 的註解。
+  int16_t verticalLeadGap = 0;
+  int16_t verticalTrailGap = 0;
+  // 上一個區塊的下緣間距，**還沒套用**——要跟下一個區塊的上緣間距【摺疊】
+  // （CSS margin collapsing）。見 .cpp addColumnToPage。
+  int16_t verticalPendingTrailGap = 0;
+  bool verticalBlockFirstColumn = false;
   bool extraParagraphSpacing;
   uint8_t paragraphAlignment;
   uint16_t viewportWidth;
@@ -111,6 +135,10 @@ class ChapterHtmlSlimParser {
   int footnoteLinkDepth = -1;
   FootnoteEntry currentFootnote = {};
   int currentFootnoteLinkTextLen = 0;
+  // 連結文字被長度上限截掉了嗎（不是「剛好填滿」）。收尾時據此補省略號。
+  // ⚠️ 這個 handler 會被 expat 分多次呼叫，所以省略號不能在累積的當下補 ——
+  //    補了之後下一次呼叫又會接著寫。只有收尾時才知道文字真的結束了。
+  bool currentFootnoteTruncated = false;
   std::vector<std::pair<int, FootnoteEntry>> pendingFootnotes;  // <wordIndex, entry>
   int wordsExtractedInBlock = 0;
 
@@ -153,13 +181,25 @@ class ChapterHtmlSlimParser {
       const std::function<void(std::unique_ptr<Page>, uint16_t, uint16_t, uint32_t)>& completePageFn,
       const bool embeddedStyle, const std::string& contentBase, const std::string& imageBasePath,
       const uint8_t imageRendering = 0, std::vector<std::string> tocAnchors = {},
-      const std::function<void()>& popupFn = nullptr, const CssParser* cssParser = nullptr)
+      const std::function<void()>& popupFn = nullptr, const CssParser* cssParser = nullptr,
+      // 直排的欄距檔位。
+      //
+      // ⚠️ **沒有 `verticalLayout` 參數，這是刻意的。** 軸向分流一律讀
+      //    `renderer.isVerticalLayout()` —— 排版（layoutCurrentBlock）與繪製
+      //    （TextBlock::render）必須看同一個旗標，存第二份成員遲早分岔。
+      //    我一度想在這裡加「spec 與 renderer 是否一致」的斷言，但那是同義反覆：
+      //      · 建置期：Section::startBuild 與 buildSomeMore 的旗標同源於 buildVertical_
+      //      · 繪製期：檔頭比對（spec.verticalLayout != fileVerticalLayout）保證
+      //        用另一個軸向排過的快取會被丟掉重排
+      //    不變量已由結構保證，不值得為此把 GfxRenderer.h 拉進這個標頭。
+      const uint8_t columnPitchTier = 1)
 
       : epub(epub),
         filepath(filepath),
         renderer(renderer),
         fontId(fontId),
         lineCompression(lineCompression),
+        columnPitchFactor(vtext::columnPitchForTier(columnPitchTier)),
         extraParagraphSpacing(extraParagraphSpacing),
         paragraphAlignment(paragraphAlignment),
         viewportWidth(viewportWidth),
@@ -199,6 +239,15 @@ class ChapterHtmlSlimParser {
   void abortParse();   // tear down without flushing (error / abandon)
 
   void addLineToPage(std::shared_ptr<TextBlock> line, uint32_t visibleOffset);
+  // 直排：一欄放進頁面（欄由右往左）。
+  void addColumnToPage(std::shared_ptr<TextBlock> column, uint32_t visibleOffset, int tokensInColumn);
+  // 兩個排版呼叫點共用的分派：橫排走 layoutAndExtractLines，直排走 layoutAndExtractColumns。
+  // ⚠️ 兩個呼叫點都要走這裡 —— 教訓 v149：「只守一處等於沒守」。
+  void layoutCurrentBlock(bool includeLast);
+  // 直排：讓圖片／<hr> 獨占一頁（它們仍走橫排游標，會與欄互疊）。見 .cpp 的註解。
+  bool verticalBeginIsolated(uint32_t visibleTextOffset);
+  void verticalEndIsolated();
+  int columnPitchPx() const;
   const std::vector<std::pair<std::string, uint16_t>>& getAnchors() const { return anchorData; }
 
   // Byte progress of the in-flight parse, used to estimate a still-building section's total page

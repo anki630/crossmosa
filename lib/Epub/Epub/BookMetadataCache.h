@@ -16,6 +16,9 @@ class BookMetadataCache {
     std::string language;
     std::string coverItemHref;
     std::string textReferenceHref;
+    // `<spine page-progression-direction="rtl">`。用來實作「文字方向 ＝ 依出版社」。
+    // ⚠️ 存進 book.bin 是為了**不必為了一個位元重解 OPF** —— 快取命中時 OPF 根本不會被讀。
+    uint8_t pageProgressionRtl = 0;
   };
 
   struct SpineEntry {

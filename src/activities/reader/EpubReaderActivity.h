@@ -22,6 +22,15 @@ class EpubReaderActivity final : public Activity {
   // Cleared on the next render after the new section loads and resolves it to a page.
   std::string pendingAnchor;
   int pagesUntilFullRefresh = 0;
+  // ⭐ onEnter 當下的軸向快照。**只當證人，不參與任何決策。**
+  //    複查指出一個關不掉的時序危害：軸向由主任務在 onEnter 寫、由算繪任務讀，
+  //    而 ActivityManager 是先換 currentActivity、放開 RenderLock、才呼叫 onEnter
+  //    （ActivityManager.cpp:170-173）。理論上算繪任務可以在 onEnter 之前畫新活動一幀。
+  //    沒有人給得出可重現的排程，但 R1 說的是「必須不可能」，而我們證不到。
+  //    → 不動 ActivityManager 的鎖（爆炸半徑是整個 app），改成【真的發生時 log 會說】。
+  bool axisAtEnter_ = false;
+  bool axisSplitLogged_ = false;
+
   // Image pages use a dedicated double-FAST refresh path, so retain a manual
   // refresh request until renderContents can issue its clean base pass.
   bool forcedRefreshPending = false;

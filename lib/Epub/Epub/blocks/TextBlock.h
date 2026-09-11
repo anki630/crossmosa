@@ -92,6 +92,8 @@ class TextBlock final : public Block {
   const std::vector<std::string>& getRubyTexts() const { return rubyTexts; }
 
   void render(const GfxRenderer& renderer, int fontId, int x, int y) const;
+  // 直排的繪製（轉置編碼；由 render() 在 renderer.isVerticalLayout() 時分流）。
+  void renderVertical(const GfxRenderer& renderer, int fontId, int x, int y) const;
   BlockType getType() override { return TEXT_BLOCK; }
   bool serialize(HalFile& file) const;
   static std::unique_ptr<TextBlock> deserialize(HalFile& file);

@@ -89,6 +89,7 @@ void CrossPointSettings::toJson(JsonDocument& doc) const {
   // 【getter 型 / DynamicEnum / 條件式插入】的設定一律要手動加存讀條目。
   doc["tiltPageTurn"] = tiltPageTurn;
   doc["uiThemeSchema"] = 2;  // v184：介面主題枚舉版本（LYRA=0／EXTENDED=1／PRO=2）
+  doc["sideButtonSchema"] = 1;  // v228：側鍵配置已遷移過（見 loadFromFile）
 
   // Front button remap — managed by RemapFrontButtons sub-activity, not in SettingsList.
   doc["frontButtonBack"] = frontButtonBack;
@@ -177,6 +178,25 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
           v = info.valueRange.max;
       }
       s.*(info.valuePtr) = v;
+    }
+  }
+
+  // ⭐ v228：側邊按鍵配置的遷移。**照 uiThemeSchema 的前例做，理由相同。**
+  //
+  // 問題：`sideButtonLayout` 是舊 key，升級的人存檔裡一定有值。舊的預設是
+  // `PREV_NEXT = 0`，而「沒改過」與「刻意選了 0」在存檔裡**長得一模一樣**。
+  // 於是升級之後：文字方向是【新 key】會吃到新預設「依出版社」→ 直排書變直排，
+  // 但側鍵停在 0 → **側鍵不換方向，而前排鍵與觸控會換**（它們只看書的軸向）。
+  // 兩組輸入指向相反 —— 正是 v224 花了三輪複查修掉的那個病，對每一個升級的人重演。
+  //
+  // 遷移是**安全的**，而且對舊行為逐位元組無感：`FOLLOW_LAYOUT` 在橫排書解析出來
+  // 就是 `PREV_NEXT`，而直排在這個存檔存在的年代根本不存在。
+  // ⚠️ 只遷移 0（舊預設）。1／2 是明確的非預設選擇，不動。
+  {
+    const uint8_t schema = doc["sideButtonSchema"] | static_cast<uint8_t>(0);
+    if (schema < 1 && s.sideButtonLayout == CrossPointSettings::PREV_NEXT) {
+      s.sideButtonLayout = CrossPointSettings::FOLLOW_LAYOUT;
+      needsResave = true;
     }
   }
 
@@ -295,6 +315,8 @@ ReaderRenderSpec CrossPointSettings::readerRenderSpec(const uint16_t viewportWid
   spec.imageRendering = imageRendering;
   spec.focusReadingEnabled = focusReadingEnabled != 0;
   spec.boldBodyText = boldBodyText != 0;
+  spec.verticalLayout = documentIsVertical();
+  spec.columnPitchTier = readerColumnPitch;
   return spec;
 }
 

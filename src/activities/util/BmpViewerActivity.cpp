@@ -57,6 +57,11 @@ void BmpViewerActivity::loadSiblingImages() {
 }
 
 void BmpViewerActivity::onEnter() {
+  // ⭐ 圖片檢視器沒有文字軸向，明確歸零。
+  //    它今天既不讀軸向也不用 detectPageTurn，行為不變 —— 寫在這裡是為了讓不變量維持
+  //    「**每一個開內容的活動都寫這個欄位**」，而不是縮水成「有讀的才寫」。
+  //    （複查指出：縮水版沒有記在任何地方，下一個開內容的活動就會無聲違反它。）
+  SETTINGS.activeDocumentVertical = 0;
   Activity::onEnter();
 
   if (siblingImages.empty() && !filePath.empty()) {

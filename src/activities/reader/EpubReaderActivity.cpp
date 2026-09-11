@@ -158,6 +158,19 @@ void moveFinishedBookToReadFolder(const std::string& srcPath, const std::string&
 }  // namespace
 
 void EpubReaderActivity::onEnter() {
+  // ⭐ **當前文件的軸向，onEnter 的第一件事。**
+  //    排版（readerRenderSpec）、繪製（兩個 VerticalScope）、按鍵
+  //    （MappedInputManager::bookTurnsRightToLeft）全部只讀 `SETTINGS.documentIsVertical()`。
+  //    ⚠️ 寫在最前面是刻意的：本函式下方有 `if (!epub) return;`，寫在它後面就會有一條
+  //      「進了閱讀器但沒寫軸向」的路徑，留著上一本書的值（複查抓到）。
+  //      三個閱讀器因此形狀一致：軸向都是 onEnter 的第一個敘述。
+  //    ⚠️ 它是執行期欄位，不進 settings.json。
+  SETTINGS.activeDocumentVertical =
+      epub ? (SETTINGS.resolveVerticalFor(epub->hasRtlPageProgression()) ? 1 : 0) : 0;
+  axisAtEnter_ = SETTINGS.documentIsVertical();
+  DiagLog::line("BOOKDIR rtl=%d setting=%d resolved=%d", (epub && epub->hasRtlPageProgression()) ? 1 : 0,
+                static_cast<int>(SETTINGS.readerVerticalLayout), SETTINGS.documentIsVertical() ? 1 : 0);
+
   // v140 量測：這是「閱讀穩態」的基準線。dumpPools 才答得出【誰卡在 p2 中間】——
   // mem() 只說最大連續塊剩多少，而 ESP.getMaxAllocHeap() 是兩池取大者，混著看不出歸屬。
   DiagLog::mem("reader-enter");
@@ -232,6 +245,7 @@ void EpubReaderActivity::onEnter() {
   ReaderUtils::applyOrientation(renderer, SETTINGS.orientation);
 
   epub->setupCacheDir();
+
 
   HalFile f;
   if (Storage.openFileForRead("ERS", epub->getCachePath() + "/progress.bin", f)) {
@@ -1104,6 +1118,14 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
                                // layout: preserve position and force a re-layout, mirroring
                                // applyOrientation()'s reflow.
                                RenderLock lock(*this);
+                               // ⭐⭐ **文字方向現在可以在閱讀中改，所以軸向必須在這裡重解。**
+                               //    `activeDocumentVertical` 是 onEnter 算好的快照；不重解的話
+                               //    使用者在 overlay 裡把方向從橫改直，下面的強制重排會用**舊軸向**
+                               //    ——看起來像「設定沒生效」，而且排版與繪製之後才會各自追上。
+                               //    ⚠️ 這一行與 onEnter 那一行是同一個運算式，兩處必須一起改。
+                               SETTINGS.activeDocumentVertical =
+                                   epub ? (SETTINGS.resolveVerticalFor(epub->hasRtlPageProgression()) ? 1 : 0) : 0;
+                               axisAtEnter_ = SETTINGS.documentIsVertical();
                                ParsedText::setBoldBodyText(SETTINGS.boldBodyText != 0);  // v187：重排前同步旗標
                                if (section) {
                                  rememberCurrentContentOffset();
@@ -1593,13 +1615,33 @@ void EpubReaderActivity::render(RenderLock&& lock) {
               // 建置結束：與 build-start 對照，看建置本身吃掉多少、結束後有沒有還回來。
               DiagLog::mem("build-end");
             }
-            if (!section->buildSomeMore(BUILD_PAGES_PER_CHUNK)) {
+            // ⭐ **只排到【需要的那一頁】為止，不要固定排 8 頁。**（維護者 2026-09-11 回報：
+            //    從目錄連結跳章節時「畫面靜止不動好像在做 indexing，但沒有任何提示」。）
+            //    `BUILD_PAGES_PER_CHUNK = 8` 是上游的值，配它註解裡假設的每頁約 30ms
+            //    ＝ 一個 chunk 240ms。**這台每頁 100–200ms**（中文＋SD 字型，v189 量的）
+            //    → 一個 chunk 就是 0.8–1.6 秒，而目錄連結的目標是第 0 頁：
+            //    迴圈只跑【一個】chunk 就結束，卻排了 8 頁 —— 實測 diag232 有 4.7 秒。
+            //    ⚠️ 期限彈窗因此永遠不會響：它在迴圈【頂端】，而迴圈只有一輪、
+            //    在 t≈0 被評估。這是「儀器放在跑不到的地方」的又一個實例（教訓 B-22）。
+            //    → 需求導向的 chunk：目標頁明確時只排差額；錨點／offset 跳頁不知道還差多遠，
+            //    一次一頁，讓迴圈條件與期限檢查都有機會在每一頁之後重新評估。
+            const int needPages =
+                (anchorJump || offsetJump.has_value()) ? 1 : (target + 1 - static_cast<int>(section->pageCount));
+            const int chunkPages = needPages < 1                     ? 1
+                                   : needPages > BUILD_PAGES_PER_CHUNK ? BUILD_PAGES_PER_CHUNK
+                                                                      : needPages;
+            if (!section->buildSomeMore(chunkPages)) {
               LOG_ERR("ERS", "Failed during incremental section build");
               buildPopupPending = false;
               if (handleLowMemoryBuild()) return;
               section.reset();
               showBuildError();
               return;
+            }
+            // 一個 chunk 自己就超過預算時，迴圈條件可能已經滿足 → 上面的檢查不會再跑。
+            // 在這裡補一次，讓「等很久」至少在畫面被換掉之前有個交代。
+            if (buildPopupPending && millis() - buildStartMs >= BUILD_POPUP_DEADLINE_MS) {
+              showBuildPopup();
             }
           }
           buildPopupPending = false;
@@ -1859,6 +1901,11 @@ void EpubReaderActivity::prefetchNextPage(const int fontId, const int marginTop,
                                           const int basePage, const bool abortOnInput) {
   // 先歸零：pf= 的語意是「即將顯示的這一頁，預取花了多久」。任何一道閘門擋下來都算
   // 「沒有預取」，留著上一次的數字會讓 warm=0 旁邊掛著漂亮的 pf=280。
+  // 直排：繪製端的旗標必須與這一頁【被排版時】的軸向一致，否則轉置編碼會被當成
+  // 橫排座標畫（xpos 被當 X、focusSuffixX 被當 Y）＝ 一團亂碼且不報錯。
+  // 兩者同源於 SETTINGS.documentIsVertical() —— 這是 readerRenderSpec() 用的同一個函式，
+  // 而檔頭比對保證用別的軸向排過的快取會被丟掉重排，所以不會不同步。
+  const GfxRenderer::VerticalScope verticalScope(renderer, SETTINGS.documentIsVertical());
   diagPrefetchMs = 0;
   diagPfMaxKb = static_cast<uint16_t>(heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT) / 1024);
   diagPfRetKb = 0;
@@ -2071,6 +2118,32 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int pa
                                         const int orientedMarginRight, const int orientedMarginBottom,
                                         const int orientedMarginLeft) {
   // v191：每頁一次抽取機會；灰階帶迴圈在本函式內，不在這裡清。
+  // 直排：繪製端的旗標必須與這一頁【被排版時】的軸向一致，否則轉置編碼會被當成
+  // 橫排座標畫（xpos 被當 X、focusSuffixX 被當 Y）＝ 一團亂碼且不報錯。
+  // 兩者同源於 SETTINGS.documentIsVertical() —— 這是 readerRenderSpec() 用的同一個函式，
+  // 而檔頭比對保證用別的軸向排過的快取會被丟掉重排，所以不會不同步。
+  // 證人：畫的軸向與進入時的軸向不一致 ＝ 上面那個時序危害真的發生了。
+  //    症狀在畫面上是「一團亂碼」而且不報錯，所以它只能靠 log 被看見。
+  if (SETTINGS.documentIsVertical() != axisAtEnter_ && !axisSplitLogged_) {
+    axisSplitLogged_ = true;
+    DiagLog::line("AXISSPLIT enter=%d now=%d", axisAtEnter_ ? 1 : 0, SETTINGS.documentIsVertical() ? 1 : 0);
+  }
+  const GfxRenderer::VerticalScope verticalScope(renderer, SETTINGS.documentIsVertical());
+  // 直排證人（B-22）。
+  // ⚠️ **v206 的教訓**：上一版把這行放在 `SEG tiled-async` 那個分支裡，而那個分支在這台
+  //    機器上【一次都沒跑過】（實測 diag206.log 出現 0 次；真正跑的是 SEG prewarm ×83、
+  //    SEG tiled ×9）。整輪實機測試因此拿不到任何直排的證據 —— 本專案第四次踩同一條。
+  //    → 改成 RAII：解構子在 renderContents 的【每一條】離開路徑都會跑，
+  //      不必去數這個函式有幾個 return、也不必在四個 SEG 站點各貼一次。
+  struct VertWitness {
+    const GfxRenderer& r;
+    ~VertWitness() {
+      if (!r.isVerticalLayout()) return;
+      DiagLog::line("VERT vdraw=%u vrot=%u", static_cast<unsigned>(r.takeVerticalDrawCount()),
+                    static_cast<unsigned>(r.takeVerticalRotCount()));
+    }
+  } vertWitness{renderer};
+
   ImageBlock::clearRetryableFailures();
   const auto t0 = millis();
   lastRenderedPage_ = pageNo;  // v177：render 尾端預取的基準頁

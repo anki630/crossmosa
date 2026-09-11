@@ -1,5 +1,8 @@
 #include <esp_heap_caps.h>
 #include <esp_timer.h>
+#include <cstdarg>
+#include <cstdio>
+
 #include "ParsedText.h"
 
 #include <BidiUtils.h>
@@ -103,7 +106,7 @@ std::vector<size_t> cjkCharacterBreakByteOffsets(const std::string& text) {
   for (size_t i = 0; i + 1 < codepoints.size(); ++i) {
     const uint32_t current = codepoints[i].cp;
     const uint32_t next = codepoints[i + 1].cp;
-    if (!hasCjkBreakOpportunityBetween(current, next)) continue;
+    if (!hasCjkBreakOpportunityBetween(current, next, ParsedText::verticalKinsoku())) continue;
     allowedOffsets.push_back(codepoints[i].endOffset);
   }
   return allowedOffsets;
@@ -273,6 +276,24 @@ constexpr uint8_t kBuildProbeBreaks = 6;  // v190：斷行 DP 與字寬量測必
 constexpr size_t kBuildProbeWordStride = 32;
 }  // namespace
 
+void (*ParsedText::vertDiagHook)(const char*) = nullptr;
+
+namespace {
+bool g_verticalKinsoku = false;
+}
+void ParsedText::setVerticalKinsoku(const bool enabled) { g_verticalKinsoku = enabled; }
+bool ParsedText::verticalKinsoku() { return g_verticalKinsoku; }
+
+void ParsedText::vertDiag(const char* fmt, ...) {
+  if (!vertDiagHook) return;
+  char buf[128];
+  va_list ap;
+  va_start(ap, fmt);
+  vsnprintf(buf, sizeof(buf), fmt, ap);
+  va_end(ap);
+  vertDiagHook(buf);
+}
+
 void ParsedText::noteBuildProbe(const uint8_t site) {
   if (!g_probeArmed) return;
   const int64_t now = esp_timer_get_time();
@@ -412,7 +433,8 @@ void ParsedText::addWord(std::string word, const EpdFontFamily::Style fontStyle,
   // whitespace separated the two words, that space is content and must be rendered: Korean
   // is a space-delimited script written in Hangul, which utf8IsCjkBreakable() covers.
   if (attachToPrevious && !words.empty() &&
-      hasCjkBreakOpportunityBetween(lastCodepoint(words.back()), firstCodepoint(word))) {
+      hasCjkBreakOpportunityBetween(lastCodepoint(words.back()), firstCodepoint(word),
+                                    ParsedText::verticalKinsoku())) {
     effectiveAttachToPrevious = false;
     effectiveNoSpaceBefore = true;
   }
@@ -613,6 +635,14 @@ void ParsedText::ensureRubyCapacity() {
   // and no large contiguous reallocation to avoid). Kept for call-site stability.
 }
 
+// 「自然對齊」＝ 兩端對齊，或順著文字流方向靠齊。置中／逆流向靠齊的區塊不縮排。
+// ⚠️ 橫排與直排**都要呼叫**，而且要在讀 isNaturalAlign 之前。
+void ParsedText::updateNaturalAlign() {
+  isNaturalAlign =
+      blockStyle.alignment == CssTextAlign::Justify ||
+      (blockStyle.isRtl ? blockStyle.alignment == CssTextAlign::Right : blockStyle.alignment == CssTextAlign::Left);
+}
+
 int ParsedText::resolveFirstLineIndent(const bool isFirstLine, const GfxRenderer& renderer, const int fontId) const {
   if (!isFirstLine || !isNaturalAlign) {
     return 0;
@@ -649,9 +679,7 @@ void ParsedText::layoutAndExtractLines(const GfxRenderer& renderer, const int fo
     }
   }
 
-  isNaturalAlign =
-      blockStyle.alignment == CssTextAlign::Justify ||
-      (blockStyle.isRtl ? blockStyle.alignment == CssTextAlign::Right : blockStyle.alignment == CssTextAlign::Left);
+  updateNaturalAlign();
 
   // Ensure SD card font glyph metrics are loaded before measuring word widths.
   // For flash-based fonts isSdCardFont() returns false and this block is skipped

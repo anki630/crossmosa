@@ -1,5 +1,7 @@
 #include "TextBlock.h"
 
+#include "../VerticalText.h"
+
 #include <BidiUtils.h>
 #include <GfxRenderer.h>
 #include <Logging.h>
@@ -126,9 +128,56 @@ bool TextBlock::hasRuby() const {
   return false;
 }
 
+// 直排的繪製。
+//
+// ⭐ **轉置編碼**（見 ParsedTextVertical.cpp）：
+//     xpos[i]          → 沿欄的位移（Cell 已含 cellAscent，Rotated 不含）
+//     focusSuffixX[i]  → 跨軸（欄內）位移
+//     styles[i] bit 7  → 這個 token 要整串順時針旋轉
+//   三個值全部在【排版階段】烤好，這裡只做查表與座標加法 ——
+//   因為本函式一頁跑 **16 次**（掃描 1 ＋ BW 1 ＋ 灰階 7 帶 × 2 平面 14）。
+//
+// ⚠️ **ruby 在直排刻意不做，而且必須顯式跳過** —— 只要 rubyTexts 非空，橫排那段就會
+//    用橫排座標亂畫三處（不是靜默不畫）。直排的 TextBlock 一律不帶 rubyTexts，
+//    這裡再擋一次。實測未見真正的注音 ruby。
+// ⚠️ **不要用 SUP/SUB** —— renderCharScaled 沒有帶剪枝，直向分帶算繪會出事。
+void TextBlock::renderVertical(const GfxRenderer& renderer, const int fontId, const int x, const int y) const {
+  if (!isValid) return;
+  renderer.noteVerticalDraw();  // 證人（B-22）：直排繪製分支確實被走到
+  for (uint16_t i = 0; i < numWords; i++) {
+    const char* word = wordText(i);
+    const uint8_t raw = static_cast<uint8_t>(wordStyle(i));
+    const bool rotated = (raw & vtext::STYLE_BIT_ROTATED) != 0;
+    // ⚠️ 傳給字型之前必須遮掉第 7 位，否則字型會拿到它不認得的位元。
+    // ⚠️⚠️ 而且要**再遮掉直排沒有實作的四個裝飾位**（UNDERLINE/STRIKETHROUGH/SUP/SUB）。
+    //    先前只寫在註解裡說「不要用 SUP/SUB」—— 但註解攔不住 EPUB：
+    //    `<sup>` 會讓 drawText 走 renderCharScaled，而那條路**沒有 glyphIntersectsStrip
+    //    剪枝**，灰階七帶會對同一個字重複解碼七次；底線／刪除線則是橫排 render() 才畫，
+    //    直排靜默不畫。留著位元只會讓行為在兩邊都說不清。
+    //    → V1 明確地【不支援】：遮掉，行為與註解一致。要做就走直排自己的基線位移。
+    constexpr uint8_t VERTICAL_UNSUPPORTED_STYLE_BITS =
+        EpdFontFamily::UNDERLINE | EpdFontFamily::STRIKETHROUGH | EpdFontFamily::SUP | EpdFontFamily::SUB;
+    const auto style =
+        static_cast<EpdFontFamily::Style>(raw & vtext::STYLE_MASK & ~VERTICAL_UNSUPPORTED_STYLE_BITS);
+    const int along = xposArr[i];
+    const int cross = focusPresent ? static_cast<int>(focusSuffixXArr[i]) : 0;
+    if (rotated) {
+      renderer.drawTextVerticalCW(fontId, x + cross, y + along, word, true, style);
+    } else {
+      renderer.drawText(fontId, x + cross, y + along, word, true, style, BidiUtils::BidiBaseDir::LTR);
+    }
+  }
+}
+
 void TextBlock::render(const GfxRenderer& renderer, const int fontId, const int x, const int y) const {
   if (!isValid) {
     LOG_ERR("TXB", "Render skipped: invalid block");
+    return;
+  }
+
+  // 直排：與橫排完全分流。座標是【轉置】的，而且每個字要不要旋轉在排版階段就烤好了。
+  if (renderer.isVerticalLayout()) {
+    renderVertical(renderer, fontId, x, y);
     return;
   }
 

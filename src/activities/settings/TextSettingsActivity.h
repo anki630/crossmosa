@@ -32,7 +32,9 @@ class TextSettingsActivity final : public Activity {
  private:
   // Row indices per tab. enum class (not plain enum) so a LayoutRow can't be
   // silently confused with a StyleRow of equal value.
-  enum class LayoutRow { LineSpacing, ParaSpacing, Alignment, ScreenMargin, Count };
+  // ⭐ `TextDirection` 排在最前面：它決定 `LineSpacing`（橫排）與 `ColumnSpacing`（直排）
+  //    哪一個有意義，所以要先看到它。設定→閱讀的順序與這裡刻意一致。
+  enum class LayoutRow { TextDirection, LineSpacing, ColumnSpacing, ParaSpacing, Alignment, ScreenMargin, Count };
   enum class StyleRow { BoldText, FocusReading, Hyphenation, EmbeddedStyle, AntiAliasing, Count };
 
   void applyFamily(int listIndex);

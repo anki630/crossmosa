@@ -415,6 +415,8 @@ void setup() {
   SETTINGS.loadFromFile();
   // v187：粗體閱讀是 ParsedText 的全域旗標，開機就跟設定對齊（否則從設定頁進文字設定的預覽會用錯字重）。
   ParsedText::setBoldBodyText(SETTINGS.boldBodyText != 0);
+  // 直排診斷：lib/Epub 看不到 DiagLog，所以在這裡接上（見 ParsedText.h 的註解）。
+  ParsedText::vertDiagHook = [](const char* line) { DiagLog::line("%s", line); };
   g_wakeT[1] = millis();
   APP_STATE.loadFromFile();
   g_wakeT[2] = millis();

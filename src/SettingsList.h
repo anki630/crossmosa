@@ -189,6 +189,23 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
                             StrId::STR_CAT_DISPLAY),
 
         // --- Reader ---
+        // ⚠️⚠️ **`.withTextSettings()` 的語意是「從【設定 → 閱讀】那張平表【隱藏】，
+        //    只出現在『文字設定』畫面裡」**（`SettingsActivity.cpp:51` 的 `continue`）。
+        //    所以設定 → 閱讀最外層看到的其實只有【沒有】這個標記的那幾項，
+        //    加上執行期插入的「文字設定」與「自訂狀態列」兩個入口。
+        //    ⛔ **我 2026-09-10 一度讀錯**：以為最外層是一張 15 項的平表，還照那個誤解重排。
+        //      真相是排版相關的 11 項本來就藏起來了，分組看得見的地方是『文字設定』的四個分頁。
+        //      而我把文字方向與欄距加進那個畫面卻忘了標這個旗標 → **兩個地方都出現 ＝ 重複**
+        //      （維護者實機發現）。加設定進『文字設定』畫面時，**旗標與畫面要成對改**。
+        //
+        // ⭐ 這裡的宣告順序仍然有用，兩個地方吃它：
+        //    ① 最外層那張表（只有未標記的那幾項）；② **網頁設定頁**（`CrossPointWebServer.cpp`
+        //    用的是未過濾的 `getSettingsList()`）。所以順序照『文字設定』的四組排，
+        //    維護時兩邊對得起來。
+        //    ⚠️ 重排本身安全：執行期的插入／移除／替換全靠 nameId 查找，
+        //      存檔的泛用迴圈走未過濾的 `getSettingsList()`，靠 JSON key 字串。
+        // ── 字型 ─────────────────────────────────────────────────────────────
+        // --- Reader ---
         // Built-in font-family entry. Replaced per-call with a registry-aware
         // version when SD fonts are installed.
         SettingInfo::Enum(StrId::STR_FONT_FAMILY, &CrossPointSettings::fontFamily,
@@ -198,47 +215,73 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
         // this entry is always replaced by buildFontSizeSetting() below. It only
         // fixes the setting's position in the Reader category.
         SettingInfo::Enum(StrId::STR_FONT_SIZE, nullptr, {}, "fontSize", StrId::STR_CAT_READER).withTextSettings(),
+        // ── 版面 ── 與『文字設定』的「版面」分頁**同順序**（全部標了 withTextSettings，
+        //    所以最外層看不到它們）。
+        //    ⚠️ 排列是刻意的：`文字方向` 在最前面，因為它決定下面的 `行距`（橫排）
+        //      與 `欄距`（直排）哪一個有意義。
+        //    ⛔ **不要**把欄距做成「橫排時隱藏」—— 條件式插入清單正是 v57 `tiltPageTurn`
+        //      那個「探測失敗就把設定永久抹掉」的缺陷類別（教訓 A-1）。關係只能靠排序與命名表達。
+        // 直排。⚠️ 教訓 A-1：設定的存讀是【泛用迴圈】跑這張表，靠 member pointer ＋
+        // JSON key 兩者。只有 getter 型／DynamicEnum／條件式插入的條目才要手動補 JSON
+        // 條目 —— 這兩個都是普通的 member pointer Enum，所以自動涵蓋。
+        // （踩過三次：v52 uiTheme、v53、v57 tiltPageTurn。）
+        SettingInfo::Enum(StrId::STR_TEXT_DIRECTION, &CrossPointSettings::readerVerticalLayout,
+                          {StrId::STR_TEXT_DIR_HORIZONTAL, StrId::STR_TEXT_DIR_VERTICAL,
+                           StrId::STR_TEXT_DIR_PUBLISHER},
+                          "readerVerticalLayout",
+                          StrId::STR_CAT_READER)
+            .withTextSettings(),
         SettingInfo::Enum(StrId::STR_LINE_SPACING, &CrossPointSettings::lineSpacing,
                           {StrId::STR_TIGHT, StrId::STR_NORMAL, StrId::STR_WIDE}, "lineSpacing", StrId::STR_CAT_READER)
             .withTextSettings(),
-        SettingInfo::Value(StrId::STR_SCREEN_MARGIN, &CrossPointSettings::screenMargin,
-                           {CrossPointSettings::SCREEN_MARGIN_MIN, CrossPointSettings::SCREEN_MARGIN_MAX,
-                            CrossPointSettings::SCREEN_MARGIN_STEP},
-                           "screenMargin", StrId::STR_CAT_READER)
+        SettingInfo::Enum(StrId::STR_COLUMN_SPACING, &CrossPointSettings::readerColumnPitch,
+                          {StrId::STR_TIGHT, StrId::STR_NORMAL, StrId::STR_WIDE}, "readerColumnPitch",
+                          StrId::STR_CAT_READER)
+            .withTextSettings(),
+        SettingInfo::Toggle(StrId::STR_EXTRA_SPACING, &CrossPointSettings::extraParagraphSpacing,
+                            "extraParagraphSpacing", StrId::STR_CAT_READER)
             .withTextSettings(),
         SettingInfo::Enum(StrId::STR_PARA_ALIGNMENT, &CrossPointSettings::paragraphAlignment,
                           {StrId::STR_JUSTIFY, StrId::STR_ALIGN_LEFT, StrId::STR_CENTER, StrId::STR_ALIGN_RIGHT,
                            StrId::STR_BOOK_S_STYLE},
                           "paragraphAlignment", StrId::STR_CAT_READER)
             .withTextSettings(),
-        SettingInfo::Toggle(StrId::STR_EMBEDDED_STYLE, &CrossPointSettings::embeddedStyle, "embeddedStyle",
+        SettingInfo::Value(StrId::STR_SCREEN_MARGIN, &CrossPointSettings::screenMargin,
+                           {CrossPointSettings::SCREEN_MARGIN_MIN, CrossPointSettings::SCREEN_MARGIN_MAX,
+                            CrossPointSettings::SCREEN_MARGIN_STEP},
+                           "screenMargin", StrId::STR_CAT_READER)
+            .withTextSettings(),
+        // ── 樣式 ── 與『文字設定』的「樣式」分頁**同順序**（同樣全部隱藏於最外層）。
+        SettingInfo::Toggle(StrId::STR_BOLD_TEXT, &CrossPointSettings::boldBodyText, "boldBodyText",
                             StrId::STR_CAT_READER)
             .withTextSettings(),
         SettingInfo::Toggle(StrId::STR_FOCUS_READING, &CrossPointSettings::focusReadingEnabled, "focusReadingEnabled",
                             StrId::STR_CAT_READER)
             .withTextSettings(),
-        SettingInfo::Toggle(StrId::STR_BOLD_TEXT, &CrossPointSettings::boldBodyText, "boldBodyText",
-                            StrId::STR_CAT_READER)
-            .withTextSettings(),
         SettingInfo::Toggle(StrId::STR_HYPHENATION, &CrossPointSettings::hyphenationEnabled, "hyphenationEnabled",
                             StrId::STR_CAT_READER)
             .withTextSettings(),
-        SettingInfo::Enum(
-            StrId::STR_ORIENTATION, &CrossPointSettings::orientation,
-            {StrId::STR_PORTRAIT, StrId::STR_LANDSCAPE_CW, StrId::STR_ORIENTATION_INVERTED, StrId::STR_LANDSCAPE_CCW},
-            "orientation", StrId::STR_CAT_READER),
-        SettingInfo::Toggle(StrId::STR_EXTRA_SPACING, &CrossPointSettings::extraParagraphSpacing,
-                            "extraParagraphSpacing", StrId::STR_CAT_READER)
+        SettingInfo::Toggle(StrId::STR_EMBEDDED_STYLE, &CrossPointSettings::embeddedStyle, "embeddedStyle",
+                            StrId::STR_CAT_READER)
             .withTextSettings(),
         SettingInfo::Toggle(StrId::STR_TEXT_AA, &CrossPointSettings::textAntiAliasing, "textAntiAliasing",
                             StrId::STR_CAT_READER)
             .withTextSettings(),
+        // ── 其他 ── **這兩項才是設定 → 閱讀最外層真正顯示的內容**
+        //    （加上執行期插入的「文字設定」與「自訂狀態列」）。
+        //    不進『文字設定』的理由：螢幕方向改的當下畫面會整個轉、圖片在沒有圖的頁看不出效果。
+        SettingInfo::Enum(
+            StrId::STR_ORIENTATION, &CrossPointSettings::orientation,
+            {StrId::STR_PORTRAIT, StrId::STR_LANDSCAPE_CW, StrId::STR_ORIENTATION_INVERTED, StrId::STR_LANDSCAPE_CCW},
+            "orientation", StrId::STR_CAT_READER),
         SettingInfo::Enum(StrId::STR_IMAGES, &CrossPointSettings::imageRendering,
                           {StrId::STR_IMAGES_DISPLAY, StrId::STR_IMAGES_PLACEHOLDER, StrId::STR_IMAGES_SUPPRESS},
                           "imageRendering", StrId::STR_CAT_READER),
         // --- Controls ---
         SettingInfo::Enum(StrId::STR_SIDE_BTN_LAYOUT, &CrossPointSettings::sideButtonLayout,
-                          {StrId::STR_PREV_NEXT, StrId::STR_NEXT_PREV, StrId::STR_DISABLED}, "sideButtonLayout",
+                          {StrId::STR_PREV_NEXT, StrId::STR_NEXT_PREV, StrId::STR_DISABLED,
+                           StrId::STR_SIDE_BTN_FOLLOW},
+                          "sideButtonLayout",
                           StrId::STR_CAT_CONTROLS),
         SettingInfo::Enum(StrId::STR_TOUCH_READER_CONTROLS, &CrossPointSettings::touchReaderControls,
                           {StrId::STR_STATE_OFF, StrId::STR_STATE_ON}, "touchReaderControls", StrId::STR_CAT_CONTROLS),

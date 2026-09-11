@@ -49,8 +49,42 @@ MappedInputManager::Button MappedInputManager::mapScreenDirection(const Button b
   return directions[orientation][direction];
 }
 
+// 「依版面」的解析：把 FOLLOW_LAYOUT 收斂成 PREV_NEXT／NEXT_PREV。
+//
+// ⭐ 依據是**實體位置**不是想像（memory `x3-physical-button-layout`）：
+//    **BTN_UP 在左側邊、BTN_DOWN 在右側邊** —— 兩顆在【相對的兩側】，不是同一邊的上下。
+//    橫排（左到右）：翻到下一頁 ＝ 往左推進 ⇒ 按右邊那顆 ＝ 現行 PREV_NEXT（上=左=上一頁）。
+//    直排（右到左，page-progression-direction: rtl）：**整本書的翻頁方向相反**，
+//    下一欄在左邊、下一頁也從左邊來 ⇒ 左邊那顆 ＝ 下一頁 ＝ NEXT_PREV。
+//    這與日系閱讀器對 RTL 書的處理一致。
+//
+// ⚠️ **只影響閱讀器**：`PageBack`／`PageForward` 全 repo 只有 `ReaderUtils.h` 在讀
+//    （2026-09-09 grep 確認）。選單走 `Button::Up`／`Down`，那兩個在下面是寫死的、
+//    永遠不交換 —— 這正是維護者的但書：選單要維持原狀。
+//
+// ⚠️ 軸向一律走 `SETTINGS.documentIsVertical()` —— 那是【當前文件】實際用的軸向。
+//    **不要讀 `readerVerticalLayout` 本身**（三檔設定的原始值），
+//    也**不要自己把設定解析一次**（那正是複查第二輪抓到的洞：.txt 歸零會失效）。
+// 這本書是不是右翻的。**只看書，不看使用者的側鍵偏好。**
+//
+// ⚠️ 我第一版把兩件事併成一個述詞，複查用真值表逐格算出來的後果：
+//    `sideButtonLayout == NEXT_PREV` 的使用者（純粹為了手感調過側鍵、跟直排無關）
+//    在【橫排】書上前排左右鍵與觸控區全部反過來 —— 32 個橫排格子裡有 8 格變了。
+//    「橫排逐位元組不變」是硬條件，所以兩件事必須分開。
+// ⚠️ 讀的是【當前文件實際用的軸向】，**不是設定值**。
+//    設定 ＝ 直排時，.txt／.xtc 仍然橫排排版，它們在 onEnter 把欄位歸零，
+//    所以按鍵不會反 —— 上一版讀設定解析值，那個歸零是 no-op（複查第二輪抓到）。
+bool MappedInputManager::bookTurnsRightToLeft() { return SETTINGS.documentIsVertical(); }
+
+// 側鍵的路由。明選的偏好【優先】，沒明選（依版面）才跟著書走。
+uint8_t MappedInputManager::resolveSideLayout() {
+  const uint8_t configured = SETTINGS.sideButtonLayout;
+  if (configured != CrossPointSettings::FOLLOW_LAYOUT) return configured;
+  return bookTurnsRightToLeft() ? CrossPointSettings::NEXT_PREV : CrossPointSettings::PREV_NEXT;
+}
+
 bool MappedInputManager::mapButton(const Button button, bool (HalGPIO::*fn)(uint8_t) const) const {
-  const auto sideLayout = SETTINGS.sideButtonLayout;
+  const auto sideLayout = resolveSideLayout();
 
   switch (button) {
     case Button::Back:

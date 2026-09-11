@@ -135,6 +135,13 @@ void XMLCALL ContentOpfParser::startElement(void* userData, const XML_Char* name
 
   if (self->state == IN_PACKAGE && strcmp(element, "spine") == 0) {
     self->state = IN_SPINE;
+    // 直排偵測用（見標頭的說明）。屬性名沒有命名空間前綴的疑慮 —— 它是 spine 自己的屬性。
+    for (int i = 0; atts[i]; i += 2) {
+      if (strcmp(atts[i], "page-progression-direction") == 0) {
+        self->pageProgressionRtl = strcmp(atts[i + 1], "rtl") == 0;
+        break;
+      }
+    }
     if (!Storage.openFileForRead("COF", self->cachePath + itemCacheFile, self->tempItemStore)) {
       LOG_ERR("COF", "Couldn't open temp items file for reading. This is probably going to be a fatal error.");
     }

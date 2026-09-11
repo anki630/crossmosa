@@ -360,6 +360,21 @@ void DictionaryWordSelectActivity::render(RenderLock&&) {
 
   // Same prewarm-scan-then-render pass the reader uses, so SD-card fonts hit
   // the in-RAM glyph cache during the real draw.
+  // 這一頁是從 section 快取來的 —— 直排時是【轉置編碼】，旗標必須跟著。
+  //
+  // ⚠️⚠️ **這個檔案目前【沒有編進韌體】**（platformio.ini 的 build_src_filter 排除它），
+  //    所以下面這條限制現在不影響任何人。要重新啟用之前**必須先修**：
+  //    直排的 WordBox 幾何整組是錯的 —— `wordXpos(i)` 在直排是【沿欄】（Y 軸）而不是 X，
+  //    `extractWords`（本檔 :87-89）卻把它加進 `box.x`、`box.y` 完全不含沿欄位移。
+  //    連帶 `wordAt`、`moveVertical`（以「列」為單位）、`drawHighlightWithSnapshot`
+  //    全部建立在那組錯的盒子上 → 字會畫對、但選到的是別的字。
+  //    下面這個 VerticalScope 只保證【文字畫得對】，不保證選得對。
+  const GfxRenderer::VerticalScope verticalScope(renderer, SETTINGS.documentIsVertical());
+  // ⚠️ 這裡原本自己把三檔設定解析一次（`readerVerticalLayout == VERTICAL_ON`），
+  //    那是全樹最後一個【自行解析軸向】的地方。設定 ＝ 依出版社時它恆為 false，
+  //    而書可能是直排 → 轉置編碼被當橫排座標畫 ＝ 畫面亂碼且不報錯。
+  //    本檔目前不編入（platformio.ini 的 build_src_filter 排除），趁還免費先改對；
+  //    日後有人修好 WordBox 幾何把它打開時，不會繼承一個註解宣稱已處理的缺陷。
   auto* fcm = renderer.getFontCacheManager();
   auto scope = fcm->createPrewarmScope();
   page->render(renderer, fontId, marginLeft, marginTop);

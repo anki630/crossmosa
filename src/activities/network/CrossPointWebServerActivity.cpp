@@ -382,11 +382,16 @@ void CrossPointWebServerActivity::loop() {
       // More iterations = more data processed per main loop cycle
       constexpr int MAX_ITERATIONS = 500;
       for (int i = 0; i < MAX_ITERATIONS && webServer->isRunning(); i++) {
+        // ⚠️ **每一次都餵狗，不是每 32 次。**（2026-09-08，crash_report207／194 同簽章）
+        //    `handleClient()` 單一次呼叫在訊號差時就可能卡到 TCP 逾時 ——
+        //    ESP32 `WebServer` 的 HTTP_MAX_DATA_WAIT 預設 **5000 ms**，
+        //    正好是 task WDT 的量級。每 32 次才餵 ＝ 最多 31 次「只是慢」的呼叫
+        //    累積起來就過門檻 → rst=6 task_wdt、panic reason 空白。
+        //    兩次實機都在 WiFi 弱訊號下發生（v194 rssi=-94／連線 11.5 秒；v207 更新韌體時）。
+        //    ⭐ 每次餵在語意上**嚴格更好**：真的永久卡住仍會觸發（那時根本回不到這裡），
+        //      只是不再把一串慢呼叫加總成假性逾時。成本 500 × 約 1µs，可忽略。
+        resetTaskWatchdogIfSubscribed();
         webServer->handleClient();
-        // Reset watchdog every 32 iterations
-        if ((i & 0x1F) == 0x1F) {
-          resetTaskWatchdogIfSubscribed();
-        }
         // Yield and check for exit button every 64 iterations
         if ((i & 0x3F) == 0x3F) {
           yield();

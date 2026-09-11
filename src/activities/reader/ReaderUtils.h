@@ -54,7 +54,12 @@ inline PageTurnResult detectPageTurn(const MappedInputManager& input) {
   const bool usePress = SETTINGS.longPressButtonBehavior == SETTINGS.OFF;
   const bool tiltNext = SETTINGS.tiltPageTurn && halTiltSensor.wasTiltedForward();
   const bool tiltPrev = SETTINGS.tiltPageTurn && halTiltSensor.wasTiltedBack();
-  const bool swapFront = input.isNavDirectionSwapped();
+  // ⭐ 前排左右鍵必須與側鍵**同一個方向**。兩個獨立的原因會讓左右反過來，要疊起來：
+  //    ① 螢幕轉了（`isNavDirectionSwapped`，只在 frontButtonFollowOrientation 開著時）
+  //    ② 書是右翻的（`bookTurnsRightToLeft`）
+  //    互斥或：兩個都成立就抵銷回正常。
+  //    ⚠️ v222 之前只有①，於是直排時側鍵換了、前排沒換 ＝ 同一頁上兩組鍵指向相反。
+  const bool swapFront = input.isNavDirectionSwapped() != MappedInputManager::bookTurnsRightToLeft();
   const auto prevButton = swapFront ? MappedInputManager::Button::Right : MappedInputManager::Button::Left;
   const auto nextButton = swapFront ? MappedInputManager::Button::Left : MappedInputManager::Button::Right;
   const bool prev =
@@ -90,11 +95,21 @@ inline TouchPageTurn detectTouchPageTurn(GfxRenderer& renderer, const MappedInpu
 
   const int16_t width = static_cast<int16_t>(renderer.getScreenWidth());
   const int16_t height = static_cast<int16_t>(renderer.getScreenHeight());
-  const int16_t previousZoneWidth = width / 3;
+  // ⭐ 觸控的左右區也要跟著翻頁方向（直排是右翻的書：點左邊是【下一頁】）。
+  //    ⚠️ 這裡**不**疊 `isNavDirectionSwapped` —— 那一項是為了「轉了螢幕之後前排按鍵的
+  //      實體左右與畫面上的提示對不上」而存在的；觸控座標本來就已經是畫面座標，
+  //      使用者看到的左邊就是他點到的左邊。
+  // ⚠️ **窄的那一區永遠是「上一頁」**。原本 1/3 綁在【左邊】，右翻的書把動作對調之後
+  //    就變成「下一頁」只有 1/3 的靶、「上一頁」佔 2/3 —— 常用的反而難按（複查抓到）。
+  //    所以對調的是【區塊的位置】，不是區塊的動作。
+  const bool reversed = MappedInputManager::bookTurnsRightToLeft();
+  const int16_t narrowWidth = width / 3;
+  const int16_t wideWidth = static_cast<int16_t>(width - narrowWidth);
+  const int16_t prevX = reversed ? wideWidth : 0;
+  const int16_t nextX = reversed ? 0 : narrowWidth;
   const freeink::ui::TapZone zones[] = {
-      {freeink::ui::Rect{0, 0, previousZoneWidth, height}, READER_TOUCH_PREV},
-      {freeink::ui::Rect{previousZoneWidth, 0, static_cast<int16_t>(width - previousZoneWidth), height},
-       READER_TOUCH_NEXT},
+      {freeink::ui::Rect{prevX, 0, narrowWidth, height}, READER_TOUCH_PREV},
+      {freeink::ui::Rect{nextX, 0, wideWidth, height}, READER_TOUCH_NEXT},
   };
 
   for (const auto& zone : zones) {

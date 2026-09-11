@@ -414,6 +414,59 @@ See [docs/sd-card-fonts.md](./docs/sd-card-fonts.md) for folder structure.
 
 ---
 
+### 3.9 Vertical text (縦書き)
+
+Traditional Chinese and Japanese books are often typeset vertically: columns run
+top to bottom, and the columns themselves run right to left — the way a printed
+book does.
+
+**Settings → Reader → Text Settings → Layout → Text Direction**
+
+(The Reader tab holds a **Text Settings** entry; Text Settings has four tabs, and
+Text Direction is the first row of the **Layout** tab.)
+
+| Option (in the order shown) | Meaning |
+|---|---|
+| Horizontal | Always horizontal |
+| Vertical | Always vertical, whatever the book says |
+| **Publisher** | Let the book decide. **This is the default**, including after an upgrade |
+
+"Publisher" reads the EPUB's own page-progression marker. In testing, every book whose
+stylesheet actually asks for vertical text carries that marker, so it does not miss them.
+
+⚠️ It can err the other way: some books are marked right-to-left but are typeset
+horizontally (usually a vertical print edition converted with only the page direction
+carried over). Set **Text Direction → Horizontal** for those.
+
+⚠️ Changing text direction **re-lays out that book**. It is not instant — wait for it to
+finish before turning the page. Your reading position is kept.
+
+The same screen has **Column Spacing (vertical)** — Tight / Normal / Wide. It is the
+vertical counterpart of line spacing.
+
+#### Page-turn direction
+
+A vertical book turns pages the other way. **Settings → Controls → Side Button Layout (reader) →
+Follow layout** (the default) makes the device follow the book: horizontal books are
+unchanged, vertical books swap left and right.
+
+You can still pin it to **Prev/Next** or **Next/Prev** if you prefer a fixed mapping,
+or **Disabled** to turn the side buttons off entirely.
+
+⚠️ **Menu and list navigation never changes** — only page turning does.
+
+#### Not supported yet
+
+- `.txt` and `.xtc` files are always horizontal; only EPUB has vertical layout
+- One direction per book (some books set their front matter horizontal and only the
+  body vertical; CrossMosa uses a single direction throughout)
+- Images and `<hr>` rules take a whole page in vertical mode. Exception: images no larger
+  than two characters on both sides are skipped (some books put a bullet icon before every
+  subheading, and one icon would otherwise cost a whole page)
+- Extra paragraph spacing has no effect in vertical mode
+
+---
+
 ## 4. Reading Mode
 
 Once you have opened a book, the button layout changes to facilitate reading.

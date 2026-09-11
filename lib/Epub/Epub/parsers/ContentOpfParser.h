@@ -66,6 +66,16 @@ class ContentOpfParser final : public Print {
   std::string guideCoverPageHref;  // Guide reference with type="cover" or "cover-page" (points to XHTML wrapper)
   std::string textReferenceHref;
   std::vector<std::string> cssFiles;  // CSS stylesheet paths
+  // ⭐ `<spine page-progression-direction="rtl">` —— 這是「這本書是直排（或右翻）」
+  //    在 EPUB 裡最便宜、也最可靠的訊號：不必開任何內文檔、不必解 CSS。
+  //    實測（每本書取多個內文檔投票，避免被橫排的前置頁誤導）：
+  //    **凡是根層 CSS 真的解析成直排的書，ppd=rtl 全部命中 —— 召回 100%，零遺漏。**
+  //    ⚠️ 反過來會誤判：另有一部分書 ppd=rtl 而 CSS 完全沒提方向（多半是印刷版直排、
+  //      轉檔時只留下翻頁方向），少數甚至 ppd=rtl 卻明說橫排。使用者手動指定即可。
+  //    ⚠️⚠️ **不要拿「CSS 任何地方提到 vertical」當分母**：日式雙模板同時定義
+  //      `.hltr` 與 `.vrtl`，而多數書選了橫排 —— 用那個分母算會得到「只做 OPF 漏 38%」
+  //      的錯誤結論（本專案的帳本一度就是這樣寫的，2026-09-10 重測更正）。
+  bool pageProgressionRtl = false;
 
   explicit ContentOpfParser(const std::string& cachePath, const std::string& baseContentPath, const size_t xmlSize,
                             BookMetadataCache* cache)

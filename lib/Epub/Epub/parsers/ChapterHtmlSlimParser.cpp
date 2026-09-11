@@ -1,5 +1,8 @@
 #include "ChapterHtmlSlimParser.h"
 
+#include "../VerticalEm.h"
+#include "../VerticalText.h"
+
 #include <esp_heap_caps.h>
 
 #include <FsHelpers.h>
@@ -11,6 +14,7 @@
 #include <expat.h>
 
 #include <algorithm>
+#include <cstring>
 #include <iterator>
 #include <new>
 
@@ -254,6 +258,8 @@ bool ChapterHtmlSlimParser::ensureCurrentPage(const char* where) {
     return false;
   }
   currentPageNextY = 0;
+  // 直排：欄由【右】往左，所以新頁從右緣起算。
+  currentPageNextX = static_cast<int16_t>(viewportWidth);
   currentPageVisibleOffsetSet = false;
   return true;
 }
@@ -317,6 +323,11 @@ void ChapterHtmlSlimParser::flushPartWordBuffer() {
 
 // start a new text block if needed
 bool ChapterHtmlSlimParser::startNewTextBlock(const BlockStyle& blockStyle) {
+  // 直排的段落間空隙只在【新區塊的第一欄】之前插入。
+  // ⚠️ 這行原本在 layoutCurrentBlock，那是**每次呼叫**——而一個超過
+  //    TEXT_BLOCK_SOFT_FLUSH_WORDS 的段落會被排兩次（soft flush 一次、makePages 一次），
+  //    於是空隙會在段落【中間】再插一次，看起來像段落被硬切成兩段（複查抓到）。
+  verticalBlockFirstColumn = true;
   nextWordContinues = false;  // New block = new paragraph, no continuation
   if (currentTextBlock) {
     // already have a text block running and it is empty - just reuse it
@@ -404,6 +415,9 @@ void ChapterHtmlSlimParser::emitHorizontalRule(const BlockStyle& blockStyle) {
   const int16_t xPos = static_cast<int16_t>(blockStyle.leftInset() + ((availableWidth - width) / 2));
   const int16_t totalHeight = static_cast<int16_t>(topSpacing + ruleThickness + bottomSpacing);
 
+  // 直排：<hr> 走橫排游標，必須隔離成獨立一頁（見 verticalBeginIsolated）。
+  if (!verticalBeginIsolated(visibleTextOffset)) return;
+
   if (!currentPage->elements.empty() && currentPageNextY + totalHeight > viewportHeight) {
     setCurrentPageVisibleOffset(visibleTextOffset);
     completePageFn(std::move(currentPage), xpathParagraphIndex, xpathListItemIndex, currentPageVisibleOffset);
@@ -427,6 +441,7 @@ void ChapterHtmlSlimParser::emitHorizontalRule(const BlockStyle& blockStyle) {
   currentPage->elements.push_back(pageRule);
   setCurrentPageVisibleOffset(visibleTextOffset);
   currentPageNextY = static_cast<int16_t>(currentPageNextY + ruleThickness + bottomSpacing);
+  verticalEndIsolated();  // 直排：<hr> 獨占這一頁
 
   if (!pendingAnchorId.empty()) {
     anchorData.push_back({std::move(pendingAnchorId), static_cast<uint16_t>(completedPageCount)});
@@ -826,6 +841,31 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                   LOG_DBG("EHP", "Display size: %dx%d (scale %.2f)", displayWidth, displayHeight, scale);
                 }
 
+                // ⭐ **直排：裝飾性小圖不值得一整頁。**（維護者 2026-09-11「這一頁的排版正確嗎」）
+                //    直排把每一張圖隔離成獨立一頁（理由見 verticalBeginIsolated ——
+                //    圖走橫排游標、欄走直排游標，同頁並存會疊在一起）。
+                //    但這本書的每個 `<h3>` 前面都掛一顆 42×71 的項目符號小圖，
+                //    於是**每個小標題都吃掉一整頁**：一章 23 頁裡有 3 頁只有一顆小圖，
+                //    而章首那一頁只剩標題、正文被推到下一頁。
+                //    → 圖盒兩邊都不超過 2 em 時當作裝飾，直排下略過不排。
+                //    ⚠️ 這是 V1（隔離）的權宜，**不是正解**。正解是 V1b「圖也吃欄寬」，
+                //       已記在功能帳本。在那之前：丟一顆項目符號比丟一整頁划算。
+                //    ⚠️ 有留證人（VERTIMGDROP），因為「排版階段丟掉的圖會固化進 section 快取」
+                //       是本專案踩過兩次的坑（教訓 A-10）——要看得到它丟了什麼。
+                if (self->renderer.isVerticalLayout()) {
+                  const int32_t emFP = vtext::probeEmFP(self->renderer, self->fontId);
+                  const int emPx = emFP > 0 ? (emFP + 8) / 16 : 0;
+                  if (emPx > 0 && displayWidth <= emPx * 2 && displayHeight <= emPx * 2) {
+                    if (self->vertImgDropLogged < 3) {
+                      ++self->vertImgDropLogged;
+                      ParsedText::vertDiag("VERTIMGDROP %dx%d em=%d %s", displayWidth, displayHeight, emPx,
+                                           resolvedPath.c_str());
+                    }
+                    self->depth += 1;  // 與下方成功路徑同一個收尾
+                    return;
+                  }
+                }
+
                 // Flush any pending text block so it appears before the image
                 if (self->partWordBufferIndex > 0) {
                   self->flushPartWordBuffer();
@@ -848,6 +888,9 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                     imageMarginBottom = self->blockStyleStack.back().bottomInset();
                   }
                 }
+
+                // 直排：圖片走橫排游標，必須隔離成獨立一頁（見 verticalBeginIsolated）。
+                if (!self->verticalBeginIsolated(self->currentPageVisibleOffset)) return;
 
                 // Create page for image - only break if image won't fit remaining space
                 if (self->currentPage && !self->currentPage->elements.empty() &&
@@ -932,6 +975,8 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                 self->currentPage->elements.push_back(pageImage);
                 self->setCurrentPageVisibleOffset(self->visibleTextOffset);
                 self->currentPageNextY += displayHeight + imageMarginBottom;
+                // 直排：欄游標歸零，下一欄必然換頁（圖獨占這一頁）。
+                self->verticalEndIsolated();
 
                 // The image consumed the empty block's accumulated vertical spacing.
                 // Reset the block so the Vertical merge in startNewTextBlock doesn't
@@ -1067,6 +1112,7 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
       self->currentFootnote.href[sizeof(self->currentFootnote.href) - 1] = '\0';
       self->currentFootnote.number[0] = '\0';
       self->currentFootnoteLinkTextLen = 0;
+      self->currentFootnoteTruncated = false;
 
       // Apply underline style to visually indicate the link.
       StyleStackEntry entry;
@@ -1108,7 +1154,17 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
 
   if (matches(element, HEADER_TAGS, std::size(HEADER_TAGS))) {
     self->currentCssStyle = cssStyle;
-    auto headerBlockStyle = BlockStyle::fromCssStyle(cssStyle, emSize, CssTextAlign::Center, self->viewportWidth);
+    // ⭐ **標題「預設置中」是橫排的慣例，直排不該沿用。**（維護者 2026-09-11 問位置對不對）
+    //    上游對 h1–h6 的預設是 Center；橫排下那是「標題置中」的常見長相。
+    //    但直排的 `text-align` 作用在【沿欄】方向（直排的「行」就是欄）——
+    //    照搬過去變成「標題浮在欄的中間」，而中文直排書的章節標題是**貼欄頭**的
+    //    （常再縮一兩個字）。短標題最明顯：兩個字的「後記」會掉到欄中央約 7 em 處。
+    //    實機實測（一本標題 11 格的直排書）：標題起點 129 px，而置中的算式（格線 733、內容 11 格）
+    //    給 16 + (733 − 503.9)/2 = 130.6 —— 逐像素吻合，證明走的就是置中那條。
+    //    ⚠️ 出版社**明寫** text-align 時仍然照做（下面那個 if），這裡只換【預設值】。
+    const CssTextAlign headerDefaultAlign =
+        self->renderer.isVerticalLayout() ? CssTextAlign::Justify : CssTextAlign::Center;
+    auto headerBlockStyle = BlockStyle::fromCssStyle(cssStyle, emSize, headerDefaultAlign, self->viewportWidth);
     headerBlockStyle.textAlignDefined = true;
     if (self->embeddedStyle && cssStyle.hasTextAlign()) {
       headerBlockStyle.alignment = cssStyle.textAlign;
@@ -1326,9 +1382,34 @@ void XMLCALL ChapterHtmlSlimParser::characterData(void* userData, const XML_Char
     }
 
     // Extract footnote link text
-    for (int i = start; (self->currentFootnoteLinkTextLen < sizeof(self->currentFootnote.number) - 1) && (i <= end);
-         ++i) {
+    // ⚠️ **截斷必須落在 UTF-8 碼位邊界上。**（維護者 2026-09-11 實機回報）
+    //    `number` 是 32 bytes 的定長欄位，而有些書把整句話當連結文字
+    //    （「4. 濃度最高的自律，能使你…」）→ 31 個位元組正好切在一個漢字中間，
+    //    剩下的殘位元組畫出來就是替代字元（清單上每一列結尾一個黑菱形）。
+    //    ⚠️ 這不是直排造成的，橫排一樣 —— 但它存在 section 檔裡，
+    //    所以要跟著 SECTION_FILE_VERSION 跳號才會重建。
+    const int cap = static_cast<int>(sizeof(self->currentFootnote.number)) - 1;
+    for (int i = start; i <= end; ++i) {
+      if (self->currentFootnoteLinkTextLen >= cap) {
+        self->currentFootnoteTruncated = true;
+        break;
+      }
       self->currentFootnote.number[self->currentFootnoteLinkTextLen++] = s[i];
+    }
+    // 回捲到最後一個完整碼位的結尾：續接位元組（10xxxxxx）不可以當結尾，
+    // 而起首位元組若沒湊滿它宣告的長度也要丟掉。
+    while (self->currentFootnoteLinkTextLen > 0) {
+      const auto last = static_cast<unsigned char>(self->currentFootnote.number[self->currentFootnoteLinkTextLen - 1]);
+      if (last < 0x80) break;  // ASCII，完整
+      int seqStart = self->currentFootnoteLinkTextLen - 1;
+      while (seqStart > 0 &&
+             (static_cast<unsigned char>(self->currentFootnote.number[seqStart]) & 0xC0) == 0x80) {
+        --seqStart;
+      }
+      const auto lead = static_cast<unsigned char>(self->currentFootnote.number[seqStart]);
+      const int need = lead >= 0xF0 ? 4 : lead >= 0xE0 ? 3 : lead >= 0xC0 ? 2 : 1;
+      if (self->currentFootnoteLinkTextLen - seqStart >= need) break;  // 完整，收工
+      self->currentFootnoteLinkTextLen = seqStart;                     // 半截，整個丟掉
     }
     self->currentFootnote.number[self->currentFootnoteLinkTextLen] = '\0';
   }
@@ -1471,16 +1552,7 @@ void XMLCALL ChapterHtmlSlimParser::characterData(void* userData, const XML_Char
       self->embeddedStyle ? TEXT_BLOCK_SOFT_FLUSH_WORDS_WITH_CSS : TEXT_BLOCK_SOFT_FLUSH_WORDS;
   if (blockWordCount > softFlushThreshold) {
     LOG_DBG("EHP", "Text block soft flush (%u words)", static_cast<unsigned>(blockWordCount));
-    const int horizontalInset = self->currentTextBlock->getBlockStyle().totalHorizontalInset();
-    const uint16_t effectiveWidth = (horizontalInset < self->viewportWidth)
-                                        ? static_cast<uint16_t>(self->viewportWidth - horizontalInset)
-                                        : self->viewportWidth;
-    self->currentTextBlock->layoutAndExtractLines(
-        self->renderer, self->fontId, effectiveWidth,
-        [self](const std::shared_ptr<TextBlock>& textBlock, const uint32_t offset) {
-          self->addLineToPage(textBlock, offset);
-        },
-        false);
+    self->layoutCurrentBlock(false);
     // v149：addWord 的守衛可能在這個 block 進 token 時拒絕過（掉字）。
     // latch 起來讓本章不被提交 —— 不是讓半截內容變成合法快取。
     if (self->currentTextBlock->hasOom()) {
@@ -1607,6 +1679,23 @@ void XMLCALL ChapterHtmlSlimParser::endElement(void* userData, const XML_Char* n
   // Closing a footnote link — create entry from collected text and href
   if (self->insideFootnoteLink && self->depth == self->footnoteLinkDepth) {
     if (self->currentFootnote.number[0] != '\0' && self->currentFootnote.href[0] != '\0') {
+      // 被截掉的話補一個省略號，讓「顯示不完整」看起來是刻意的而不是壞掉。
+      // ⚠️ 要在【收尾】做：累積階段補了，expat 的下一次呼叫會接著往後寫。
+      if (self->currentFootnoteTruncated) {
+        static constexpr char kEllipsis[] = "\xE2\x80\xA6";  // U+2026
+        constexpr int kEllipsisLen = 3;
+        int len = self->currentFootnoteLinkTextLen;
+        const int cap = static_cast<int>(sizeof(self->currentFootnote.number)) - 1;
+        while (len > 0 && len > cap - kEllipsisLen) {
+          --len;
+          while (len > 0 && (static_cast<unsigned char>(self->currentFootnote.number[len]) & 0xC0) == 0x80) --len;
+        }
+        if (len + kEllipsisLen <= cap) {
+          memcpy(self->currentFootnote.number + len, kEllipsis, kEllipsisLen);
+          self->currentFootnoteLinkTextLen = len + kEllipsisLen;
+          self->currentFootnote.number[self->currentFootnoteLinkTextLen] = '\0';
+        }
+      }
       FootnoteEntry entry;
       strncpy(entry.number, self->currentFootnote.number, sizeof(entry.number) - 1);
       entry.number[sizeof(entry.number) - 1] = '\0';
@@ -1614,7 +1703,7 @@ void XMLCALL ChapterHtmlSlimParser::endElement(void* userData, const XML_Char* n
       entry.href[sizeof(entry.href) - 1] = '\0';
       int wordIndex =
           self->wordsExtractedInBlock + (self->currentTextBlock ? static_cast<int>(self->currentTextBlock->size()) : 0);
-      // v187：項目 288 B（href 256）。這個 vector 在同一個 block 內會累積到版面追上為止（索引頁一段
+      // v187：項目 320 B（href 256、number 64）。這個 vector 在同一個 block 內會累積到版面追上為止（索引頁一段
       // 幾十個連結）——封頂 32 條，且成長前先看連續塊，配不到就丟這條註腳，別在建置視窗 abort。
       constexpr size_t MAX_PENDING_FOOTNOTES = 32;
       auto& pf = self->pendingFootnotes;
@@ -1891,6 +1980,168 @@ void ChapterHtmlSlimParser::addLineToPage(std::shared_ptr<TextBlock> line, const
   currentPageNextY += lineHeight;
 }
 
+int ChapterHtmlSlimParser::columnPitchPx() const {
+  // ⚠️ 走共用的 `probeEmFP`，不要自己叫 `getCodepointAdvanceFP` —— 那個對內建字型回 -1，
+  //    這裡會把欄距夾成 1 px（同一個缺陷類別的第二個實例，複查抓到）。
+  const int32_t emFP = vtext::probeEmFP(renderer, fontId);
+  const float em = static_cast<float>(emFP) / 16.0f;
+  const int pitch = static_cast<int>(em * columnPitchFactor + 0.5f);
+  return pitch > 0 ? pitch : 1;
+}
+
+// 直排：讓圖片／<hr> 獨占一頁。
+//
+// ⚠️ **為什麼需要這個**：圖片與 <hr> 的排版仍走橫排游標 `currentPageNextY`（由上往下），
+//    而直排的欄走 `currentPageNextX`（由右往左）。兩套游標互不相干 —— 同一頁上
+//    圖往下長、欄往左長，結果是**圖疊在字上**，而且不會報錯。
+//    真正的解是讓圖也吃欄寬（V1b）；V1 的處置是把它隔離成獨立一頁，
+//    代價是有圖的頁會多一頁空白感，但版面不會壞。
+bool ChapterHtmlSlimParser::verticalBeginIsolated(const uint32_t visibleTextOffset) {
+  if (!renderer.isVerticalLayout()) return true;
+  if (currentPage && !currentPage->elements.empty()) {
+    setCurrentPageVisibleOffset(visibleTextOffset);
+    completePageFn(std::move(currentPage), xpathParagraphIndex, xpathListItemIndex, currentPageVisibleOffset);
+    completedPageCount++;
+    if (!ensureCurrentPage("Page:vert:isolate")) return false;
+  }
+  currentPageNextY = 0;
+  verticalPendingTrailGap = 0;
+  return true;
+}
+
+// 隔離區塊之後：把欄游標歸零，下一欄必然換頁（addColumnToPage 的 `- pitch < 0` 條件）。
+void ChapterHtmlSlimParser::verticalEndIsolated() {
+  if (!renderer.isVerticalLayout()) return;
+  currentPageNextX = 0;
+  verticalPendingTrailGap = 0;  // 欄游標歸零了，待套用的間距沒有意義
+}
+
+// 直排：一欄放進頁面。與 addLineToPage 對稱，差別在【欄由右往左】。
+//
+// ⚠️ PageLine 原封不動重用：xPos ＝ 欄的左緣、yPos ＝ 欄頂。
+//    TextBlock 的 xpos[i] 在直排是沿欄的位移、focusSuffixX[i] 是跨軸位移
+//    （轉置編碼，見 ParsedTextVertical.cpp）。**arena 與 .bin 格式一個位元組都不改。**
+void ChapterHtmlSlimParser::addColumnToPage(std::shared_ptr<TextBlock> column, const uint32_t visibleOffset,
+                                           const int tokensInColumn) {
+  if (buildAborted_) return;
+  const int pitch = columnPitchPx();
+
+  if (!ensureCurrentPage("Page:addCol:first")) return;
+
+  // 段落之間的空隙（來自 CSS margin／padding，或 <br> 的場景分隔）——
+  // 只在這個區塊的【第一欄】之前插入，而且要在換頁判斷【之前】做，
+  // 否則空隙會把欄推出版心。
+  if (verticalBlockFirstColumn) {
+    verticalBlockFirstColumn = false;
+    // ⭐ **相鄰的上下間距要摺疊（CSS margin collapsing），不是相加。**
+    //    （維護者 2026-09-11 從目錄頁發現：每兩個條目之間空了【兩整欄】。）
+    //    這本書的 `p { margin: 1em 0 }` 對每個段落都成立，而我們原本是
+    //    「前一段的 margin-bottom 推一欄」＋「後一段的 margin-top 再推一欄」
+    //    → 版面上是 1em 的兩倍，而 CSS 的規則是相鄰邊界取【大者】。
+    //    ⚠️ 這**不是**電書協指引說的「擅自吃掉出版社指定的間距」——
+    //    出版社寫的 1em 就是 1em，相加才是我們自己多加的。
+    //    ℹ️ 橫排沿用上游的相加行為（makePages 前後各加一次），這一版刻意不動 ——
+    //    改它會讓全部既有書重新分頁，而症狀只在直排看得出來（單位是一整欄）。
+    const int16_t gap = verticalPendingTrailGap > verticalLeadGap ? verticalPendingTrailGap : verticalLeadGap;
+    verticalPendingTrailGap = 0;
+    if (gap > 0 && currentPageNextX < viewportWidth) {
+      currentPageNextX = static_cast<int16_t>(currentPageNextX - gap);
+      if (currentPageNextX < 0) currentPageNextX = 0;
+    }
+  }
+
+  // 欄由右往左：放不下就換頁。
+  if (currentPageNextX - pitch < 0) {
+    setCurrentPageVisibleOffset(visibleOffset);
+    completePageFn(std::move(currentPage), xpathParagraphIndex, xpathListItemIndex, currentPageVisibleOffset);
+    completedPageCount++;
+    if (!ensureCurrentPage("Page:addCol:break")) return;
+  }
+  setCurrentPageVisibleOffset(visibleOffset);
+
+  // 註腳歸頁：與橫排同一套（依累計【token】數）。
+  // ⚠️ **不可以用 `column->wordCount()`** —— 那是格子數，而直排一個 token 可以吐出
+  //    好幾個格（禁則黏合、縮略詞逐字、混合 token 切段）。用格數會提前跨過佇列門檻，
+  //    註腳早一頁出現（複查抓到；橫排沒事是因為橫排一個 token 恰好一個單位）。
+  wordsExtractedInBlock += tokensInColumn;
+  auto footnoteIt = pendingFootnotes.begin();
+  while (footnoteIt != pendingFootnotes.end() && footnoteIt->first <= wordsExtractedInBlock) {
+    currentPage->addFootnote(footnoteIt->second.number, footnoteIt->second.href);
+    ++footnoteIt;
+  }
+  pendingFootnotes.erase(pendingFootnotes.begin(), footnoteIt);
+
+  const int16_t colLeft = static_cast<int16_t>(currentPageNextX - pitch);
+  // ⚠️ 用 layoutCurrentBlock 夾限過的那個值，**不要重新讀一次 style** ——
+  //    兩處各自讀就可能不一致，而不變量 colTop + colLen <= viewportHeight 正是靠它們一致。
+  const int16_t colTop = verticalColTop;
+  currentPage->elements.push_back(std::make_shared<PageLine>(column, colLeft, colTop));
+  currentPageNextX = colLeft;
+}
+
+// 兩個排版呼叫點共用的分派。
+// ⚠️ 兩個呼叫點都要走這裡 —— 教訓 v149：「只守一處等於沒守」（那次是 hasOom 的檢查
+//    只加在一個呼叫點）。同一個形狀在這裡是「只分派一處等於沒分派」。
+void ChapterHtmlSlimParser::layoutCurrentBlock(const bool includeLast) {
+  if (!currentTextBlock) return;
+  const BlockStyle& bs = currentTextBlock->getBlockStyle();
+
+  if (renderer.isVerticalLayout()) {
+    // ⭐ **直排的段落間距走【跨欄軸】，不是沿欄軸。**（維護者 2026-09-09 拍板「尊重出版社」）
+    //
+    // 出版社寫 `p { margin-top: 1em }` 的意思是「段落之間空一點」。直排下每個段落
+    // 本來就從新的一欄開始，所以那個意圖的對應物是**欄與欄之間多一點空隙**，
+    // 不是「把每一欄都變短」。先前的實作把 topInset 當沿欄 inset ——
+    // 結果是每一欄都短 1em（版面上比段落間空一點難看得多），而且
+    // **`<br>` 的場景分隔會消失**：橫排是靠 `marginTop += lineHeight` 做出一整行空白
+    // （本檔的 <br> 分支），直排下那變成「下一欄起點下移且變短」，看不出是場景分隔。
+    //
+    // 換算：把 margin 表達成「幾行」，再套成「幾個欄距」——
+    // 一行空白 → 一欄空白，語意剛好對上。
+    // ⚠️ 電書協指引 ver.1.1.4 p.11：「RSs shall not arbitrarily push together designated
+    //    margins, paddings, and blank lines … should be avoided at all costs」——
+    //    規範**不希望閱讀器擅自吃掉**出版社指定的間距。所以是換軸，不是丟掉。
+    // ⚠️ 順帶解決一個複查抓到的洞：舊寫法在 inset >= 版心高時 colLen 退回滿版而欄頂
+    //    仍是 topInset → 整欄畫到螢幕外靜默掉字。現在欄頂恆為 0、欄長恆為版心高，
+    //    colTop + colLen <= vh **由建構保證**。
+    const uint16_t colLen = viewportHeight;
+    verticalColTop = 0;
+    {
+      const int lh = renderer.getLineHeight(fontId, lineCompression);
+      const int pitch = columnPitchPx();
+      verticalLeadGap = (lh > 0) ? static_cast<int16_t>(static_cast<long>(bs.topInset()) * pitch / lh) : 0;
+      verticalTrailGap = (lh > 0) ? static_cast<int16_t>(static_cast<long>(bs.bottomInset()) * pitch / lh) : 0;
+    }
+    // 把【輸入】也釘死：v207 實機看到滿欄的字壓到狀態列，而桌面重現不出來。
+    // 缺的是「裝置上 viewportHeight／inset／colTop 到底是多少」——
+    // 沒有這一行就只能從截圖反推，而那已經浪費了一輪。每次建置印一次。
+    if (!vertColLogged) {
+      vertColLogged = true;
+      ParsedText::vertDiag("VERTCOL vh=%u vw=%u top=%d bot=%d colLen=%u pitch=%d lead=%d trail=%d", viewportHeight,
+                           viewportWidth, bs.topInset(), bs.bottomInset(), static_cast<unsigned>(colLen),
+                           columnPitchPx(), verticalLeadGap, verticalTrailGap);
+    }
+    currentTextBlock->layoutAndExtractColumns(
+        renderer, fontId, colLen,
+        [this](std::shared_ptr<TextBlock> block, const uint32_t offset, const int tokens) {
+          addColumnToPage(std::move(block), offset, tokens);
+        },
+        includeLast);
+    // 區塊排完之後的空隙（CSS margin-bottom／padding-bottom）——**記著，先不套用**。
+    // 下一個區塊的第一欄會拿它跟那個區塊的 margin-top 取大者（見 addColumnToPage）。
+    // 沒有下一個區塊時就自然消失，正好也是 CSS 的行為（最後一段的下緣不佔版面）。
+    if (includeLast) verticalPendingTrailGap = verticalTrailGap;
+    return;
+  }
+
+  const int inset = bs.totalHorizontalInset();
+  const uint16_t width = (inset < viewportWidth) ? static_cast<uint16_t>(viewportWidth - inset) : viewportWidth;
+  currentTextBlock->layoutAndExtractLines(
+      renderer, fontId, width,
+      [this](const std::shared_ptr<TextBlock>& block, const uint32_t offset) { addLineToPage(block, offset); },
+      includeLast);
+}
+
 void ChapterHtmlSlimParser::makePages() {
   if (!currentTextBlock) {
     LOG_ERR("EHP", "!! No text block to make pages for !!");
@@ -1910,14 +2161,7 @@ void ChapterHtmlSlimParser::makePages() {
     currentPageNextY += blockStyle.paddingTop;
   }
 
-  // Calculate effective width accounting for horizontal margins/padding
-  const int horizontalInset = blockStyle.totalHorizontalInset();
-  const uint16_t effectiveWidth =
-      (horizontalInset < viewportWidth) ? static_cast<uint16_t>(viewportWidth - horizontalInset) : viewportWidth;
-
-  currentTextBlock->layoutAndExtractLines(
-      renderer, fontId, effectiveWidth,
-      [this](const std::shared_ptr<TextBlock>& textBlock, const uint32_t offset) { addLineToPage(textBlock, offset); });
+  layoutCurrentBlock(true);
 
   // v149：同上 —— 兩個排版呼叫點都要檢查，只守一處等於沒守。
   if (currentTextBlock->hasOom()) {

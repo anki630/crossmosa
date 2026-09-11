@@ -55,6 +55,8 @@ class Epub {
   const std::string& getTitle() const;
   const std::string& getAuthor() const;
   const std::string& getLanguage() const;
+  // `<spine page-progression-direction="rtl">`：實作「文字方向 ＝ 依出版社」用。
+  bool hasRtlPageProgression() const;
   std::string getCoverBmpPath(bool cropped = false) const;
   bool generateCoverBmp(bool cropped = false) const;
   std::string getThumbBmpPath() const;

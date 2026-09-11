@@ -90,7 +90,19 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
 
   // Side button layout options
   // Default: Up = Previous, Down = Next
-  enum SIDE_BUTTON_LAYOUT { PREV_NEXT = 0, NEXT_PREV = 1, SIDE_BUTTONS_DISABLED = 2, SIDE_BUTTON_LAYOUT_COUNT };
+  // ⚠️ **新值一律【附加在尾端】**：這個 enum 的序數就是 settings.json 存的值，
+  //    在中間插一個會把所有既有使用者的設定悄悄改成別的意思。
+  enum SIDE_BUTTON_LAYOUT {
+    PREV_NEXT = 0,
+    NEXT_PREV = 1,
+    SIDE_BUTTONS_DISABLED = 2,
+    // ⭐ v221：依版面自動決定（維護者 2026-09-08 拍板：「依版面」就是他要的自適應調整）。
+    //    橫排 → PREV_NEXT；直排 → NEXT_PREV。**只影響閱讀器的翻頁**，
+    //    選單走 `Button::Up`／`Down`，那兩個從不交換 ——
+    //    對應維護者的但書：這是【閱讀】時的行為，選單要維持原狀。
+    FOLLOW_LAYOUT = 3,
+    SIDE_BUTTON_LAYOUT_COUNT
+  };
 
   // Font family options (built-in fonts only; SD card fonts use sdFontFamilyName)
   enum FONT_FAMILY { NOTOSERIF = 0, NOTOSANS = 1, FONT_FAMILY_COUNT };
@@ -214,7 +226,9 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   uint8_t orientation = PORTRAIT;
   // Button layouts (front layout retained for migration only)
   uint8_t frontButtonLayout = BACK_CONFIRM_LEFT_RIGHT;
-  uint8_t sideButtonLayout = PREV_NEXT;
+  // 預設「依版面」。⚠️ 只對【全新安裝】生效 —— 既有使用者的 settings.json
+  //    已經存著舊值，要自己去設定裡改。
+  uint8_t sideButtonLayout = FOLLOW_LAYOUT;
   uint8_t frontButtonFollowOrientation = 0;
   // Front button remap (logical -> hardware)
   // Used by MappedInputManager to translate logical buttons into physical front buttons.
@@ -268,6 +282,56 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   uint8_t focusReadingEnabled = 0;
   // v31/v41 → v187：粗體閱讀——整段內文用粗體字面畫（e-ink 上字偏淡時用）。排版時烤進 section 快取。
   uint8_t boldBodyText = 0;
+  // ── 直排（縦書き）──────────────────────────────────────────────────
+  // 0 = 橫排、1 = 直排。V1b 會在【前面】插入 0 = 依出版社（CSS writing-mode 偵測）
+  // 並改成預設，所以**不要把 1 當成「開」的同義詞**去寫 `!= 0` 判斷式；
+  // 一律用 `readerVerticalLayout == VERTICAL_ON`（下面的具名常數）。
+  static constexpr uint8_t VERTICAL_OFF = 0;
+  static constexpr uint8_t VERTICAL_ON = 1;
+  // ⭐ v222：依出版社。**新值附加在尾端** —— 這個欄位的序數就是 settings.json 存的值，
+  //    在中間插一個會把既有使用者的設定悄悄改成別的意思（與 sideButtonLayout 同一條紀律）。
+  //    代價是設定頁的顯示順序變成「橫排／直排／依出版社」，不是原本規劃的那個順序。
+  static constexpr uint8_t VERTICAL_PUBLISHER = 2;
+  // ⚠️ 預設「依出版社」只對【全新安裝】生效；既有的 settings.json 已經存著舊值。
+  uint8_t readerVerticalLayout = VERTICAL_PUBLISHER;
+
+  // ⭐⭐ **當前開著的文件實際用哪個軸向 —— 這是唯一權威。**
+  //    排版（`readerRenderSpec`）、繪製（兩個 `VerticalScope`）、按鍵
+  //    （`MappedInputManager::bookTurnsRightToLeft`）**全部只讀這一個欄位**。
+  //    執行期值，不持久化（不在 SettingsList 裡，泛用存讀迴圈碰不到它）。
+  //
+  // ⚠️⚠️ **每一個閱讀器都必須在 onEnter 寫入它**：
+  //    `EpubReaderActivity` 寫 `resolveVerticalFor(epub->hasRtlPageProgression())`；
+  //    `TxtReaderActivity` 與 `XtcReaderActivity` 寫 **0**（那兩種格式沒有直排）。
+  //
+  // ⚠️ 複查兩輪都打在這裡，記著兩個失敗的版本：
+  //    ① 只有 EPUB 那邊寫、`onExit` 不清 → 讀完直排 EPUB 再開 .txt，按鍵全反。
+  //    ② 改成 txt/xtc 歸零【還是不夠】 —— 當時按鍵讀的是「設定解析後的值」，
+  //       而設定 ＝ 直排時那個函式直接回 true，**根本不看這個欄位**，歸零是 no-op。
+  //    → 所以現在的形狀是：設定解析是**純函式**，結果由開文件的人寫進這個欄位，
+  //      其餘所有人只讀欄位。歸零才真的有效。
+  uint8_t activeDocumentVertical = 0;
+
+  bool documentIsVertical() const { return activeDocumentVertical != 0; }
+
+  // 設定 ＋ 出版社訊號 → 這份文件該用哪個軸向。**純函式，不碰任何狀態。**
+  // 只有「開一份文件的人」該呼叫它，然後把結果寫進 `activeDocumentVertical`。
+  bool resolveVerticalFor(const bool publisherRtl) const {
+    switch (readerVerticalLayout) {
+      case VERTICAL_ON:
+        return true;
+      case VERTICAL_PUBLISHER:
+        return publisherRtl;
+      case VERTICAL_OFF:
+      default:
+        return false;
+    }
+  }
+  // 欄距三檔：0 = 緊 1.35em、1 = 標準 1.50em、2 = 寬 1.75em。
+  // ⚠️ 這三個值是【量出來的】：只有它們能在 16/18/20/22 pt 四個字級都給出三個
+  //    互不相同的欄數。更寬的檔位（1.9em 以上）在 22 pt 會把每頁壓到 80 字以下，
+  //    低於大字版那一輪實機實測接受的 85 字下限。
+  uint8_t readerColumnPitch = 1;
   // SD card font family name (empty = use built-in fontFamily)
   char sdFontFamilyName[32] = "";
   // Dictionary folder name under /dictionaries (empty = no dictionary)

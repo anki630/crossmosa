@@ -146,6 +146,80 @@ inline bool isNoBreakAfterCjkPunctuation(const uint32_t cp) {
   }
 }
 
+// --- 直排（縦書き）的禁則 delta ---------------------------------------------
+//
+// ⚠️ **這裡刻意寫成上面兩個函式的【delta】，不是第二份表。**
+//   Utf8.h:81 的註解已經寫過「放在一起才不會又長出第二份實作」——
+//   直排的桌面預言機（tools/vertical-oracle/vtables.py）就長出過一份，
+//   2026-09-08 的來源稽核抓到兩張表【互相】有對方沒有的東西：
+//     既有的有而預言機沒有：半形 . , : ; ! ? ) ] }、»、〙、〛、（ [ {、«、〘、〚
+//     預言機有而既有的沒有：分隔號 ／、間隔號 ·‧・、連接號 —–―─、…‥、彎引號 ”’〝
+//   所以是互補，不是取代。
+//
+// ⚠️⚠️ **為什麼不直接加進上面兩個函式**：那會改變【橫排】的斷行位置 →
+//   依教訓 A-11 就得 bump SECTION_FILE_VERSION，而 bump 的視窗正是記憶體壓力最高的時候。
+//   這組 delta 只被直排路徑呼叫，橫排的 isNoBreakBefore/AfterCjkPunctuation 零改動；
+//   而直排的快取由 section 檔頭的 verticalLayout 欄位（v104）與橫排分開失效。
+//   ℹ️ **但橫排那份確實缺 clreq §6.1.1「基本處理」明列的連接號／間隔號／分隔號** ——
+//      那是既有的缺口，值得單獨一版修（要 bump），本版不動。
+//
+// 來源：W3C《中文排版需求》clreq §6.1.1「行首行尾禁則」的【基本處理】等級
+//   （clreq 明說這一級最推薦；另一級叫「GB 法」，是中國的做法，我們刻意不要）。
+
+inline bool isNoBreakBeforeVertical(const uint32_t cp) {
+  if (isNoBreakBeforeCjkPunctuation(cp)) return true;  // 重用既有，不複製
+  switch (cp) {
+    // 連接號（clreq 基本處理明列）
+    case 0x2013:  // – en dash
+    case 0x2014:  // — em dash（中文書常見）
+    case 0x2015:  // ― horizontal bar
+    case 0x2500:  // ─ box drawings light horizontal
+                  //   ⭐ 教育部手冊自己拿來排破折號與夾注號乙式的就是它（實測比 … 還常見）
+    case 0x007E:  // ~
+    case 0xFF5E:  // ～（教育部連接號乙式）
+    // 間隔號（clreq 建議 ·；台灣在用 ‧；・ 是日文 JIS 碼位，clreq 說不建議但中文書實際會用）
+    case 0x00B7:  // ·
+    case 0x2027:  // ‧
+    case 0x30FB:  // ・
+    // 分隔號 —— ⭐ clreq 基本處理【明列】，而兩張表原本都沒有（實測**多數**中文書都會用到）
+    case 0x002F:  // /
+    case 0xFF0F:  // ／
+    // 刪節號（clreq TR 版列在基本處理）
+    case 0x2025:  // ‥
+    case 0x2026:  // …
+    // 反向雙引號的【收】—— 與 isNoBreakAfterVertical 的 301D（開）成對
+    // ⚠️ 這一個是 2026-09-08 的跨實作比對抓到的：我放了開引號卻漏了收引號
+    case 0x301E:  // 〞
+      return true;
+    default:
+      return false;
+  }
+}
+
+inline bool isNoBreakAfterVertical(const uint32_t cp) {
+  if (isNoBreakAfterCjkPunctuation(cp)) return true;  // 重用既有，不複製
+  switch (cp) {
+    case 0x301D:  // 〝 反向雙引號（開）
+      return true;
+    default:
+      return false;
+  }
+}
+
+// 可懸掛的標點 —— ⚠️ 這【不等於】行首禁則集合。
+//
+// clreq §6.1.3：「通常，行尾只可懸掛【一個】標點符號；適合行尾懸掛的標點符號有
+//   【頓號、逗號及句號】。**簡體中文排版中**，其餘標點符號…**也可**進行行尾懸掛配置。」
+// → 把整個禁則集合拿來當懸掛集合 ＝ 採用了簡體中文的做法。繁體只吊這三個。
+//
+// ℹ️ 現況：V1 的直排走【追い出し】不走懸掛（見帳本），所以這個集合暫時無人呼叫，
+//    留著是因為 kinsoku_mode 的另一條路徑要用，而且它記錄了「為什麼只有三個」。
+inline bool isHangablePunctuation(const uint32_t cp) {
+  return cp == 0x3001    // 、頓號
+      || cp == 0xFF0C    // ，逗號
+      || cp == 0x3002;   // 。句號
+}
+
 inline bool containsCjkBreakableCodepoint(const std::string& text) {
   const auto* ptr = reinterpret_cast<const unsigned char*>(text.c_str());
   while (*ptr) {
@@ -160,6 +234,21 @@ inline bool containsCjkBreakableCodepoint(const std::string& text) {
 inline bool hasCjkBreakOpportunityBetween(const uint32_t leftCp, const uint32_t rightCp) {
   if (!utf8IsCjkBreakable(leftCp) && !utf8IsCjkBreakable(rightCp)) return false;
   if (isNoBreakAfterCjkPunctuation(leftCp) || isNoBreakBeforeCjkPunctuation(rightCp)) return false;
+  if (utf8IsCombiningMark(rightCp)) return false;
+  return true;
+}
+
+// 直排版本。**橫排的行為一個位元都不變** —— 只有 vertical=true 時才吃 delta。
+//
+// ⚠️⚠️ 2026-09-09：`isNoBreakBeforeVertical` / `isNoBreakAfterVertical` 在此之前
+//    **零個呼叫者**（只有註解提到），也就是我寫的直排禁則從來沒有生效過，
+//    實際跑的一直是橫排那張表。這是同一個 feature 裡第三次踩到「表寫了沒人叫」
+//    （前兩次：verticalForm 的 24 個直排字形、isHangablePunctuation）。
+//    → 見 memory `cross-check-must-use-the-production-path`。
+inline bool hasCjkBreakOpportunityBetween(const uint32_t leftCp, const uint32_t rightCp, const bool vertical) {
+  if (!vertical) return hasCjkBreakOpportunityBetween(leftCp, rightCp);
+  if (!utf8IsCjkBreakable(leftCp) && !utf8IsCjkBreakable(rightCp)) return false;
+  if (isNoBreakAfterVertical(leftCp) || isNoBreakBeforeVertical(rightCp)) return false;
   if (utf8IsCombiningMark(rightCp)) return false;
   return true;
 }

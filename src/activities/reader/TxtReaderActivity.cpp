@@ -52,6 +52,12 @@ constexpr uint32_t INDEX_YIELD_INTERVAL_MS = 40;
 }  // namespace
 
 void TxtReaderActivity::onEnter() {
+  // ⭐ 這個閱讀器【永遠是橫排】——把當前文件的軸向明確歸零。
+  //    ⚠️ 不歸零的後果（複查抓到）：EPUB 那邊設的值是 settings 單例上的執行期欄位，
+  //      而 onExit 不會清它。讀完一本直排 EPUB 再開 .txt，內文照樣橫排排版，
+  //      但前排左右鍵與側鍵**全部反過來** —— 正是這次要修的病，換一個 activity 重演。
+  SETTINGS.activeDocumentVertical = 0;
+
   Activity::onEnter();
 
   if (!txt) {

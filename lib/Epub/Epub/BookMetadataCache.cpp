@@ -11,7 +11,7 @@
 #include "FsHelpers.h"
 
 namespace {
-constexpr uint8_t BOOK_CACHE_VERSION = 10;  // v10: ignore ambiguous guide text references
+constexpr uint8_t BOOK_CACHE_VERSION = 11;  // v11: header A 多帶 page-progression-direction
 constexpr char bookBinFile[] = "/book.bin";
 constexpr char tmpSpineBinFile[] = "/spine.bin.tmp";
 constexpr char tmpTocBinFile[] = "/toc.bin.tmp";
@@ -192,7 +192,8 @@ bool BookMetadataCache::buildBookBin(const std::string& epubPath, const BookMeta
   serialization::BufferedFileReader tocIn(tocFile, BUILD_IO_BUFFER_SIZE);
 
   constexpr uint32_t headerASize =
-      sizeof(BOOK_CACHE_VERSION) + /* LUT Offset */ sizeof(uint32_t) + sizeof(spineCount) + sizeof(tocCount);
+      sizeof(BOOK_CACHE_VERSION) + /* LUT Offset */ sizeof(uint32_t) + sizeof(spineCount) + sizeof(tocCount) +
+      /* pageProgressionRtl */ sizeof(uint8_t);
   const uint32_t metadataSize = metadata.title.size() + metadata.author.size() + metadata.language.size() +
                                 metadata.coverItemHref.size() + metadata.textReferenceHref.size() +
                                 sizeof(uint32_t) * 5;
@@ -204,6 +205,7 @@ bool BookMetadataCache::buildBookBin(const std::string& epubPath, const BookMeta
   serialization::writePod(bookOut, lutOffset);
   serialization::writePod(bookOut, spineCount);
   serialization::writePod(bookOut, tocCount);
+  serialization::writePod(bookOut, metadata.pageProgressionRtl);
   // Metadata
   serialization::writeString(bookOut, metadata.title);
   serialization::writeString(bookOut, metadata.author);
@@ -487,6 +489,10 @@ bool BookMetadataCache::load() {
   serialization::readPod(bookFile, lutOffset);
   serialization::readPod(bookFile, spineCount);
   serialization::readPod(bookFile, tocCount);
+  // ⚠️ readPod 讀失敗不會改寫目標（教訓 A-6），而預設值 0 ＝「沒有 rtl」，
+  //    也就是**壞掉時退回橫排**，不會誤判成直排。
+  coreMetadata.pageProgressionRtl = 0;
+  serialization::readPod(bookFile, coreMetadata.pageProgressionRtl);
 
   serialization::readString(bookFile, coreMetadata.title);
   serialization::readString(bookFile, coreMetadata.author);

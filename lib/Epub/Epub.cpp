@@ -1,5 +1,7 @@
 #include "Epub.h"
 
+#include <cstring>
+
 #include <esp_heap_caps.h>
 
 #include <FsHelpers.h>
@@ -82,6 +84,7 @@ bool Epub::parseContentOpf(BookMetadataCache::BookMetadata& bookMetadata, const 
   bookMetadata.author = opfParser.author;
   bookMetadata.language = opfParser.language;
   bookMetadata.coverItemHref = opfParser.coverItemHref;
+  bookMetadata.pageProgressionRtl = opfParser.pageProgressionRtl ? 1 : 0;
 
   // Guide-based cover fallback: if no cover found via metadata/properties,
   // try extracting the image reference from the guide's cover page XHTML
@@ -555,6 +558,33 @@ const std::string& Epub::getLanguage() const {
   }
 
   return bookMetadataCache->coreMetadata.language;
+}
+
+bool Epub::hasRtlPageProgression() const {
+  // ⚠️ 與 getLanguage 同一組守衛：快取還沒載入時解參考會當機。
+  //    載不到就回 false ＝ 退回橫排，不會誤判成直排。
+  if (!bookMetadataCache || !bookMetadataCache->isLoaded()) return false;
+  if (bookMetadataCache->coreMetadata.pageProgressionRtl == 0) return false;
+
+  // ⚠️⚠️ **`rtl` 不等於直排。** `page-progression-direction="rtl"` 講的是「書頁由右往左翻」，
+  //    而那對【直排的中日文書】與【橫排的希伯來文／阿拉伯文書】**同樣成立**。
+  //    只看這個旗標，一本阿拉伯小說會被排成中文的直欄，而且 bidi 重排在直排路徑上不生效
+  //    —— 整本書變成不可讀（複查從三個面向各自抓到；本韌體確實帶著希伯來文與阿拉伯文
+  //    的內建字型與介面翻譯，所以這不是假想的情境）。
+  //    → 明確排除由右至左【書寫】的語言。判斷用 `dc:language` 的主要子標籤。
+  const std::string& lang = getLanguage();
+  static constexpr const char* kRtlScriptLangs[] = {"he", "iw", "ar", "fa", "ur", "yi",
+                                                    "ps", "sd", "dv", "ug", "ku"};
+  for (const char* code : kRtlScriptLangs) {
+    const size_t n = strlen(code);
+    if (lang.size() >= n && strncasecmp(lang.c_str(), code, n) == 0 &&
+        (lang.size() == n || lang[n] == '-' || lang[n] == '_')) {
+      return false;
+    }
+  }
+  // ⚠️ 沒有 `dc:language` 的書仍然照 rtl 判直排 —— 那是現行行為，而中文書漏標語言
+  //    遠比阿拉伯文書漏標常見。使用者手動指定即可。
+  return true;
 }
 
 std::string Epub::getCoverBmpPath(bool cropped) const {

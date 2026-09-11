@@ -70,6 +70,11 @@ class ParsedText {
   int calculateRubyExtraEndOffset(size_t lineStartIdx, size_t lineBreakIdx, const GfxRenderer& renderer,
                                   int fontId) const;
   int resolveFirstLineIndent(bool isFirstLine, const GfxRenderer& renderer, int fontId) const;
+  // ⚠️ **兩軸共用。** `isNaturalAlign` 先前只在 `layoutAndExtractLines`（橫排）裡賦值，
+  //    而它的建構子初始值是 false → 直排讀到的永遠是 false。
+  //    v215 的縮排閘門因此恆不成立，把直排的段首縮排整個拿掉了（實機未上線前抓到）。
+  //    抽成一個函式讓兩條路徑不可能再分岔。
+  void updateNaturalAlign();
   std::vector<size_t> computeLineBreaks(const GfxRenderer& renderer, int fontId, int pageWidth,
                                         std::vector<uint16_t>& wordWidths, std::vector<bool>& continuesVec,
                                         std::vector<bool>& noSpaceBeforeVec);
@@ -118,6 +123,13 @@ class ParsedText {
   static uint8_t buildGapSite;
   static uint32_t buildProbeCount;
   static void noteBuildProbe(uint8_t site);
+
+  // 直排的診斷輸出。
+  // ⚠️ `lib/Epub` 看不到 `src/util/DiagLog.h`，而這台機器**沒有序列埠 → LOG_ERR 等於丟掉**
+  //    （v207 的 VERTGEO 就是這樣一行都沒進 diag.log）。所以走 hook：src 端接上 DiagLog。
+  //    沒接的話是靜默 no-op —— 這是刻意的，桌面測試不需要它。
+  static void (*vertDiagHook)(const char* line);
+  static void vertDiag(const char* fmt, ...) __attribute__((format(printf, 1, 2)));
   static void resetBuildProbeClock();
   static void stopBuildProbeClock();
   // v175：守衛拒絕【當下】的回呼（src 端掛 DiagLog 池快照）。fg-lowmem 的快照是在 suspendBuild
@@ -134,8 +146,60 @@ class ParsedText {
   // 標題本來就粗的不變；沒有粗體字面的字型由 resolveStyle 退回。狀態是全域的，因為它跟
   // section 快取一起烤進去（在檔頭比對），開閱讀器與改設定時都要重新設。
   static void setBoldBodyText(bool enabled);
+  // 直排的禁則 delta（分隔號 / ／、連接號、〞 等橫排表沒有的）。
+  // ⚠️ 影響【切詞】→ 影響版面 → 改了必須跳 SECTION_FILE_VERSION。
+  static void setVerticalKinsoku(bool enabled);
+  static bool verticalKinsoku();
+  // ⚠️ **必須用 RAII，不能設一次就算了。**（複查抓到）
+  //    它的孿生旗標 `Section::buildVertical_` 用的是 `GfxRenderer::VerticalScope`，
+  //    每個 tick 重設、離開自動還原；這個卻只在 startBuild 設一次、永不還原 →
+  //    讀完直排書之後，設定頁預覽（TextSettingsPreview 直接呼叫
+  //    layoutAndExtractLines，不經過 startBuild）會用**直排的禁則**切橫排的詞。
+  //    兩個旗標必須同一種生命週期，否則遲早分岔。
+  class VerticalKinsokuScope {
+   public:
+    explicit VerticalKinsokuScope(const bool v) : prev_(verticalKinsoku()) { setVerticalKinsoku(v); }
+    ~VerticalKinsokuScope() { setVerticalKinsoku(prev_); }
+    VerticalKinsokuScope(const VerticalKinsokuScope&) = delete;
+    VerticalKinsokuScope& operator=(const VerticalKinsokuScope&) = delete;
+
+   private:
+    bool prev_;
+  };
   size_t size() const { return words.size(); }
   bool isEmpty() const { return words.empty(); }
+  // ── 直排（縦書き）——定義在 ParsedTextVertical.cpp ────────────────────────
+  // ⚠️ 刻意放另一個 .cpp：橫排的 ParsedText.cpp【一行都沒改】，複查時 diff 乾淨。
+  //    走平行迴圈而不是在 extractLine 加分支的理由見帳本「V1 插入點測繪」：
+  //    extractLine 已 421 行、三個互斥定位分支，而它的 DP 目標函式（remainingSpace²）
+  //    是為兩端對齊設計的，直排不做兩端對齊 → 那個最佳化目標在直排沒有意義。
+  // 幾何證人只印第一次（每次開機一次就夠了，它不隨頁面變）。
+  static inline bool vertGeoLogged = false;
+  static inline bool vertHangLogged = false;
+  // 縮排閘門的證人：**只在閘門真的擋下時才印**（非自然對齊的區塊）。
+  // 這樣才證明得了「閘門會分辨」，而不只是「常數改對了」。上限 3 筆免得洗版。
+  static inline uint8_t vertIndGateLogged = 0;
+  // v219：縦中横的墨水置中、以及 UAX #50 旋轉表的證人（各自上限，避免刷爆 diag.log）
+  // ⭐ 首行縮排只能套用一次，而「一次」的範圍是**整個區塊**不是一次呼叫。
+  //    ⚠️ 長段落會被 soft flush 排【好幾次】（`layoutCurrentBlock(false)`），
+  //      每次都是新的一趟 `layoutAndExtractColumns`、`firstChunk` 都是 true →
+  //      第二趟起又縮兩格 ＝ **段落中間出現假的段落起頭**（複查抓到）。
+  //    ⚠️ 這個旗標必須是【成員】而不是區域變數：`ParsedText` 物件在 soft flush
+  //      之間是活的（words 被消耗掉但物件留著），新區塊才會 `reset()` 出新物件。
+  bool verticalIndentApplied = false;
+  static inline uint8_t vertTcyLogged = 0;
+  static inline uint8_t vertRotLogged = 0;
+  // v220：西文整串旋轉、以及懸掛的實際落點（兩者都只在實機看得到）
+  static inline uint8_t vertWordRotLogged = 0;
+  static inline uint8_t vertHungLogged = 0;
+  void layoutAndExtractColumns(const GfxRenderer& renderer, int fontId, uint16_t columnLength,
+                               // ⚠️ 第三個參數是**這一欄用掉幾個 token**，不是幾個格子。
+                               //    註腳歸頁的佇列是用 token 索引排的，而直排一個 token
+                               //    可以吐出好幾個格（禁則黏合、縮略詞逐字、混合 token 切段）
+                               //    —— 拿格數去比會提前跨過門檻，註腳早一頁出現（複查抓到）。
+                               const std::function<void(std::shared_ptr<TextBlock>, uint32_t, int)>& processColumn,
+                               bool includeLastColumn = true);
+
   void layoutAndExtractLines(const GfxRenderer& renderer, int fontId, uint16_t viewportWidth,
                              const std::function<void(std::shared_ptr<TextBlock>, uint32_t)>& processLine,
                              bool includeLastLine = true);

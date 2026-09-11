@@ -11,6 +11,8 @@
 #include "Page.h"
 #include "ParsedText.h"
 #include "hyphenation/Hyphenator.h"
+#include <GfxRenderer.h>
+
 #include "parsers/ChapterHtmlSlimParser.h"
 
 namespace {
@@ -54,7 +56,25 @@ namespace {
 // v187：102 → 103（bump 批次，四件事一次跳號）：①上游 #2959 圖片上邊界夾限改變圖片頁的版面；
 // ②註腳 href 96→256（FootnoteEntry 存在頁資料裡）；③粗體閱讀 boldBodyText 進檔頭（v31/v41 回歸）；
 // ④CSS 載入狀態進檔頭——在記憶體地板下被截斷的規則集排出來的版面不再被當成永久正確（v163 複查）。
-constexpr uint8_t SECTION_FILE_VERSION = 103;
+// v206：103 → 104，因為檔頭多了 verticalLayout + columnPitchTier 兩個欄位。
+// **必須跳號**：版號檢查在 byte 0，舊檔帶著舊版號會通過檢查、然後被用新偏移讀 ——
+// 讀到的是別的欄位（教訓 A-20「快取存在不等於快取有效」的同一個形狀）。
+// v210：104 → 105。**必須跳號** —— v209 改了直排的排版算術（推進量從整數 emPx 改成
+// 浮點 em、平均排列上限 2.5em → 1.0em），但沒 bump，於是既有快取照樣被沿用，
+// 修正在實機上【完全沒有生效】，而且排版階段的三個證人（VERTGEO／VERTCOL／VERTCLIP）
+// 也因此一行都印不出來（實測 diag209.log：BUILD end 0 次）。
+// 教訓 A-11 白紙黑字寫著這件事，照樣犯了。
+// v212：105 → 106。直排的沿欄座標改了（扣掉 ascender），既有快取是用舊座標排的，
+// 不跳號就會沿用 → 修正不生效（v209 已經因為這件事白費一輪）。
+// v214：107 → 108。切詞期的禁則換成直排 delta（影響 token 邊界）＋ 行尾點號懸掛
+// （影響分欄）。兩者都改變版面，不跳號就會沿用舊快取。
+// v215：108 → 109。段首縮排的判準改了（isNaturalAlign 閘門 ＋ 採用 CSS text-indent），
+// 且 CSS margin 從沿欄軸改成跨欄軸。兩者都改變版面，不跳號就會沿用舊快取。
+// v217：109 → 110。maxCells 改用讓格後的 grid（修 VERTCLIP），且直排新增沿欄對齊
+// （置中／貼欄尾）。兩者都改變版面。
+// v218：110 → 111。混合 token 依「漢字段／ASCII 段」拆開、縦中横規則放寬到「一到三位
+// 數字＋可選結尾標點」。兩者都改變 unit 切分，也就改變版面。
+constexpr uint8_t SECTION_FILE_VERSION = 121;  // v235：直排標題的預設對齊改成貼欄頭（不再沿用橫排的置中）
 // v187 檔頭的 cssState 欄位：0 = 沒用 CSS（embeddedStyle 關或載入失敗）、1 = 規則全載、
 // 2 = 撞記憶體地板被截斷（樣式打折的版面）。loadSectionFile 看到 2 且此刻記憶體寬裕就重排。
 constexpr uint8_t CSS_STATE_NONE = 0;
@@ -88,6 +108,7 @@ static_assert(SECTION_FILE_PARTIAL_VERSION != SECTION_FILE_VERSION,
 constexpr uint32_t HEADER_SIZE = sizeof(uint8_t) + sizeof(int) + sizeof(float) + sizeof(bool) + sizeof(uint8_t) +
                                  sizeof(uint16_t) + sizeof(uint16_t) + sizeof(uint16_t) + sizeof(bool) + sizeof(bool) +
                                  sizeof(uint8_t) + sizeof(bool) + sizeof(bool) /*boldBodyText*/ +
+                                 sizeof(bool) /*verticalLayout*/ + sizeof(uint8_t) /*columnPitchTier*/ +
                                  sizeof(uint8_t) /*cssState*/ + sizeof(uint32_t) + sizeof(uint32_t) +
                                  sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint32_t);
 // v187：五個「只讀檔頭尾段」的讀取點（loadPageAt／anchor／paragraph／li）原本不驗版號——跳號後
@@ -145,7 +166,8 @@ void Section::writeSectionFileHeader(const ReaderRenderSpec& spec) {
                                    sizeof(spec.viewportWidth) + sizeof(spec.viewportHeight) + sizeof(pageCount) +
                                    sizeof(spec.hyphenationEnabled) + sizeof(spec.embeddedStyle) +
                                    sizeof(spec.imageRendering) + sizeof(spec.focusReadingEnabled) +
-                                   sizeof(spec.boldBodyText) + sizeof(uint8_t) + sizeof(uint32_t) +
+                                   sizeof(spec.boldBodyText) + sizeof(spec.verticalLayout) +
+                                   sizeof(spec.columnPitchTier) + sizeof(uint8_t) + sizeof(uint32_t) +
                                    sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint32_t),
                 "Header size mismatch");
   // Written as the incomplete sentinel; finalizeBuild() patches it to
@@ -162,6 +184,9 @@ void Section::writeSectionFileHeader(const ReaderRenderSpec& spec) {
   serialization::writePod(file, spec.imageRendering);
   serialization::writePod(file, spec.focusReadingEnabled);
   serialization::writePod(file, spec.boldBodyText);
+  // 直排：兩個欄位放在【前段】。回數 seek 全部從尾端算起，所以插在這裡不影響它們。
+  serialization::writePod(file, spec.verticalLayout);
+  serialization::writePod(file, spec.columnPitchTier);
   serialization::writePod(file, CSS_STATE_NONE);  // 佔位，commitBuildFile 補成這次建置的實際狀態
   serialization::writePod(file, pageCount);  // Placeholder for page count (will be initially 0, patched later)
   serialization::writePod(file, static_cast<uint32_t>(0));  // Placeholder for LUT offset (patched later)
@@ -202,6 +227,8 @@ bool Section::loadSectionFile(const ReaderRenderSpec& spec) {
     uint8_t fileImageRendering;
     bool fileFocusReadingEnabled;
     bool fileBoldBodyText;
+    bool fileVerticalLayout;
+    uint8_t fileColumnPitchTier;
     uint8_t fileCssState;
     serialization::readPod(file, fileFontId);
     serialization::readPod(file, fileLineCompression);
@@ -214,14 +241,32 @@ bool Section::loadSectionFile(const ReaderRenderSpec& spec) {
     serialization::readPod(file, fileImageRendering);
     serialization::readPod(file, fileFocusReadingEnabled);
     serialization::readPod(file, fileBoldBodyText);
+    serialization::readPod(file, fileVerticalLayout);
+    serialization::readPod(file, fileColumnPitchTier);
     serialization::readPod(file, fileCssState);
+
+    // ⚠️ 上面十五個區域變數全部【未初始化】，而 `readPod()` 讀失敗時**不會改寫目標**
+    //    （教訓 A-6：`Serialization.h` 只是 `file.read()`，沒有可檢查的回傳值）。
+    //    半寫／被截斷的 .bin 於是讓它們保持堆疊垃圾，再拿去跟 spec 比對。
+    //    對既有欄位，後果只是「多重排一次」；但 `verticalLayout` 是 bool，垃圾值有機會
+    //    **碰巧相等 → 把橫排的快取當直排載入**（頁面內容對不上、不報錯）。
+    //    → 一道位置守衛涵蓋全部欄位：讀完檔頭前段，游標必須恰好停在 pageCount 之前。
+    //      （修缺陷類別，不是修實例；式子用 sizeof 表示，日後增刪欄位會自己跟上。）
+    if (file.position() != HEADER_SIZE - sizeof(pageCount) - sizeof(uint32_t) * 5) {
+      file.close();
+      LOG_ERR("SCT", "Deserialization failed: header truncated (pos %u)", static_cast<unsigned>(file.position()));
+      lastLoadReject_ = 2;
+      clearCache();
+      return false;
+    }
 
     if (spec.fontId != fileFontId || spec.lineCompression != fileLineCompression ||
         spec.extraParagraphSpacing != fileExtraParagraphSpacing || spec.paragraphAlignment != fileParagraphAlignment ||
         spec.viewportWidth != fileViewportWidth || spec.viewportHeight != fileViewportHeight ||
         spec.hyphenationEnabled != fileHyphenationEnabled || spec.embeddedStyle != fileEmbeddedStyle ||
         spec.imageRendering != fileImageRendering || spec.focusReadingEnabled != fileFocusReadingEnabled ||
-        spec.boldBodyText != fileBoldBodyText) {
+        spec.boldBodyText != fileBoldBodyText || spec.verticalLayout != fileVerticalLayout ||
+        spec.columnPitchTier != fileColumnPitchTier) {
       file.close();
       LOG_ERR("SCT", "Deserialization failed: Parameters do not match");
       lastLoadReject_ = 2;
@@ -318,6 +363,16 @@ bool Section::createSectionFile(const ReaderRenderSpec& spec, const std::functio
 // 「無效的書籍檔」（diag174：一次 lowmem 之後連續 8 次「索引失敗」，每次 300ms 就退）。
 // 這裡不改失敗語意，只在出口當下堆積真的瀕死（<16KB）時補 latch，讓呼叫端分流成「記憶體不足」。
 bool Section::startBuild(const ReaderRenderSpec& spec, const std::function<void()>& popupFn) {
+  // 這輪建置的軸向，記給跨 tick 的 buildSomeMore 用（見那裡的註解）。
+  // ⚠️ 必須在建 parser 之前 —— parser 的排版分派讀的就是 renderer 這個旗標。
+  //    （曾在 parser 建構子加過「spec vs renderer」的斷言，已拿掉：那是同義反覆，
+  //      而且要為它把 GfxRenderer.h 拉進 parser 標頭。）
+  buildVertical_ = spec.verticalLayout;
+  // 切詞期的禁則也要跟著軸向。⚠️ 與 buildVertical_ 同源，不可各自判斷；
+  //    而且必須與它**同一種生命週期**（RAII，每個 tick 重設）——
+  //    先前只設一次不還原，讀完直排書之後設定頁預覽會用直排禁則切橫排的詞。
+  const GfxRenderer::VerticalScope verticalScope(renderer, buildVertical_);
+  const ParsedText::VerticalKinsokuScope kinsokuScope(buildVertical_);
   lastBuildWasLowMemory_ = false;
   if (build_) {
     LOG_ERR("SCT", "startBuild called while a build is already active");
@@ -483,7 +538,7 @@ bool Section::startBuild(const ReaderRenderSpec& spec, const std::function<void(
             {this->onPageComplete(std::move(page)), paragraphIndex, listItemIndex, visibleTextOffset});
       },
       spec.embeddedStyle, ctxPtr->contentBase, ctxPtr->imageBasePath, spec.imageRendering, std::move(tocAnchors),
-      popupFn, ctxPtr->cssParser);
+      popupFn, ctxPtr->cssParser, spec.columnPitchTier);
   if (!ctx->parser) {
     LOG_ERR("SCT", "OOM: ChapterHtmlSlimParser");
     lastBuildWasLowMemory_ = true;  // v165：同 BuildContext——分流成「記憶體不足」
@@ -527,6 +582,10 @@ uint32_t Section::buildStepCount = 0;
 int Section::lastPoisonAvoidedSpine = -1;
 
 bool Section::buildSomeMore(const int maxPages, bool (*shouldYield)(void*), void* yieldCtx) {
+  // ⚠️ 增量建置【跨 tick】：startBuild 設一次旗標是不夠的，中間會回到主迴圈跑別的畫面
+  //    （設定預覽就會把旗標關掉）。每一步都明寫，離開自動還原。
+  const GfxRenderer::VerticalScope verticalScope(renderer, buildVertical_);
+  const ParsedText::VerticalKinsokuScope kinsokuScope(buildVertical_);
   if (!build_ || !build_->parser) {
     LOG_ERR("SCT", "buildSomeMore with no active build");
     return false;

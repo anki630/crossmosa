@@ -188,17 +188,60 @@ void sanitizePathComponentForFat32(const char* input, char* output, size_t maxLe
     return;
   }
 
+  // ⚠️ **只輸出【完整】的 UTF-8 字元 —— 一個位元組都不要半截。**
+  //    （2026-09-08：截圖對長中文書名靜默失敗，實機 diag210 的 SCRFAIL）
+  //
+  //    檔名帶著半截 UTF-8 時 mkdir／open 會失敗，而失敗只寫 LOG_ERR ＝
+  //    這台機器沒有序列埠，等於什麼都沒發生。某本中文書一直沒事：9 bytes。
+  //
+  //    ⚠️ 這是第【三】版寫法，前兩版都被回歸測試抓到：
+  //      · 原版：無條件在第 maxLen-1 個位元組截斷 → 中文書名 2/3 機率切在字中間。
+  //      · 第二版：追蹤「下一個位元組不是續接位元組」當邊界 —— 但 `\0` 也不是續接
+  //        位元組，於是**上游就已經壞掉的輸入**（實機正是這種：傳進來的 title
+  //        本身就是截斷過的 63 bytes、結尾是孤零零一個 0xE5）被判成合法，原樣輸出。
+  //      · 現在：逐字元前進，續接位元組不齊、或整個字元放不下，就到此為止。
+  //        判準與「為什麼會壞」無關，只跟「這個字元完不完整」有關。
+  size_t outLen = 0;
   size_t i = 0;
-  for (; i < maxLen - 1 && input[i] != '\0'; i++) {
-    const char c = input[i];
-    if (c == '\\' || c == '/' || c == ':' || c == '*' || c == '?' || c == '"' || c == '<' || c == '>' || c == '|' ||
-        c == ' ' || (c > 0x00 && c <= 0x1f)) {
-      output[i] = '-';
+  while (input[i] != '\0' && outLen < maxLen - 1) {
+    const auto lead = static_cast<unsigned char>(input[i]);
+    size_t seqLen;
+    if (lead < 0x80) {
+      seqLen = 1;
+    } else if (lead >= 0xF0) {
+      seqLen = 4;
+    } else if (lead >= 0xE0) {
+      seqLen = 3;
+    } else if (lead >= 0xC0) {
+      seqLen = 2;
     } else {
-      output[i] = c;
+      break;  // 落單的續接位元組 = 輸入本身壞掉，到此為止
     }
+
+    bool complete = true;
+    for (size_t k = 1; k < seqLen; k++) {
+      if ((static_cast<unsigned char>(input[i + k]) & 0xC0) != 0x80) {
+        complete = false;
+        break;
+      }
+    }
+    if (!complete) break;                 // 續接位元組不齊（含被 \0 截斷）
+    if (outLen + seqLen > maxLen - 1) break;  // 放不下整個字元，寧可短一點
+
+    for (size_t k = 0; k < seqLen; k++) {
+      const char c = input[i + k];
+      // 只有單位元組字元需要換掉 FAT 不接受的符號；多位元組序列原樣保留。
+      if (seqLen == 1 && (c == '\\' || c == '/' || c == ':' || c == '*' || c == '?' || c == '"' || c == '<' ||
+                          c == '>' || c == '|' || c == ' ' || (c > 0x00 && c <= 0x1f))) {
+        output[outLen] = '-';
+      } else {
+        output[outLen] = c;
+      }
+      outLen++;
+    }
+    i += seqLen;
   }
-  output[i] = '\0';
+  output[outLen] = '\0';
 }
 
 }  // namespace FsHelpers

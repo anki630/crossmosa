@@ -216,6 +216,32 @@ void CrossPointWebServer::begin() {
     LOG_ERR("WEB", "Failed to register web server task with watchdog: %s", esp_err_to_name(watchdogResult));
   }
 
+  // ⭐ **網頁伺服器開著時把 task WDT 的逾時拉長。**（2026-09-08，crash_report 194／207／209）
+  //
+  // 三份 crash 同一個簽章：`rst=6` task_wdt、panic reason 空白、死在網頁伺服器路徑，
+  // 而且**都在 WiFi 訊號弱的時候**（v194 rssi=-94）。
+  //
+  // 根因是兩個數字**剛好相等**：
+  //   · `CONFIG_ESP_TASK_WDT_TIMEOUT_S` = 5（sdkconfig）
+  //   · `HTTP_MAX_POST_WAIT` = 5000 ms（WebServer.h）——框架收 POST body 時的**阻塞**等待
+  // 訊號差 → 那個等待走到上限 → 剛好用完看門狗的全部額度。
+  //
+  // ⚠️ **v209 我修錯了方向**：以為是「31 次慢呼叫累積」，改成每次迴圈都餵狗 ——
+  //    但阻塞發生在【單一次 handleClient() 內部】，我們的程式碼那時根本沒在跑，
+  //    餵再密也沒用。實測 v209 照樣 crash（crash_report209）。
+  //    （每次餵狗的改動保留：它本身無害，而且對別的慢路徑仍有幫助。）
+  //
+  // ⚠️ 不是把看門狗關掉：真的卡死仍會在 20 秒後觸發。只是別讓「合法的 5 秒等待」
+  //    去撞一個 5 秒的門檻。離開時還原（stop()）。
+  esp_task_wdt_config_t wdtCfg = {};
+  wdtCfg.timeout_ms = WEB_SERVER_WDT_TIMEOUT_MS;
+  wdtCfg.idle_core_mask = 0;  // 不監看 idle task（維持現行行為）
+  wdtCfg.trigger_panic = true;
+  if (esp_task_wdt_reconfigure(&wdtCfg) == ESP_OK) {
+    wdtTimeoutRaised = true;
+    DiagLog::line("WEBWDT raised=%ums", static_cast<unsigned>(WEB_SERVER_WDT_TIMEOUT_MS));
+  }
+
   running = true;
 
   LOG_DBG("WEB", "Web server started on port %d", port);
@@ -224,6 +250,17 @@ void CrossPointWebServer::begin() {
   LOG_DBG("WEB", "Access at http://%s/", ipAddr.c_str());
   LOG_DBG("WEB", "WebSocket at ws://%s:%d/", ipAddr.c_str(), wsPort);
   LOG_DBG("WEB", "[MEM] Free heap after server.begin(): %d bytes", ESP.getFreeHeap());
+}
+
+// 還原 task WDT 的逾時（見 start() 裡的長註解）。
+void CrossPointWebServer::restoreWatchdogTimeout() {
+  if (!wdtTimeoutRaised) return;
+  esp_task_wdt_config_t wdtCfg = {};
+  wdtCfg.timeout_ms = DEFAULT_WDT_TIMEOUT_MS;
+  wdtCfg.idle_core_mask = 0;
+  wdtCfg.trigger_panic = true;
+  esp_task_wdt_reconfigure(&wdtCfg);
+  wdtTimeoutRaised = false;
 }
 
 void CrossPointWebServer::abortWsUpload(const char* tag) {
@@ -250,6 +287,7 @@ void CrossPointWebServer::stop() {
       esp_task_wdt_delete(nullptr);
       watchdogTaskRegistered = false;
     }
+    restoreWatchdogTimeout();
     return;
   }
 
@@ -294,6 +332,7 @@ void CrossPointWebServer::stop() {
     esp_task_wdt_delete(nullptr);
     watchdogTaskRegistered = false;
   }
+  restoreWatchdogTimeout();
 
   // Note: Static upload variables (uploadFileName, uploadPath, uploadError) are declared
   // later in the file and will be cleared when they go out of scope or on next upload

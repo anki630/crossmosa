@@ -72,6 +72,12 @@ class CrossPointWebServer {
   std::unique_ptr<WebServer> server = nullptr;
   std::unique_ptr<WebSocketsServer> wsServer = nullptr;
   bool running = false;
+  // 網頁伺服器開著時的 task WDT 逾時（見 .cpp start() 的長註解）。
+  // 框架收 POST body 的阻塞等待是 HTTP_MAX_POST_WAIT = 5000ms，而預設門檻也是 5000ms。
+  static constexpr uint32_t WEB_SERVER_WDT_TIMEOUT_MS = 20000;
+  static constexpr uint32_t DEFAULT_WDT_TIMEOUT_MS = 5000;  // = CONFIG_ESP_TASK_WDT_TIMEOUT_S
+  bool wdtTimeoutRaised = false;
+  void restoreWatchdogTimeout();
   bool watchdogTaskRegistered = false;
   bool apMode = false;  // true when running in AP mode, false for STA mode
   uint16_t port = 80;

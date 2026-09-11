@@ -121,6 +121,8 @@ void renderPreview(const GfxRenderer& renderer, PreviewLayout& layout, int previ
   for (int paragraph = 0; paragraph < 2; paragraph++) {
     for (const auto& line : layout.lines) {
       if (y + lineH > textBottomLimit) return;
+      // 預覽的區塊【永遠】是橫排排版路徑產生的 —— 明寫，不要沿用閱讀器留下的旗標。
+      const GfxRenderer::VerticalScope horizontal(renderer, false);
       line->render(renderer, fontId, textLeft, y);
       y += lineAdvance;
     }

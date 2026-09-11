@@ -81,6 +81,17 @@ class MappedInputManager {
   // so portrait UI (home, settings) never swaps while the reader and its menus do.
   [[nodiscard]] bool isNavDirectionSwapped() const;
 
+  // ⭐⭐ **這本書是不是右翻的**（直排 ＝ page-progression rtl）。
+  //    前排左右鍵與觸控左右區都讀它 —— `ReaderUtils::detectPageTurn` /
+  //    `detectTouchPageTurn` 是 `namespace ReaderUtils` 的自由函式，
+  //    **所以它必須是 public**（複查抓到：原本放在 private: 底下，整個韌體編不過）。
+  //
+  // ⚠️ 它**只反映書的方向**，不摻使用者的側鍵偏好。
+  //    `sideButtonLayout` 是「哪一顆側鍵是上一頁」的人體工學偏好，
+  //    把它餵進前排與觸控，會讓一個【橫排】書的使用者只因為當初調過側鍵，
+  //    前排與觸控整個反過來 —— 違反「橫排逐位元組不變」。
+  static bool bookTurnsRightToLeft();
+
  private:
   HalGPIO& gpio;
   // Logical-to-physical button mapping depends on what the user is actually looking at: when the
@@ -92,6 +103,8 @@ class MappedInputManager {
 
   Button mapScreenDirection(Button button) const;
   Labels mapFrontLabels(const char* back, const char* confirm, const char* left, const char* right) const;
+  // 「依版面」→ PREV_NEXT／NEXT_PREV。理由見 .cpp。
+  static uint8_t resolveSideLayout();
   bool mapButton(Button button, bool (HalGPIO::*fn)(uint8_t) const) const;
   bool wasBackGesture() const;
   // Fetch the pending swipe (if any) and map both endpoints to logical screen coords

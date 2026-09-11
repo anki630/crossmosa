@@ -61,6 +61,9 @@ class Section {
   // v187：loadSectionFile 因「CSS 截斷版面」丟掉快取後設為 true；接下來的重建若又截斷，就寫
   // CSS_STATE_TRUNCATED_FINAL 進檔頭，之後不再為此重排（收斂：每章最多多排一次）。
   bool cssRetry_ = false;
+  // 這輪建置是不是直排（來自 spec，startBuild 時記下）。跨 tick 的增量建置每一步都要重設
+  // renderer 的旗標 —— 中間會回到主迴圈跑別的畫面，而那些畫面會把旗標改掉。
+  bool buildVertical_ = false;
   // v187：最近一次 loadSectionFile 丟掉快取的原因（0 無／1 版號／2 參數／3 CSS 截斷重排／4 partial 尾段壞）。
   uint8_t lastLoadReject_ = 0;
   mutable bool lastLoadWasLowMemory_ = false;  // v152，見 lastLoadWasLowMemory()
