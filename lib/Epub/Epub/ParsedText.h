@@ -173,8 +173,12 @@ class ParsedText {
   //    走平行迴圈而不是在 extractLine 加分支的理由見帳本「V1 插入點測繪」：
   //    extractLine 已 421 行、三個互斥定位分支，而它的 DP 目標函式（remainingSpace²）
   //    是為兩端對齊設計的，直排不做兩端對齊 → 那個最佳化目標在直排沒有意義。
-  // 幾何證人只印第一次（每次開機一次就夠了，它不隨頁面變）。
-  static inline bool vertGeoLogged = false;
+  // 幾何證人。⚠️ **原本是 one-shot bool —— 那讓它只印「開機後第一個字型／字級」，**
+  //    而要證明的主張（每個字型 × 每個字級的 rotcross 都對）恰恰要靠換字型才驗得到
+  //    （2026-09-11 對抗複查抓到，B-22 的變形：儀器裝得到，但覆蓋不到要證明的事）。
+  //    改成「(fontId, em) 變了就再印一次」，上限 8 筆免得洗版。
+  static inline uint8_t vertGeoLogged = 0;
+  static inline int vertGeoKey = -1;
   static inline bool vertHangLogged = false;
   // 縮排閘門的證人：**只在閘門真的擋下時才印**（非自然對齊的區塊）。
   // 這樣才證明得了「閘門會分辨」，而不只是「常數改對了」。上限 3 筆免得洗版。

@@ -128,56 +128,16 @@ bool asciiRunInkExtent(const GfxRenderer& renderer, const int fontId, const EpdF
 //    直立畫出來就是一條橫線 ＝ 看起來像「一」。
 //    → 改到【逐字元產出】那一層判斷，見下方 colWords 的迴圈。
 
-// 一串【旋轉的】西文在【跨軸】上的墨水帶，相對於基線。回傳 false ＝ 一個字形都取不到。
-//
-// ⭐ 旋轉之後座標是換軸的：字形的 **height 對到跨軸**（`verticalCwScreenX = cursorX + top - glyphY`），
-//    所以墨水在跨軸上占 `[top - height + 1, top]`。整串取聯集就是這一串的帶。
-//
-// ⚠️ 存在的理由（使用者 2026-09-09 從標題「Column 1」發現）：旋轉的 unit 一直是
-//    `crossOff = 0` —— 也就是**西文的基線貼在欄的左緣**，整串偏左；而同一欄裡直立的
-//    「1」是**墨水置中**的。兩種配置各自對齊到不同的東西，並排就看得出來。
-//    實測 22pt：欄心 404.5，「1」的墨心 404.5（正中），而 Column 的字母落在 395–401.5。
-// ⚠️ **逐碼位，不是逐位元組。** 西文段可能含非 ASCII 字母（Golěm 的 ě）——
-//    逐位元組會拿 0xC4／0x9B 去查字形、查不到就跳過，結果帶寬只由 ASCII 字母決定，
-//    有變音符號那幾個字的墨水就落在帶外（跨軸置中會算錯）。
-bool westernRunCrossBand(const GfxRenderer& renderer, const int fontId, const EpdFontFamily::Style style,
-                         const char* s, const int len, int* outLow, int* outHigh) {
-  bool any = false;
-  int lo = 0;
-  int hi = 0;
-  const char* p = s;
-  const char* const end = s + len;
-  while (p < end) {
-    const uint32_t cp = vtext::nextCodepoint(p, end);
-    if (cp == 0) break;
-    int gw = 0, gh = 0, gl = 0, gt = 0;
-    if (!renderer.getGlyphInkBox(fontId, cp, style, &gw, &gh, &gl, &gt) || gh <= 0) {
-      continue;
-    }
-    const int low = gt - gh;
-    if (!any) {
-      lo = low;
-      hi = gt;
-      any = true;
-    } else {
-      if (low < lo) lo = low;
-      if (gt > hi) hi = gt;
-    }
-  }
-  *outLow = lo;
-  *outHigh = hi;
-  return any;
-}
-
 // clreq §2.1.2 的三種配置，在這裡一次決定完。
 // `inWesternPhrase` ＝ 這個 token 的左右鄰居裡有西文詞（中間補了詞間空白）。
 // ⚠️ **clreq ①（直立逐字）講的是「夾在中文裡的」單一字母／縮略詞**，不是西文句子裡的短字。
-//    實機：`（Úřad pro zahraniční styky a informace）` 裡的 **`a`** 站了起來，
+//    實機：`（Praha a okolí）` 這種括號裡的西文串，**`a`** 站了起來，
 //    左右的字全躺著 —— 因為單獨看它就是「單一西文字母」。
 //    同一條也適用於縮略詞與數字：`the FBI agent`／`Volume 10 of` 在句子裡要跟著躺。
 //    → 在西文句子裡一律走 ②（整串旋轉），基線才會一致。
 TokenPlan planToken(const GfxRenderer& renderer, const int fontId, const std::string& tok,
-                    const EpdFontFamily::Style style, const float em, const bool inWesternPhrase) {
+                    const EpdFontFamily::Style style, const float em, const bool inWesternPhrase,
+                    const int rotatedCrossPx) {
   TokenPlan p{};
   const int emPx = static_cast<int>(em + 0.5f);
 
@@ -238,15 +198,24 @@ TokenPlan planToken(const GfxRenderer& renderer, const int fontId, const std::st
     // ② 整串順時針旋轉：沿欄推進量 ＝ 該串的橫向總寬。
     p.rotated = true;
     p.advance = static_cast<float>(renderer.getTextAdvanceX(fontId, tok.c_str(), style));
-    // 跨軸置中：把整串的墨水帶擺到欄心，而不是把基線貼在欄的左緣（見 westernRunCrossBand）。
-    // ⚠️ 用【整串】的帶而不是逐字算，是刻意的：同一串的字母必須共用一條基線，
-    //    被切成多段時各段也要對齊，否則換行處會錯開。
-    int bandLow = 0;
-    int bandHigh = 0;
-    if (westernRunCrossBand(renderer, fontId, style, tok.c_str(), len, &bandLow, &bandHigh)) {
-      const int centred = emPx / 2 - (bandLow + bandHigh) / 2;
-      p.crossPx = centred > 0 ? centred : 0;
-    }
+    // ⭐⭐ **跨軸位移是【固定的】，與這個詞有哪些字母無關。**（維護者 2026-09-11 回報
+    //     「有些字往左靠一點點，有些字往右靠一點點」）
+    //
+    //     先前是拿【這個詞自己的墨水外框】去置中。那讓每個詞的「墨水中心」一致，
+    //     但**基線各自不同** —— 因為外框取決於那個詞剛好有沒有上伸部／下伸部。
+    //     用真的 .cpfont 算（NotoSerifTC 22pt、em 46）：
+    //         大寫＋長音 2 / 有上伸部 4 / 有上伸部 4 / 大寫 5 / 大寫 5 / 大寫 6 /
+    //         小寫 7 / 有下伸部 10 / 單字母 11 / 有下伸部 16（同一段裡十個相鄰的詞）
+    //     → 基線散布 2..16，**最大差 14 px ＝ em 的 30%**。使用者看到的就是這個。
+    //
+    //     ⚠️ 註解原本寫「同一串的字母必須共用一條基線」—— 那個意圖只做到了
+    //     **run 內部**（切段時各段共用 plan.crossPx），run 與 run 之間從來沒有。
+    //     一句沒有被機制保證的註解，就只是一句註解（本專案的老毛病）。
+    //
+    //     新規則：基線固定在字格的 `1 − CELL_ASCENT_FACTOR` 處，一次算好、所有詞共用。
+    //     ⚠️ 不要再寫「JLREQ 規定置中」—— 複查核對過原文，**JLREQ 與 clreq 都沒有這句**。
+    //        依據是 CSS 的 central baseline（＝字身框中點）與本檔量出來的 CELL_ASCENT_FACTOR。
+    p.crossPx = rotatedCrossPx;
     return p;
   }
 
@@ -313,6 +282,39 @@ void ParsedText::layoutAndExtractColumns(
   //    → 直立的字在排版階段先把 ascender 扣掉，讓 drawText 加回來剛好抵銷。
   const float ascender = static_cast<float>(renderer.getFontAscenderSize(fontId));
 
+  // ⭐⭐ **旋轉西文的跨軸位移：整個區塊一個常數，＝ 基線在字格裡的位置。**
+  //
+  //     `cross = em × (1 − CELL_ASCENT_FACTOR)`。
+  //
+  //     旋轉之後「基線上方」對到 **+x**（VerticalText.h 的 verticalCwScreenX：
+  //     `screenX = cursorX + top − glyphY`，字頂朝右），所以把西文的 em 盒
+  //     [−0.12em, +0.88em] 擺進字格 [0, em] 的解就是 cross = 0.12 em。
+  //
+  //     ⚠️⚠️ **錨點必須是【字身框】不是【行框】。**（2026-09-11 三路對抗複查一致駁回
+  //     我原本的 `(em − (ascender + descender))/2`。）Noto TC 兩套的 asc−desc 是
+  //     **1.44–1.48 em**（NotoSansTC 22pt：54 −(−14) = 68 px，而 em 只有 45.81）——
+  //     那是 CJK 的行高，跟西文墨水無關。把它置中會讓**每一個西文詞相對漢字左偏**
+  //     4–10 px（大字版 28pt 最嚴重，−8.6／−9.8）。
+  //     ⭐ `CELL_ASCENT_FACTOR` 是**同一個物理量在沿欄軸的答案**，而且是量出來的
+  //     （103 個漢字、σ 1.5%，見 VerticalText.h）。同一個量在兩軸用兩個來源，
+  //     正是這個 bug 的形狀 —— 所以兩軸共用它。
+  //     交叉驗證（複查跑的）：這個錨點讓**拉丁大寫的墨水中心**落在格心 ±1.4 px 內
+  //     （原方案是 −1.8…−2.9）。兩個互不相干的判準（漢字墨水置中、拉丁大寫置中）
+  //     指向同一個 0.88。
+  //
+  //     ⚠️ 小寫字身仍會比漢字中心偏左約 0.1 em。**那不是缺陷是常態**——
+  //     橫排也一樣（基線對齊時小寫本來就「低」）。要再加光學位移的話請當成
+  //     具名常數、寫明是品味決定，**而且要在同一版決定**：cross 會烤進 SD 快取，
+  //     每改一次錨點就是整個書庫重排一次。
+  //
+  //     ℹ️ 規範查證（複查核對原文）：clreq §2.1.2 ② 與 JLREQ 都**只規定旋轉與前後空白，
+  //     沒有規定跨軸位置**。唯一的形式定義是 CSS：直排的 dominant baseline ＝ central，
+  //     而 central ＝ ideographic under／over 的中點 ＝ **字身框**。
+  const int rotatedCrossPx = [&] {
+    const int centred = static_cast<int>(em * (1.0f - vtext::CELL_ASCENT_FACTOR) + 0.5f);
+    return centred > 0 ? centred : 0;
+  }();
+
   const auto grid = vtext::makeColumnGrid(static_cast<float>(columnLength), em);
   // ⭐ **懸掛的讓格必須在這裡決定，不能等到分欄之前。**
   //    先前 `maxCells` 用讓格【前】的 grid（18 格）算，而欄實際用 grid2（17 格）→
@@ -348,13 +350,16 @@ void ParsedText::layoutAndExtractColumns(
   const int maxCells = vtext::unitsPerColumn(grid2, em);
   // 幾何證人：每次建置印一次。**不要從畫面反推這些數字** —— v206 就是因為只能從截圖
   // 量而卡在「欄長對不對」的猜測上。em ×10 是為了避開浮點格式。
-  if (!vertGeoLogged) {
-    vertGeoLogged = true;
+  const int geoKey = fontId * 1000 + emPx;
+  if (vertGeoLogged < 8 && vertGeoKey != geoKey) {
+    ++vertGeoLogged;
+    vertGeoKey = geoKey;
     // ⚠️ 必須用 DiagLog：這台沒有序列埠，LOG_ERR 等於丟掉。
     //    v207 就是這樣白裝的 —— VERTGEO 一行都沒進 diag.log。
-    ParsedText::vertDiag("VERTGEO colLen=%u em10=%d cells=%d gridLen=%d asc=%d",
+    ParsedText::vertDiag("VERTGEO colLen=%u em10=%d cells=%d gridLen=%d asc=%d rotcross=%d",
                          static_cast<unsigned>(columnLength), static_cast<int>(em * 10.0f + 0.5f),
-                         grid.charsPerColumn, static_cast<int>(grid.columnLength), static_cast<int>(ascender));
+                         grid.charsPerColumn, static_cast<int>(grid.columnLength), static_cast<int>(ascender),
+                         rotatedCrossPx);
   }
   if (maxCells < 1) {
     consumeAllAndBail("column-too-short");
@@ -514,7 +519,7 @@ void ParsedText::layoutAndExtractColumns(
     const std::string run = parent.substr(b0, blen);
     if (run.empty()) return;
     const auto style = w < wordStyles.size() ? wordStyles[w] : EpdFontFamily::REGULAR;
-    const TokenPlan plan = planToken(renderer, fontId, run, style, em, inWesternPhrase);
+    const TokenPlan plan = planToken(renderer, fontId, run, style, em, inWesternPhrase, rotatedCrossPx);
 
     if (plan.splitPerChar) {
       // ① 直立逐字：每個 ASCII 字母一格，欄內置中。

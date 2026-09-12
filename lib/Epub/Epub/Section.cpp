@@ -74,7 +74,7 @@ namespace {
 // （置中／貼欄尾）。兩者都改變版面。
 // v218：110 → 111。混合 token 依「漢字段／ASCII 段」拆開、縦中横規則放寬到「一到三位
 // 數字＋可選結尾標點」。兩者都改變 unit 切分，也就改變版面。
-constexpr uint8_t SECTION_FILE_VERSION = 121;  // v235：直排標題的預設對齊改成貼欄頭（不再沿用橫排的置中）
+constexpr uint8_t SECTION_FILE_VERSION = 122;  // v236：旋轉西文改成固定基線（cross 烤進 arena 並逐位元組序列化，不跳號＝已讀過的書永遠保持舊偏移）
 // v187 檔頭的 cssState 欄位：0 = 沒用 CSS（embeddedStyle 關或載入失敗）、1 = 規則全載、
 // 2 = 撞記憶體地板被截斷（樣式打折的版面）。loadSectionFile 看到 2 且此刻記憶體寬裕就重排。
 constexpr uint8_t CSS_STATE_NONE = 0;

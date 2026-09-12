@@ -61,10 +61,11 @@ Wi-Fi 連線當機**，這裡先修掉了（細節見 CHANGELOG 的 1.0.0 節）
 
 版本:[`2.0.1`](https://github.com/anki630/crossmosa/releases/latest)
 
-> 🧪 **想試直排？** 有一個測試版 **2.1.0-beta.1**，加了直排（縦書き）閱讀。
+> 🧪 **想試直排？** 有一個測試版 **2.1.0-beta.2**，加了直排（縦書き）閱讀。
 > 它是預發佈版，**第一次刷 CrossMosa 的人請不要從它開始**——
 > 先刷 2.0.1，確認一切正常之後再換上來。
-> 詳情與已知限制見 [2.1.0-beta.1 的說明](https://github.com/anki630/crossmosa/releases/tag/v2.1.0-beta.1)。
+> 這一版的字型包有更新（拉丁擴充補齊），建議一起重新下載，舊的仍能用。
+> 詳情與已知限制見 [2.1.0-beta.2 的說明](https://github.com/anki630/crossmosa/releases/tag/v2.1.0-beta.2)。
 
 **我該刷哪一版？**
 
@@ -267,9 +268,13 @@ SD 卡根目錄
 但**每個字級是獨立檔案**，只複製你要的那一個就好。
 不影響 RAM:字型是按需從 SD 讀的，不會整份載進記憶體。
 
-> **想直排讀中文**:選 `GuanKiapTsingKhai-90`，再把螢幕轉成橫向，
+> **想直排讀中文（2.0.x 的作法）**:選 `GuanKiapTsingKhai-90`，再把螢幕轉成橫向，
 > 中文就會由上而下、由右而左排列。它的字形是**預先轉了 90 度**的，
 > 所以正常橫排時選它會整頁躺著——只在要直排時用。
+>
+> ⚠️ **2.1 之後不要這樣做。** 2.1 有真正的直排（設定 → 閱讀器 → 文字設定 → 版面 → 文字方向），
+> 而真直排配上這套預轉 90 度的字型會讓**每個字躺著**。要楷書請選 `Iansui`（芫荽）——
+> 原俠正楷的主體本來就是芫荽。
 
 **SD 卡要求**:FAT32 或 exFAT。**字型資料夾名稱不可以有空格**（原版已知會 crash，用底線）。
 
@@ -711,8 +716,11 @@ renders as boxes (□□□□)**.
    bopomofo, **vertical punctuation `︿ ﹀ ﹃ ﹄`**, box drawing.
    **If you downloaded the fonts before 2.0.1, download them again** — otherwise those
    characters are still boxes.
-   `GuanKiapTsingKhai-90` is a pre-rotated brush face: pick it and turn the screen to
-   landscape to read Chinese vertically. Folder names must not contain spaces.
+   `GuanKiapTsingKhai-90` is a pre-rotated brush face: on 2.0.x, pick it and turn the screen
+   to landscape to read Chinese vertically. **Do not do this on 2.1** — 2.1 has real vertical
+   layout (Settings -> Reader -> Text Settings -> Layout -> Text Direction), and a pre-rotated
+   face there lays every character on its side. Pick `Iansui` for a brush face instead.
+   Folder names must not contain spaces.
 
    **Can't read small text?** `crossmosa-2.0.1-sd-fonts-large.zip` has sans and serif at
    **24 / 26 / 28** — same install, no reflash. It stops at 28 on purpose: what makes reading

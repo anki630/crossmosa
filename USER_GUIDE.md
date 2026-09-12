@@ -457,7 +457,9 @@ or **Disabled** to turn the side buttons off entirely.
 
 #### Not supported yet
 
-- `.txt` and `.xtc` files are always horizontal; only EPUB has vertical layout
+- `.txt` files do not support vertical layout yet; support is planned for a later release.
+  `.xtc` files cannot: each page is stored as a pre-rendered bitmap whose direction is
+  fixed when the file is converted. Only EPUB has vertical layout
 - One direction per book (some books set their front matter horizontal and only the
   body vertical; CrossMosa uses a single direction throughout)
 - Images and `<hr>` rules take a whole page in vertical mode. Exception: images no larger

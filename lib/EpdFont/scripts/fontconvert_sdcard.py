@@ -613,10 +613,21 @@ def rasterize_font_style(fontfile, size, intervals, style_id=0, force_autohint=F
     # Invalid_Size_Handle on some fonts.
     face.set_char_size(size << 6, size << 6, 150, 150)
     ligature_glyph_indices = extract_ligature_glyph_indices_fonttools(fontfile)
-    fallback_face = None
+    # ⭐ 備援可以掛【一串】，用逗號分隔，依序查。
+    #    存在的理由（2026-09-11）：黑體那兩套需要【兩個】備援 ——
+    #    一個補罕用漢字（Noto Sans CJK TC），一個補拉丁擴充（Noto Sans 拉丁本尊）。
+    #    五套 CJK 字型帶的都是同一份【縮減】拉丁（0x100-0x24F 只有 53/336），
+    #    所以捷克文的 ř č、波蘭文的 ł、羅馬尼亞文的 ș 在裝置上**整個字形消失**
+    #    （不是方塊，是沒有）。官方線上轉檔工具那個欄位本來就是複數的。
+    #    ⚠️ 備援要挑【同風格】：Noto Sans TC → Noto Sans、Noto Serif TC → Noto Serif、
+    #       IBM Plex Sans TC → IBM Plex Sans、芫荽 → 霞鶩文楷（同為 Klee 系，
+    #       小寫 n 的前進量逐位數相同 0.588）。挑錯風格的症狀是「這個字忽然變成另一種字體」。
+    fallback_faces = []
     if fallback_fontfile:
-        fallback_face = freetype.Face(fallback_fontfile)
-        fallback_face.set_char_size(size << 6, size << 6, 150, 150)
+        for path in [q.strip() for q in str(fallback_fontfile).split(',') if q.strip()]:
+            fb = freetype.Face(path)
+            fb.set_char_size(size << 6, size << 6, 150, 150)
+            fallback_faces.append(fb)
 
     load_flags = freetype.FT_LOAD_RENDER
     if force_autohint:
@@ -629,11 +640,11 @@ def rasterize_font_style(fontfile, size, intervals, style_id=0, force_autohint=F
         if glyph_index > 0:
             face.load_glyph(glyph_index, load_flags)
             return face
-        if fallback_face:
-            fallback_glyph_index = fallback_face.get_char_index(code_point)
+        for fb in fallback_faces:
+            fallback_glyph_index = fb.get_char_index(code_point)
             if fallback_glyph_index > 0:
-                fallback_face.load_glyph(fallback_glyph_index, load_flags)
-                return fallback_face
+                fb.load_glyph(fallback_glyph_index, load_flags)
+                return fb
         return None
 
     # Validate intervals: remove codepoints not present in the font.
@@ -646,7 +657,7 @@ def rasterize_font_style(fontfile, size, intervals, style_id=0, force_autohint=F
         start = i_start
         for code_point in range(i_start, i_end + 1):
             has_primary = face.get_char_index(code_point) != 0 or code_point in ligature_glyph_indices
-            has_fallback = fallback_face and fallback_face.get_char_index(code_point) != 0
+            has_fallback = any(fb.get_char_index(code_point) != 0 for fb in fallback_faces)
             if not has_primary and not has_fallback:
                 if start < code_point:
                     validated_intervals.append((start, code_point - 1))
@@ -863,6 +874,7 @@ def generate_cpfont_multistyle(style_fonts, size, intervals, output_path,
 
     style_fonts: dict of {style_id: fontfile_path} e.g. {0: "Regular.ttf", 2: "Italic.ttf"}
     fallback_style_fonts: optional dict of {style_id: fallback_fontfile_path}
+        每個值可以是【逗號分隔的一串】路徑，依序查（見 convert_style 的註解）。
     """
     MAGIC = b"CPFONT\x00\x00"
     HEADER_SIZE = 32
@@ -992,13 +1004,17 @@ def main():
     parser.add_argument("--bolditalic", dest="font_bolditalic",
                         help="Font file for bold-italic style.")
     parser.add_argument("--fallback-regular", dest="fallback_regular",
-                        help="Fallback font file for regular style.")
+                        help="Fallback font file(s) for regular style. Comma-separated "
+                             "for a chain, tried in order (e.g. a CJK fallback plus a Latin one).")
     parser.add_argument("--fallback-bold", dest="fallback_bold",
-                        help="Fallback font file for bold style.")
+                        help="Fallback font file(s) for bold style. Comma-separated "
+                             "for a chain, tried in order (e.g. a CJK fallback plus a Latin one).")
     parser.add_argument("--fallback-italic", dest="fallback_italic",
-                        help="Fallback font file for italic style.")
+                        help="Fallback font file(s) for italic style. Comma-separated "
+                             "for a chain, tried in order (e.g. a CJK fallback plus a Latin one).")
     parser.add_argument("--fallback-bolditalic", dest="fallback_bolditalic",
-                        help="Fallback font file for bold-italic style.")
+                        help="Fallback font file(s) for bold-italic style. Comma-separated "
+                             "for a chain, tried in order (e.g. a CJK fallback plus a Latin one).")
 
     args = parser.parse_args()
 
