@@ -17,13 +17,11 @@ class EpubReaderMenuActivity final : public Activity {
     FOOTNOTES,
     TEXT_SETTINGS,
     GO_TO_PERCENT,
-    AUTO_PAGE_TURN,
     ROTATE_SCREEN,
     BOOKMARKS,
     TOGGLE_BOOKMARK,
     SCREENSHOT,
     DISPLAY_QR,
-    GO_HOME,
     DELETE_CACHE
   };
 
@@ -58,12 +56,10 @@ class EpubReaderMenuActivity final : public Activity {
   bool popupClosing = false;
   std::string title = "Reader Menu";
   uint8_t pendingOrientation = 0;
-  uint8_t selectedPageTurnOption = 0;
   const std::vector<StrId> clearCacheLabels = {StrId::STR_CLEAR_CACHE_KEEP_PROGRESS,
                                                StrId::STR_CLEAR_CACHE_RESET_PROGRESS};
   const std::vector<StrId> orientationLabels = {StrId::STR_PORTRAIT, StrId::STR_LANDSCAPE_CW, StrId::STR_INVERTED,
                                                 StrId::STR_LANDSCAPE_CCW};
-  const std::vector<const char*> pageTurnLabels = {I18N.get(StrId::STR_STATE_OFF), "1", "3", "6", "12"};
   int currentPage = 0;
   int totalPages = 0;
   int bookProgressPercent = 0;

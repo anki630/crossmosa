@@ -8,10 +8,13 @@
 #include <HalStorage.h>
 #include <JpegToBmpConverter.h>
 #include <Logging.h>
+#include <Memory.h>
 #include <PngToBmpConverter.h>
 #include <Utf8.h>
+#include <ZipEntryReader.h>
 #include <ZipFile.h>
 
+#include "Epub/converters/ReadAheadCore.h"
 #include "Epub/parsers/ContainerParser.h"
 #include "Epub/parsers/ContentOpfParser.h"
 #include "Epub/parsers/TocNavParser.h"
@@ -686,9 +689,29 @@ bool Epub::generateCoverBmp(bool cropped) const {
 std::string Epub::getThumbBmpPath() const { return cachePath + "/thumb_[HEIGHT].bmp"; }
 std::string Epub::getThumbBmpPath(int height) const { return cachePath + "/thumb_" + std::to_string(height) + ".bmp"; }
 
-bool Epub::generateThumbBmp(int height) const {
+namespace {
+// v258：主畫面縮圖直接從書裡串流解碼的來源（與閱讀器 v248 的 DecodeFile 同形：項目讀取器＋預讀層）。
+//   整包配在堆積上：ZipEntryReader 的 InflateStream 狀態很大，不能放在任務堆疊。
+struct ThumbZipSource {
+  ZipEntryReader zip;
+  ReadAheadCore<ZipEntryReader> ra;
+  std::unique_ptr<uint8_t[]> buf;
+};
+
+int32_t thumbZipRead(void* ctx, uint8_t* buf, int32_t len) {
+  if (len <= 0) return 0;
+  return static_cast<ThumbZipSource*>(ctx)->ra.read(buf, static_cast<size_t>(len));
+}
+
+bool thumbZipSeek(void* ctx, int32_t pos) { return static_cast<ThumbZipSource*>(ctx)->ra.seek(static_cast<size_t>(pos)); }
+}  // namespace
+
+bool Epub::generateThumbBmp(int height, const bool deferSdFallbackOnMemory) const {
   const auto thumbPath = getThumbBmpPath(height);
   thumbFailReason_ = "";  // v174：失敗原因給 src 端的 THUMBFAIL 診斷行（lib 不反向依賴 DiagLog）
+  thumbStats_ = ThumbStats{};
+  const uint32_t thumbT0 = millis();
+  const ScopedCleanup stampTotal{[this, thumbT0]() { thumbStats_.totalMs = millis() - thumbT0; }};
 
   // Already generated, return true.
   //
@@ -713,6 +736,7 @@ bool Epub::generateThumbBmp(int height) const {
     const bool coverKnown = bookMetadataCache && bookMetadataCache->isLoaded() &&
                             !bookMetadataCache->coreMetadata.coverItemHref.empty();
     if (!emptyMarker || !coverKnown) {
+      thumbStats_.src = "exists";
       return true;
     }
     LOG_DBG("EBP", "Stale empty thumb marker but a cover is now known; regenerating");
@@ -738,7 +762,116 @@ bool Epub::generateThumbBmp(int height) const {
     thumbFailReason_ = "no-cover-href";
   } else if (FsHelpers::hasJpgExtension(coverImageHref)) {
     LOG_DBG("EBP", "Generating thumb BMP from JPG cover image");
+    // Use smaller target size for Continue Reading card (half of screen: 240x400)
+    // Generate 1-bit BMP for fast home screen rendering (no gray passes needed)
+    const int THUMB_TARGET_WIDTH = (height * 2 + 1) / 3;  // v174：2:3（Kobo 1600×2400／紙本 6×9）；0.6 太瘦，標準封面左右各裁 5%
+    const int THUMB_TARGET_HEIGHT = height;
+
+    // v258（diag257：開過書回主畫面「載入中」6–8 秒）：原本先把封面整個抽到 SD 暫存檔再讀回來解碼
+    //   （v247 實機同一張 672KB 封面：抽＋寫 SD 約 2.7 秒、讀回 1.1 秒）。改成先試直接從書裡串流，
+    //   與閱讀器 v248 的圖片同一條讀取器。開不起來（記憶體）、讀檔出錯、或轉檔器因記憶體放棄 → 退回下面的舊路。
+    //   解碼器自己判定壞圖（不是 I/O、不是記憶體）就不退回：同一張圖從 SD 解也一樣壞，退回只是每次進主畫面做兩次。
+    //   codex（記憶體）：串流的峰值＝項目讀取器約 49KB（解壓狀態 8,364＋視窗 32,768＋讀取緩衝 ≤8KB）＋預讀（有餘裕才配）
+    //   ＋轉檔器的第一段門檻（v259 起縮圖路徑＝解碼器 20KB＋保留 16KB）。開之前先量：連這個都不夠就直接走舊路。
+    //   精確的需求要讀完 JPEG 檔頭才知道（轉檔器第二段門檻）；那一段沒過的代價只有開讀取器＋讀檔頭（約 0.1 秒）再退回。
+    //   v259：diag258 有一本在這裡沒過（當時門檻 109KB）→ 退回舊路 6.7 秒；檢查當下與開讀取器之後的數字都記進證人。
+    constexpr size_t kStreamPeakFree = 49 * 1024 + 36 * 1024;
+    constexpr size_t kStreamMinLargest = 40 * 1024;  // 32KB 解壓視窗要一整塊
+    const uint32_t zipT0 = millis();
+    const size_t preFree = heap_caps_get_free_size(MALLOC_CAP_DEFAULT);
+    const size_t preLargest = heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT);
+    thumbStats_.preFreeKb = static_cast<uint32_t>(preFree / 1024);
+    thumbStats_.preMaxKb = static_cast<uint32_t>(preLargest / 1024);
+    if (preFree < kStreamPeakFree || preLargest < kStreamMinLargest) {
+      thumbStats_.note = "mem-pre";
+    } else {
+      auto zs = makeUniqueNoThrow<ThumbZipSource>();
+      const uint32_t openT0 = millis();
+      const bool opened = zs && openItemReader(coverImageHref, zs->zip, 8 * 1024);
+      if (!opened) {
+        thumbStats_.note = "open";
+      } else if (zs->zip.size() > 0x7FFFFFFFu) {
+        // codex 第二輪：這種項目【不能】退回舊路（舊路會把它整個抽到 SD）。直接判失敗；轉檔器本來就只收 2048×3072 以內的圖。
+        thumbStats_.src = "zip";
+        thumbStats_.note = "size";
+        thumbFailReason_ = "jpg-too-big";
+        return false;
+      } else {
+        const size_t itemSize = zs->zip.size();
+        // 預讀緩衝：最多 16KB。同時看最大塊（留 32KB 給之後才配的解碼器緩衝）與總量（留 52KB＋8KB 給轉檔器的總量檢查）；
+        //   配不到就直讀（cap=0）。
+        constexpr size_t kMaxReadAhead = 16 * 1024;
+        constexpr size_t kMinReadAhead = 4 * 1024;
+        constexpr size_t kHeadroom = 32 * 1024;
+        constexpr size_t kConverterFree = 60 * 1024;
+        size_t cap = itemSize < kMaxReadAhead ? itemSize : kMaxReadAhead;
+        const size_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT);
+        const size_t freeNow = heap_caps_get_free_size(MALLOC_CAP_DEFAULT);
+        thumbStats_.openFreeKb = static_cast<uint32_t>(freeNow / 1024);
+        thumbStats_.openMaxKb = static_cast<uint32_t>(largest / 1024);
+        const size_t freeRoom = freeNow > kConverterFree ? freeNow - kConverterFree : 0;
+        while (cap > kMinReadAhead && (cap + kHeadroom > largest || cap > freeRoom)) cap /= 2;
+        if (cap + kHeadroom > largest || cap > freeRoom) cap = 0;
+        if (cap > 0) {
+          zs->buf = makeUniqueNoThrow<uint8_t[]>(cap);
+          if (!zs->buf) cap = 0;
+        }
+        zs->ra.attach(&zs->zip, itemSize, zs->buf.get(), cap);
+        thumbStats_.openMs = millis() - openT0;
+        thumbStats_.itemBytes = static_cast<uint32_t>(itemSize);
+        thumbStats_.readAheadKb = static_cast<uint32_t>(cap / 1024);
+
+        HalFile thumbBmp;
+        if (!Storage.openFileForWrite("EBP", thumbPath, thumbBmp)) {
+          thumbFailReason_ = "jpg-thumb-open";
+          return false;
+        }
+        JpegToBmpConverter::Source source;
+        source.ctx = zs.get();
+        source.read = &thumbZipRead;
+        source.seek = &thumbZipSeek;
+        source.size = static_cast<int32_t>(itemSize);
+        const uint32_t convT0 = millis();
+        thumbStats_.converted = true;
+        bool success = JpegToBmpConverter::jpegSourceTo1BitBmpStreamWithSize(source, thumbBmp, THUMB_TARGET_WIDTH,
+                                                                             THUMB_TARGET_HEIGHT);
+        // 解碼器常在 EOI 就停：把項目剩下的部分解完，確認沒有截斷、沒有讀錯（同 v248 verifyActiveDecodeSourceComplete）。
+        const bool ioError = zs->ra.hadError() || zs->zip.hadError() || (success && !zs->zip.verifyComplete());
+        if (ioError) success = false;
+        thumbStats_.convMs = millis() - convT0;
+        thumbStats_.restarts = zs->zip.restarts();
+        thumbBmp.close();
+        thumbStats_.zipMs = millis() - zipT0;
+        if (success) {
+          thumbStats_.src = "zip";
+          return true;
+        }
+        Storage.remove(thumbPath.c_str());
+        // codex：不要從錯誤字串推「是不是記憶體」—— 轉檔器每個配置出口都會標 memFail。
+        const bool memError = JpegToBmpConverter::lastInfo().memFail;
+        if (!ioError && !memError) {
+          LOG_ERR("EBP", "Failed to generate thumb BMP from streamed JPG cover image");
+          thumbStats_.src = "zip";
+          thumbFailReason_ = "jpg-convert";
+          return false;
+        }
+        thumbStats_.note = ioError ? "io" : "mem";
+      }
+    }  // zs 在這裡釋放（約 50KB），舊路才有記憶體
+    thumbStats_.zipMs = millis() - zipT0;
+    thumbStats_.converted = false;
+    // v261：記憶體類的串流失敗先交回呼叫端（卸字型後重試串流），不直接走 4–6 秒的舊路。
+    if (deferSdFallbackOnMemory && (strcmp(thumbStats_.note, "mem-pre") == 0 || strcmp(thumbStats_.note, "mem") == 0 ||
+                                    strcmp(thumbStats_.note, "open") == 0)) {
+      thumbStats_.src = "zip";
+      thumbStats_.deferredForMemory = true;
+      thumbFailReason_ = "stream-mem-deferred";
+      return false;
+    }
+
     const auto coverJpgTempPath = getCachePath() + "/.cover.jpg";
+    thumbStats_.src = "sd";
+    const uint32_t extractT0 = millis();
 
     HalFile coverJpg;
     if (!Storage.openFileForWrite("EBP", coverJpgTempPath, coverJpg)) {
@@ -747,6 +880,7 @@ bool Epub::generateThumbBmp(int height) const {
     readItemContentsToStream(coverImageHref, coverJpg, 1024);
     // Explicitly close() file before reopening for reading
     coverJpg.close();
+    thumbStats_.openMs = millis() - extractT0;
 
     if (!Storage.openFileForRead("EBP", coverJpgTempPath, coverJpg)) {
       thumbFailReason_ = "jpg-tmp-read";
@@ -758,12 +892,12 @@ bool Epub::generateThumbBmp(int height) const {
       thumbFailReason_ = "jpg-thumb-open";
       return false;
     }
-    // Use smaller target size for Continue Reading card (half of screen: 240x400)
-    // Generate 1-bit BMP for fast home screen rendering (no gray passes needed)
-    int THUMB_TARGET_WIDTH = (height * 2 + 1) / 3;  // v174：2:3（Kobo 1600×2400／紙本 6×9）；0.6 太瘦，標準封面左右各裁 5%
-    int THUMB_TARGET_HEIGHT = height;
+    thumbStats_.itemBytes = static_cast<uint32_t>(coverJpg.size());
+    const uint32_t convT0 = millis();
+    thumbStats_.converted = true;
     const bool success = JpegToBmpConverter::jpegFileTo1BitBmpStreamWithSize(coverJpg, thumbBmp, THUMB_TARGET_WIDTH,
                                                                              THUMB_TARGET_HEIGHT);
+    thumbStats_.convMs = millis() - convT0;
     // Explicitly close() files before calling Storage.remove()
     coverJpg.close();
     thumbBmp.close();
@@ -778,6 +912,7 @@ bool Epub::generateThumbBmp(int height) const {
     return success;
   } else if (FsHelpers::hasPngExtension(coverImageHref)) {
     LOG_DBG("EBP", "Generating thumb BMP from PNG cover image");
+    thumbStats_.src = "png";  // v258：PNG 照舊抽到 SD 再解（PNG 沒有 DCT 縮放可用）
     const auto coverPngTempPath = getCachePath() + "/.cover.png";
 
     HalFile coverPng;
@@ -868,6 +1003,12 @@ bool Epub::extractItemToFile(const std::string& itemHref, const std::string& des
     Storage.remove(destPath.c_str());
   }
   return ok;
+}
+
+bool Epub::openItemReader(const std::string& itemHref, ZipEntryReader& reader, const size_t readBufSize) const {
+  if (itemHref.empty()) return false;
+  const std::string path = FsHelpers::normalisePath(itemHref);
+  return reader.open(filepath, path.c_str(), readBufSize);
 }
 
 bool Epub::getItemSize(const std::string& itemHref, size_t* size) const {

@@ -15,7 +15,7 @@ struct PreviewKey {
   int fontPointSize = -1;
   int screenMargin = -1;
   int textWidth = -1;
-  float lineCompression = -1.0f;
+  float lineHeightEm = -1.0f;  // v284：存【解析後的行距像素】，不是設定值（同 WarmIdentity 的理由）
   uint8_t alignment = 0xFF;
   bool extraParagraphSpacing = false;
   bool focusReading = false;

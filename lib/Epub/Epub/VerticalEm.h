@@ -25,19 +25,8 @@ namespace vtext {
 //
 // → 備援鏈：SD 的逐碼位快路徑 → `getTextAdvanceX`（**會走 fontMap，內建字型有效**）
 //   → U+4E00「一」（任何中文字型都有）。回傳 12.4 定點；<= 16 表示量不到。
-inline int32_t probeEmFP(const GfxRenderer& renderer, const int fontId) {
-  for (const uint32_t cp : {static_cast<uint32_t>(EM_PROBE_CODEPOINT), static_cast<uint32_t>(0x4E00u)}) {
-    const int32_t fast = renderer.getCodepointAdvanceFP(fontId, cp, EpdFontFamily::REGULAR);
-    if (fast > 16) return fast;
-    // U+3000 與 U+4E00 都在 BMP，三位元組編碼。
-    char utf8[4] = {0};
-    utf8[0] = static_cast<char>(0xE0 | (cp >> 12));
-    utf8[1] = static_cast<char>(0x80 | ((cp >> 6) & 0x3F));
-    utf8[2] = static_cast<char>(0x80 | (cp & 0x3F));
-    const int px = renderer.getTextAdvanceX(fontId, utf8, EpdFontFamily::REGULAR);
-    if (px > 1) return px * 16;
-  }
-  return 0;
-}
+// v284：本體已移進 GfxRenderer（`probeEmFP`），因為**橫排的行距也要用同一個字身框**——
+// 兩軸各留一份實作遲早會漂移。這裡保留薄包裝，讓既有呼叫點與桌面的 vertical-oracle 不必改。
+inline int32_t probeEmFP(const GfxRenderer& renderer, const int fontId) { return renderer.probeEmFP(fontId); }
 
 }  // namespace vtext

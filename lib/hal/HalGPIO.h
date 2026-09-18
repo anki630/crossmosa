@@ -45,6 +45,12 @@ class HalGPIO {
 
   bool lastUsbConnected = false;
   bool usbStateChanged = false;
+  // v252：忙碌期間輪詢（pollDuringBusyWork）接到、還沒交出去的事件；下一次 update() 合併進來、只出現那一圈。
+  uint8_t pendingPressed_ = 0;
+  uint8_t pendingReleased_ = 0;
+  bool pendingUsbChanged_ = false;
+  uint8_t mergedPressed_ = 0;
+  uint8_t mergedReleased_ = 0;
 
  public:
   enum class DeviceType : uint8_t { X4, X3 };
@@ -68,6 +74,12 @@ class HalGPIO {
 
   // Button input methods
   void update();
+  // v252：主任務長時間忙碌（背景排版一步 0.3–0.8 秒）時，在工作中途呼叫，推進按鍵去彈跳狀態機，
+  //   事件【先存起來】，下一次 update() 才合併進 wasPressed／wasReleased／wasUsbStateChanged ——
+  //   主迴圈的電源鍵、USB、休眠計時都在 activity loop【之前】讀事件，同一圈交出去它們會漏看、交兩次會重複處理。
+  //   持續呼叫讓按下／放開的時間戳準確（getHeldTime 不會把短按灌成長按）。只能在主任務呼叫（同 update()）。
+  void pollDuringBusyWork();
+  bool hasPendingInput() const { return pendingPressed_ != 0 || pendingReleased_ != 0 || pendingUsbChanged_; }
   bool isPressed(uint8_t buttonIndex) const;
   bool wasPressed(uint8_t buttonIndex) const;
   bool wasAnyPressed() const;

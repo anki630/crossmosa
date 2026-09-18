@@ -65,13 +65,19 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
   // heap 39024<53248）。同 v5 連線前卸載：地板以下先卸字型，下次進閱讀器 ensureLoaded 自動重載。
   // 只在真的有縮圖要產時做一次（否則每次回主畫面都卸＝每次進書都重載）。
   bool reliefChecked = false;
+  bool fontsUnloaded = false;  // v261：這一輪已經卸過字型（重試串流前不必再卸）
   auto reliefIfLow = [&]() {
     if (reliefChecked) return;
     reliefChecked = true;
     const size_t freeNow = heap_caps_get_free_size(MALLOC_CAP_DEFAULT);
-    if (freeNow < 72 * 1024) {
-      DiagLog::line("THUMBRELIEF free=%u", static_cast<unsigned>(freeNow));
+    const size_t largestNow = heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT);
+    // v260：門檻 72K → 100K 並看最大塊。diag259：一次 free=78K 沒卸字型（>72K），而縮圖直接串流開始前要 85K
+    //   （讀取器 49K＋轉換器入口 36K）、最大塊 40K → 退回抽到 SD，9.1 秒。另外 7 次都是 71–73K 觸發卸載後有 110K。
+    //   卸載的代價：下次進閱讀器 ensureLoaded 重載（FONTLOAD why=ensure），而且只在「真的有縮圖要產」時才會走到這裡。
+    if (freeNow < 100 * 1024 || largestNow < 40 * 1024) {
+      DiagLog::line("THUMBRELIEF free=%u max=%u", static_cast<unsigned>(freeNow), static_cast<unsigned>(largestNow));
       sdFontSystem.unloadForLowMemory(renderer);
+      fontsUnloaded = true;
     }
   };
 
@@ -114,7 +120,43 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
             // 每動一格還多付一次 e-ink 部分刷新。文字一樣有告知效果，畫面安靜得多。
             GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
           }
-          bool success = epub.generateThumbBmp(coverHeight);
+          bool success = epub.generateThumbBmp(coverHeight, !fontsUnloaded);
+          // v258：縮圖走哪條路、各段多久（diag257 開過書回主畫面 6–8 秒，當時沒有分段證人）。
+          //   ms＝整個 generateThumbBmp；open＝zip 開讀取器或 sd 抽檔；conv＝轉檔器整段；dec＝其中 JPEGDEC 解碼（含讀取）。
+          //   幾何：原圖/縮放分母>解出的格子>輸出。note＝串流退回 SD 的原因（open／io／mem）。
+          //   沒走到解碼（例如沒開過的書 cache-missing）不印，那種情況已有 THUMBFAIL。
+          const auto logThumbGen = [&](const bool ok) {
+          if (strcmp(epub.thumbStats().src, "none") != 0 && strcmp(epub.thumbStats().src, "exists") != 0) {
+            const Epub::ThumbStats& ts = epub.thumbStats();
+            const bool jpg = ts.converted;  // 幾何只在這一次真的呼叫過 JPEG 轉檔器時才屬於這本書
+            const JpegToBmpConverter::Info& ji = JpegToBmpConverter::lastInfo();
+            DiagLog::line("THUMBGEN ok=%u h=%d src=%s note=%s fr=%uK mx=%uK ofr=%uK omx=%uK need=%uK err=%s ms=%u zip=%u open=%u "
+                          "conv=%u dec=%u %ux%u/%u>%ux%u>%ux%u prog=%u item=%uKB ra=%u rs=%u %s",
+                          ok ? 1u : 0u, coverHeight, ts.src, ts.note[0] ? ts.note : "-",
+                          static_cast<unsigned>(ts.preFreeKb), static_cast<unsigned>(ts.preMaxKb),
+                          static_cast<unsigned>(ts.openFreeKb), static_cast<unsigned>(ts.openMaxKb),
+                          jpg ? static_cast<unsigned>(JpegToBmpConverter::lastInfo().needBytes / 1024) : 0u,
+                          jpg && JpegToBmpConverter::lastError()[0] ? JpegToBmpConverter::lastError() : "-",
+                          static_cast<unsigned>(ts.totalMs), static_cast<unsigned>(ts.zipMs), static_cast<unsigned>(ts.openMs),
+                          static_cast<unsigned>(ts.convMs), jpg ? static_cast<unsigned>(ji.decodeMs) : 0u,
+                          jpg ? ji.srcW : 0u, jpg ? ji.srcH : 0u, jpg ? ji.scale : 0u, jpg ? ji.decW : 0u,
+                          jpg ? ji.decH : 0u, jpg ? ji.outW : 0u, jpg ? ji.outH : 0u, jpg && ji.progressive ? 1u : 0u,
+                          static_cast<unsigned>((ts.itemBytes + 512) / 1024), static_cast<unsigned>(ts.readAheadKb),
+                          static_cast<unsigned>(ts.restarts), book.path.c_str());
+          }
+          };
+          logThumbGen(success);
+          // v261：串流因記憶體失敗、而這一輪還沒卸過字型 → 卸字型、重試一次串流（重試時才允許退回抽到 SD）。
+          //   diag260：某本含大張封面的書 fr=99K（剛好沒觸發卸載門檻）→ 開讀取器後差約 1KB → 退回舊路 5.3 秒。
+          if (!success && epub.thumbStats().deferredForMemory) {
+            DiagLog::line("THUMBRELIEF retry free=%u max=%u", static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_DEFAULT)),
+                          static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT)));
+            sdFontSystem.unloadForLowMemory(renderer);
+            fontsUnloaded = true;
+            reliefChecked = true;
+            success = epub.generateThumbBmp(coverHeight, false);
+            logThumbGen(success);
+          }
           if (!success) {
             // v165（A-20）：【不要】抹掉 store 裡的封面路徑。失敗多半是暫時的
             // （記憶體緊、SD 忙），抹掉= 永久負快取，之後任何主題都不再嘗試——
@@ -224,14 +266,8 @@ void HomeActivity::freeCoverBuffer() {
 
 void HomeActivity::loop() {
   // v194：封面抖動／檔柄配置失敗的證人（閱讀器不在場時也要收）。
-  if (HalStorage::lastAllocFail[0] != '\0') {
-    DiagLog::line("ALLOCFAIL %s", HalStorage::lastAllocFail);
-    HalStorage::lastAllocFail[0] = '\0';
-  }
-  if (ditherLastAllocFail[0] != '\0') {
-    DiagLog::line("ALLOCFAIL %s", ditherLastAllocFail);
-    ditherLastAllocFail[0] = '\0';
-  }
+  DiagLog::crumb("ALLOCFAIL", HalStorage::lastAllocFail, sizeof(HalStorage::lastAllocFail));
+  DiagLog::crumb("ALLOCFAIL", ditherLastAllocFail, sizeof(ditherLastAllocFail));
   const int menuCount = getMenuItemCount();
   const auto& metrics = UITheme::getInstance().getMetrics();
 
@@ -370,9 +406,12 @@ void HomeActivity::render(RenderLock&&) {
                           std::bind(&HomeActivity::storeCoverBuffer, this));
 
   // Build menu items dynamically
-  std::vector<const char*> menuItems = {tr(STR_BROWSE_FILES), tr(STR_MENU_RECENT_BOOKS), tr(STR_FILE_TRANSFER),
+  // v275：「最近閱讀比瀏覽檔案更常用」→ 最近閱讀排第一。
+  // ⚠️ 順序寫在**三個**地方：這裡、`menuItemToIndex`、`indexToMenuItem`（HomeActivity.h）。
+  //    只改這裡會讓按下去跑到隔壁那一項（教訓：條目與處理常式必須一起搬）。
+  std::vector<const char*> menuItems = {tr(STR_MENU_RECENT_BOOKS), tr(STR_BROWSE_FILES), tr(STR_FILE_TRANSFER),
                                         tr(STR_SETTINGS_TITLE)};
-  std::vector<UIIcon> menuIcons = {Folder, Recent, Transfer, Settings};
+  std::vector<UIIcon> menuIcons = {Recent, Folder, Transfer, Settings};
 
   if (hasOpdsServers) {
     menuItems.insert(menuItems.begin() + 2, tr(STR_OPDS_BROWSER));

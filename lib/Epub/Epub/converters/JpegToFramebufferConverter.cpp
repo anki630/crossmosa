@@ -13,13 +13,14 @@
 
 #include "DirectPixelWriter.h"
 #include "DitherUtils.h"
+#include "DecodeFile.h"
 #include "PixelCache.h"
 
 namespace {
 
 // Context struct passed through JPEGDEC callbacks to avoid global mutable state.
 // The draw callback receives this via pDraw->pUser (set by setUserPointer()).
-// The file I/O callbacks receive the HalFile* via pFile->fHandle (set by jpegOpen()).
+// The file I/O callbacks receive the DecodeFile* via pFile->fHandle (set by jpegOpen()).
 struct JpegContext {
   GfxRenderer* renderer{nullptr};
   const RenderConfig* config{nullptr};
@@ -35,6 +36,7 @@ struct JpegContext {
   int dstHeight{0};
 
   uint32_t lastYieldMs{0};  // yieldDuringDecode() 的節流狀態
+  bool inputAborted{false};  // v260：回呼因按鍵中止解碼
 
   // Fine scale in 16.16 fixed-point (ESP32-C3 has no FPU).
   // X and Y axes use separate scale factors: the aspect ratio of the output (dstWidth/dstHeight)
@@ -50,49 +52,39 @@ struct JpegContext {
   bool caching{false};
 };
 
-// File I/O callbacks use pFile->fHandle to access the HalFile*,
+// File I/O callbacks use pFile->fHandle to access the DecodeFile* (HalFile ＋ v247 預讀緩衝),
 // avoiding the need for global file state.
-void* jpegOpen(const char* filename, int32_t* size) {
-  // v194：throwing new HalFile 在 -fno-exceptions 下 OOM 會 abort。失敗不呼叫 close()。
-  HalFile* f = new (std::nothrow) HalFile();
-  if (!f) {
-    HalStorage::noteAllocFail("HalFile:jpegOpen", sizeof(HalFile));
-    return nullptr;
-  }
-  // v194：HalStorage 已有 const char* 多載。std::string(filename) 在 nothrow 守衛之後仍會 abort。
-  if (!Storage.openFileForRead("JPG", filename, *f)) {
-    delete f;
-    return nullptr;
-  }
-  *size = f->size();
-  return f;
-}
+void* jpegOpen(const char* filename, int32_t* size) { return openDecodeFile("JPG", filename, size); }
 
-void jpegClose(void* handle) {
-  HalFile* f = reinterpret_cast<HalFile*>(handle);
-  if (f) {
-    f->close();
-    delete f;
-  }
-}
+void jpegClose(void* handle) { closeDecodeFile(handle); }
 
 // JPEGDEC tracks file position via pFile->iPos internally (e.g. JPEGGetMoreData
 // checks iPos < iSize to decide whether more data is available). The callbacks
 // MUST maintain iPos to match the actual file position, otherwise progressive
 // JPEGs with large headers fail during parsing.
 int32_t jpegRead(JPEGFILE* pFile, uint8_t* pBuf, int32_t len) {
-  HalFile* f = reinterpret_cast<HalFile*>(pFile->fHandle);
-  if (!f) return 0;
-  int32_t bytesRead = f->read(pBuf, len);
+  auto* d = static_cast<DecodeFile*>(pFile->fHandle);
+  if (!d || len <= 0) return 0;
+  int32_t bytesRead;
+  {
+    DecodeStatTimer t(g_decodeStats.readUs);  // v246 儀器
+    bytesRead = d->read(pBuf, static_cast<size_t>(len));
+  }
+  if (d->hadError()) g_decodeStats.ioError = 1;
+  g_decodeStats.readCalls++;
+  if (bytesRead > 0) g_decodeStats.readBytes += static_cast<uint32_t>(bytesRead);
   if (bytesRead < 0) return 0;
   pFile->iPos += bytesRead;
   return bytesRead;
 }
 
 int32_t jpegSeek(JPEGFILE* pFile, int32_t pos) {
-  HalFile* f = reinterpret_cast<HalFile*>(pFile->fHandle);
-  if (!f) return -1;
-  if (!f->seek(pos)) return -1;
+  auto* d = static_cast<DecodeFile*>(pFile->fHandle);
+  if (!d || pos < 0) return -1;
+  if (!d->seek(static_cast<size_t>(pos))) {
+    if (d->hadError()) g_decodeStats.ioError = 1;
+    return -1;
+  }
   pFile->iPos = pos;
   return pos;
 }
@@ -131,6 +123,11 @@ int jpegDrawCallback(JPEGDRAW* pDraw) {
   if (!ctx || !ctx->config || !ctx->renderer) return 0;
 
   ImageToFramebufferDecoder::yieldDuringDecode(ctx->lastYieldMs);
+  // v260：使用者按了鍵（只有閱讀器補圖那一遍會 arm）→ 回 0 讓 JPEGDEC 停下。
+  if (ImageToFramebufferDecoder::inputAbortRequested()) {
+    ctx->inputAborted = true;
+    return 0;
+  }
 
   // In EIGHT_BIT_GRAYSCALE mode, pPixels contains 8-bit grayscale values
   // Buffer is densely packed: stride = pDraw->iWidth, valid columns = pDraw->iWidthUsed
@@ -446,7 +443,8 @@ bool JpegToFramebufferConverter::decodeToFramebuffer(const std::string& imagePat
   std::unique_ptr<JPEGDEC> jpeg(new (std::nothrow) JPEGDEC());
   if (!jpeg) {
     LOG_ERR("JPG", "Failed to allocate JPEG decoder");
-    setLastError(true, "jpg-alloc-decoder");
+    setLastError(true, "jpg-alloc-decoder %u", static_cast<unsigned>(sizeof(JPEGDEC)));
+    lastErrorNeedBytes = static_cast<uint32_t>(sizeof(JPEGDEC));  // v255
     return false;
   }
 
@@ -456,6 +454,8 @@ bool JpegToFramebufferConverter::decodeToFramebuffer(const std::string& imagePat
   ctx.screenWidth = renderer.getScreenWidth();
   ctx.screenHeight = renderer.getScreenHeight();
 
+  g_decodeStats.fmt = 'J';
+  const uint32_t setupStartUs = static_cast<uint32_t>(micros());  // v246 儀器：open → cache.begin
   int rc = jpeg->open(imagePath.c_str(), jpegOpen, jpegClose, jpegRead, jpegSeek, jpegDrawCallback);
   const ScopedCleanup cleanup{[&jpeg]() { jpeg->close(); }};
   if (rc != 1) {
@@ -536,19 +536,58 @@ bool JpegToFramebufferConverter::decodeToFramebuffer(const std::string& imagePat
   if (ctx.caching) {
     const int maxBlockDstRows = (int)(((int64_t)16 * ctx.fineScaleFPY) >> FP_SHIFT) + 2;
     if (!ctx.cache.begin(config.cachePath, destWidth, destHeight, config.x, config.y, maxBlockDstRows)) {
+      // v248：直接從書裡讀時（inflate 約 43KB 佔著）配不到快取帶 → 不准「沒快取硬解」（每一趟灰階都會重解一次），
+      //   回報暫時失敗，讓 ImageBlock 退回「抽到 SD 再解」那條舊路（那時 inflate 已經放掉了）。
+      if (g_decodeStats.streamed) {
+        setLastError(true, "stream-nocache");
+        return false;
+      }
       LOG_ERR("JPG", "Failed to start cache stream, continuing without caching");
       ctx.caching = false;
     }
   }
 
+  g_decodeStats.setupUs += static_cast<uint32_t>(micros()) - setupStartUs;
+  g_decodeStats.srcW = static_cast<uint16_t>(srcWidth);
+  g_decodeStats.srcH = static_cast<uint16_t>(srcHeight);
+  g_decodeStats.dstW = static_cast<uint16_t>(destWidth);
+  g_decodeStats.dstH = static_cast<uint16_t>(destHeight);
+  g_decodeStats.scaleDenom = static_cast<uint8_t>(jpegScaleDenom);
+  g_decodeStats.progressive = isProgressive ? 1 : 0;
+
   unsigned long decodeStart = millis();
   ctx.lastYieldMs = decodeStart;
-  rc = jpeg->decode(0, 0, jpegScaleOption);
+  {
+    DecodeStatTimer t(g_decodeStats.decodeUs);  // v246 儀器
+    rc = jpeg->decode(0, 0, jpegScaleOption);
+  }
   unsigned long decodeTime = millis() - decodeStart;
+
+  // v260：按鍵中止 —— 不是失敗。半截快取丟掉（下次整張重解），暫時性、呼叫端看 lastDecodeAborted。
+  if (ctx.inputAborted) {
+    setLastError(true, "aborted-input");
+    lastDecodeAborted = true;
+    if (ctx.caching) ctx.cache.abort();
+    return false;
+  }
 
   if (rc != 1) {
     LOG_ERR("JPG", "Decode failed (rc=%d, lastError=%d)", rc, jpeg->getLastError());
     setLastError(false, "jpg-decode rc=%d err=%d", rc, jpeg->getLastError());
+    if (ctx.caching) ctx.cache.abort();
+    return false;
+  }
+  // v247：讀檔出過錯時 JPEGDEC 可能把它當成檔尾、畫出殘缺的圖 —— 不准寫進永久快取，當暫時失敗下次重試。
+  if (g_decodeStats.ioError) {
+    LOG_ERR("JPG", "I/O error during decode, dropping cache: %s", imagePath.c_str());
+    setLastError(true, "jpg-io");
+    if (ctx.caching) ctx.cache.abort();
+    return false;
+  }
+  // v248（codex 複查）：直接從書裡讀時，解碼器在 EOI 就停 —— 截斷、多出資料、解壓錯誤可能沒被看到。寫出快取前驗完整。
+  if (!verifyActiveDecodeSourceComplete()) {
+    LOG_ERR("JPG", "Streamed source incomplete/corrupt, dropping cache: %s", imagePath.c_str());
+    setLastError(true, "stream-verify");
     if (ctx.caching) ctx.cache.abort();
     return false;
   }
@@ -558,6 +597,7 @@ bool JpegToFramebufferConverter::decodeToFramebuffer(const std::string& imagePat
   // Finalize the streamed cache file. Note: a flush failure mid-decode clears
   // ctx.caching (the partial file is dropped), so re-read the flag here.
   if (ctx.caching) {
+    DecodeStatTimer t(g_decodeStats.finalizeUs);  // v246 儀器
     ctx.cache.finalize();
   }
 

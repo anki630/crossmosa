@@ -1,6 +1,7 @@
 #include "BitmapHelpers.h"
 
 #include <Arduino.h>
+#include <Breadcrumb.h>
 #include <Logging.h>
 
 #include <cstdint>
@@ -15,9 +16,11 @@ void noteDitherAllocFail(const char* where, size_t bytes) {
   // v194：沒有序列埠＝寫進 lastAllocFail，否則 LOG_ERR 等於丟掉。
   LOG_ERR("DTH", "ALLOCFAIL where=%s bytes=%u max=%u", where, static_cast<unsigned>(bytes),
           static_cast<unsigned>(ESP.getMaxAllocHeap()));
-  if (ditherLastAllocFail[0] != '\0') return;
-  snprintf(ditherLastAllocFail, sizeof(ditherLastAllocFail), "where=%s bytes=%u max=%u", where,
-           static_cast<unsigned>(bytes), static_cast<unsigned>(ESP.getMaxAllocHeap()));
+  if (breadcrumbPending(ditherLastAllocFail)) return;
+  char line[sizeof(ditherLastAllocFail)];
+  snprintf(line, sizeof(line), "where=%s bytes=%u max=%u", where, static_cast<unsigned>(bytes),
+           static_cast<unsigned>(ESP.getMaxAllocHeap()));
+  breadcrumbPublish(ditherLastAllocFail, sizeof(ditherLastAllocFail), line);  // v249：跨 task 交接（見 Breadcrumb.h）
 }
 
 // Brightness/Contrast adjustments:

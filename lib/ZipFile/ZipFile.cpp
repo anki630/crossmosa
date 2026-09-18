@@ -1,10 +1,15 @@
 #include "ZipFile.h"
 
 #include <HalStorage.h>
+#include <Arduino.h>
 #include <InflateStream.h>
 #include <Logging.h>
 
 #include <algorithm>
+
+#if defined(ESP_PLATFORM)
+#include <esp_heap_caps.h>
+#endif
 
 struct ZipInflateCtx {
   HalFile* file = nullptr;
@@ -39,12 +44,37 @@ class ScopedOpenClose final {
   bool ok = true;  // true when zip was already open (no open() call needed)
 };
 
+// v251：抽圖（readFileToStream）失敗的證人 —— 與 ZipEntryReader 共用 g_zipStreamStats.openFailStage／openFailMax，
+// 由 ImageBlock 印在 IMGFAIL render-extract 那一行。必須在釋放任何東西之前呼叫（量的是失敗當下）。
+// 步驟：2 開 zip 3 找項目 4 資料偏移 5 方法不支援 6 跳位 7 inflate 狀態／視窗 8 讀取緩衝 9 輸出緩衝 10 讀不到 11 寫不進 12 大小不符 13 解壓錯誤
+void noteExtractFail(const uint8_t stage) {
+  if (g_zipStreamStats.openFailStage != 0) return;  // 先到先得
+  g_zipStreamStats.openFailStage = stage;
+#if defined(ESP_PLATFORM)
+  g_zipStreamStats.openFailMax = heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT);
+#endif
+}
+
+// v251：緩衝配不到就減半到 1KB（只影響一次讀寫多少，不影響正確性）。*size 回傳實際大小。
+// 小於 1KB 的請求照原樣配（codex：不要替呼叫端放大，例如只探檔頭的呼叫）。
+uint8_t* mallocLadder(size_t* size) {
+  const size_t kMin = *size < 1024 ? (*size > 0 ? *size : 1) : 1024;
+  for (;;) {
+    if (auto* p = static_cast<uint8_t*>(malloc(*size))) return p;
+    if (*size == kMin) return nullptr;
+    *size = *size / 2 > kMin ? *size / 2 : kMin;
+  }
+}
+
 size_t zipFillCallback(void* vctx, const uint8_t** data) {
   auto* ctx = static_cast<ZipInflateCtx*>(vctx);
   if (ctx->fileRemaining == 0) return 0;
 
   const size_t toRead = ctx->fileRemaining < ctx->readBufSize ? ctx->fileRemaining : ctx->readBufSize;
+  const uint32_t t0 = static_cast<uint32_t>(micros());  // v247 儀器
   const size_t bytesRead = ctx->file->read(ctx->readBuf, toRead);
+  g_zipStreamStats.readUs += static_cast<uint32_t>(micros()) - t0;
+  g_zipStreamStats.readBytes += static_cast<uint32_t>(bytesRead);
   ctx->fileRemaining -= bytesRead;
 
   *data = ctx->readBuf;
@@ -438,39 +468,67 @@ uint8_t* ZipFile::readFileToMemory(const char* filename, size_t* size, const boo
 }
 
 bool ZipFile::readFileToStream(const char* filename, Print& out, const size_t chunkSize, const bool allowEarlyStop) {
+  g_zipStreamStats = ZipStreamStats{};
+  const uint32_t setupStartUs = static_cast<uint32_t>(micros());  // v247 儀器
   const ScopedOpenClose zip{*this};
-  if (!zip) return false;
+  if (!zip) {
+    noteExtractFail(2);
+    return false;
+  }
 
   FileStatSlim fileStat = {};
-  if (!loadFileStatSlim(filename, &fileStat)) return false;
+  if (!loadFileStatSlim(filename, &fileStat)) {
+    noteExtractFail(3);
+    return false;
+  }
 
   const long fileOffset = getDataOffset(fileStat);
-  if (fileOffset < 0) return false;
+  if (fileOffset < 0) {
+    noteExtractFail(4);
+    return false;
+  }
 
-  file.seek(fileOffset);
+  if (!file.seek(fileOffset)) {  // v251：原本沒檢查
+    noteExtractFail(6);
+    return false;
+  }
   const auto deflatedDataSize = fileStat.compressedSize;
   const auto inflatedDataSize = fileStat.uncompressedSize;
+  g_zipStreamStats.setupUs = static_cast<uint32_t>(micros()) - setupStartUs;
+  g_zipStreamStats.method = fileStat.method;
+  g_zipStreamStats.compressed = fileStat.compressedSize;
+  g_zipStreamStats.uncompressed = fileStat.uncompressedSize;
 
   if (fileStat.method == ZIP_METHOD_STORED) {
     // no deflation, just read content
-    const auto buffer = static_cast<uint8_t*>(malloc(chunkSize));
+    size_t bufSize = chunkSize;
+    const auto buffer = mallocLadder(&bufSize);  // v251：配不到減半
     if (!buffer) {
+      noteExtractFail(8);
       LOG_ERR("ZIP", "Failed to allocate memory for buffer");
       return false;
     }
 
     size_t remaining = inflatedDataSize;
     while (remaining > 0) {
-      const size_t dataRead = file.read(buffer, remaining < chunkSize ? remaining : chunkSize);
+      const uint32_t tr = static_cast<uint32_t>(micros());  // v247 儀器
+      const size_t dataRead = file.read(buffer, remaining < bufSize ? remaining : bufSize);
+      g_zipStreamStats.readUs += static_cast<uint32_t>(micros()) - tr;
+      g_zipStreamStats.readBytes += static_cast<uint32_t>(dataRead);
       if (dataRead == 0) {
+        noteExtractFail(10);
         LOG_ERR("ZIP", "Could not read more bytes");
         free(buffer);
         return false;
       }
 
-      if (out.write(buffer, dataRead) != dataRead) {
+      const uint32_t tw = static_cast<uint32_t>(micros());  // v247 儀器
+      const size_t wrote = out.write(buffer, dataRead);
+      g_zipStreamStats.writeUs += static_cast<uint32_t>(micros()) - tw;
+      if (wrote != dataRead) {
         free(buffer);
         if (allowEarlyStop) return true;  // sink has what it needs
+        noteExtractFail(11);
         LOG_ERR("ZIP", "Failed to write all output bytes to stream");
         return false;
       }
@@ -482,14 +540,29 @@ bool ZipFile::readFileToStream(const char* filename, Print& out, const size_t ch
   }
 
   if (fileStat.method == ZIP_METHOD_DEFLATED) {
-    auto* fileReadBuffer = static_cast<uint8_t*>(malloc(chunkSize));
+    // v251：缺一不可的 inflate 狀態＋環形視窗【先】配，兩個緩衝最後配、配不到就減半（同 v250 的 ZipEntryReader）。
+    //   diag250：背景排版期間抽 10KB 的章首 PNG 全部失敗 —— 失敗當下 52K 那塊還在（FONTREL img … max=51188），
+    //   但排版把小洞都佔了，讀取 8K＋輸出 8K＋狀態 8.4K 全切進 52K 塊，最後的 32KB 視窗（要找 ≥34,816 的塊）必失敗。
+    //   視窗依解壓後大小取 2 的次方（小檔不需要 32KB，見 InflateStream::init）。
+    InflateStream inflate;
+    if (!inflate.init(true, inflatedDataSize)) {
+      noteExtractFail(7);
+      LOG_ERR("ZIP", "Failed to init inflate stream");
+      return false;
+    }
+
+    size_t readSize = chunkSize;
+    auto* fileReadBuffer = mallocLadder(&readSize);
     if (!fileReadBuffer) {
+      noteExtractFail(8);
       LOG_ERR("ZIP", "Failed to allocate memory for zip file read buffer");
       return false;
     }
 
-    auto* outputBuffer = static_cast<uint8_t*>(malloc(chunkSize));
+    size_t outSize = chunkSize;
+    auto* outputBuffer = mallocLadder(&outSize);
     if (!outputBuffer) {
+      noteExtractFail(9);
       LOG_ERR("ZIP", "Failed to allocate memory for output buffer");
       free(fileReadBuffer);
       return false;
@@ -499,15 +572,7 @@ bool ZipFile::readFileToStream(const char* filename, Print& out, const size_t ch
     ctx.file = &file;
     ctx.fileRemaining = deflatedDataSize;
     ctx.readBuf = fileReadBuffer;
-    ctx.readBufSize = chunkSize;
-
-    InflateStream inflate;
-    if (!inflate.init(true)) {
-      LOG_ERR("ZIP", "Failed to init inflate stream");
-      free(outputBuffer);
-      free(fileReadBuffer);
-      return false;
-    }
+    ctx.readBufSize = readSize;
     inflate.setFill(zipFillCallback, &ctx);
 
     bool success = false;
@@ -515,20 +580,29 @@ bool ZipFile::readFileToStream(const char* filename, Print& out, const size_t ch
 
     while (true) {
       size_t produced;
-      const InflateStream::Status status = inflate.readAtMost(outputBuffer, chunkSize, &produced);
+      const uint32_t readBefore = g_zipStreamStats.readUs;  // v247 儀器：readAtMost 內含 fill 讀取
+      const uint32_t ti = static_cast<uint32_t>(micros());
+      const InflateStream::Status status = inflate.readAtMost(outputBuffer, outSize, &produced);
+      g_zipStreamStats.inflateUs +=
+          (static_cast<uint32_t>(micros()) - ti) - (g_zipStreamStats.readUs - readBefore);
 
       totalProduced += produced;
       if (totalProduced > static_cast<size_t>(inflatedDataSize)) {
+        noteExtractFail(12);
         LOG_ERR("ZIP", "Decompressed size exceeds expected (%zu > %zu)", totalProduced,
                 static_cast<size_t>(inflatedDataSize));
         break;
       }
 
       if (produced > 0) {
-        if (out.write(outputBuffer, produced) != produced) {
+        const uint32_t tw = static_cast<uint32_t>(micros());  // v247 儀器
+        const size_t wrote = out.write(outputBuffer, produced);
+        g_zipStreamStats.writeUs += static_cast<uint32_t>(micros()) - tw;
+        if (wrote != produced) {
           if (allowEarlyStop) {
             success = true;  // sink has what it needs
           } else {
+            noteExtractFail(11);
             LOG_ERR("ZIP", "Failed to write all output bytes to stream");
           }
           break;
@@ -537,6 +611,7 @@ bool ZipFile::readFileToStream(const char* filename, Print& out, const size_t ch
 
       if (status == InflateStream::Status::Done) {
         if (totalProduced != static_cast<size_t>(inflatedDataSize)) {
+          noteExtractFail(12);
           LOG_ERR("ZIP", "Decompressed size mismatch (expected %zu, got %zu)", static_cast<size_t>(inflatedDataSize),
                   totalProduced);
           break;
@@ -547,6 +622,7 @@ bool ZipFile::readFileToStream(const char* filename, Print& out, const size_t ch
       }
 
       if (status == InflateStream::Status::Error) {
+        noteExtractFail(13);
         LOG_ERR("ZIP", "Decompression failed");
         break;
       }
@@ -558,6 +634,7 @@ bool ZipFile::readFileToStream(const char* filename, Print& out, const size_t ch
     return success;  // inflate destructor frees the decompressor state + window
   }
 
+  noteExtractFail(5);
   LOG_ERR("ZIP", "Unsupported compression method");
   return false;
 }

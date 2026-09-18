@@ -17,6 +17,12 @@ class Section {
   std::shared_ptr<Epub> epub;
   const int spineIndex;
   GfxRenderer& renderer;
+  // v284：**這次建置凍結的字身框**（12.4 定點）。`startBuild` 設一次，
+  //   排版與 section 檔頭共用它 —— 兩邊各自量會寫出「檔頭宣稱 B、其實照 A 排」的錯標快取
+  //   （codex 第二輪抓到，是我第一版修法自己引入的）。-1 ＝ 尚未凍結。
+  int32_t frozenEmFP_ = -1;
+  // 這次建置實際要用的行距（像素）。emFP 量不到時退回字型宣告的 advanceY。
+  int lineHeightPxFor(const ReaderRenderSpec& spec, int32_t emFP) const;
   std::string filePath;
   HalFile file;
 
@@ -90,6 +96,8 @@ class Section {
   std::unique_ptr<Page> loadPageDuringBuild(int page);
 
  public:
+  // v258：把 popup callback 接到進行中的建置（預排接手用）。沒有建置時什麼都不做。
+  void setBuildPopupFn(std::function<void()> fn);
   uint16_t pageCount = 0;
   int currentPage = 0;
 

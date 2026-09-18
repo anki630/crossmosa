@@ -144,6 +144,10 @@ void XtcReaderActivity::loop() {
   const int skipAmount = skipPages ? 10 : 1;
 
   if (prevTriggered) {
+    // v264：已在第一頁 —— 下面會把 0 設回 0 再整頁重畫。沒有上一頁就什麼都不做（TXT 閱讀器早就這樣）。
+    if (currentPage == 0) {
+      return;
+    }
     if (currentPage >= static_cast<uint32_t>(skipAmount)) {
       currentPage -= skipAmount;
     } else {

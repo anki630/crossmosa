@@ -1,6 +1,7 @@
 #include "Page.h"
 
 #include <Arduino.h>
+#include <Breadcrumb.h>
 #include <GfxRenderer.h>
 #include <Logging.h>
 #include <Serialization.h>
@@ -12,14 +13,27 @@
 #include <new>
 
 char Page::lastAllocFail[96] = {0};
+static uint32_t g_pageAllocFailCount = 0;  // 讀寫都在 g_breadcrumbMux 臨界區內（Breadcrumb.h）
+
+uint32_t Page::allocFailCount() {
+  portENTER_CRITICAL(&g_breadcrumbMux);
+  const uint32_t n = g_pageAllocFailCount;
+  portEXIT_CRITICAL(&g_breadcrumbMux);
+  return n;
+}
 
 void Page::noteAllocFail(const char* where, size_t bytes) {
   // v194：lib 不能碰 DiagLog；先到先得，src 讀走寫成 ALLOCFAIL。
   LOG_ERR("PGE", "ALLOCFAIL where=%s bytes=%u max=%u", where, static_cast<unsigned>(bytes),
           static_cast<unsigned>(ESP.getMaxAllocHeap()));
-  if (lastAllocFail[0] != '\0') return;
-  snprintf(lastAllocFail, sizeof(lastAllocFail), "where=%s bytes=%u max=%u", where, static_cast<unsigned>(bytes),
+  portENTER_CRITICAL(&g_breadcrumbMux);
+  g_pageAllocFailCount++;
+  portEXIT_CRITICAL(&g_breadcrumbMux);
+  if (breadcrumbPending(lastAllocFail)) return;
+  char line[sizeof(lastAllocFail)];
+  snprintf(line, sizeof(line), "where=%s bytes=%u max=%u", where, static_cast<unsigned>(bytes),
            static_cast<unsigned>(ESP.getMaxAllocHeap()));
+  breadcrumbPublish(lastAllocFail, sizeof(lastAllocFail), line);  // v249：跨 task 交接（見 Breadcrumb.h）
 }
 
 namespace {

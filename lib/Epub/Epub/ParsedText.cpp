@@ -6,6 +6,7 @@
 #include "ParsedText.h"
 
 #include <BidiUtils.h>
+#include <Breadcrumb.h>
 #include <GfxRenderer.h>
 #include <Logging.h>
 #include <Utf8.h>
@@ -21,6 +22,80 @@
 constexpr int MAX_COST = std::numeric_limits<int>::max();
 
 namespace {
+
+// v272：**約物擠壓**（橫排）。clreq §3.1.6／JLReq：中文兩端對齊的正確順序是
+//   「先壓縮全形標點（最多半格）→ 不夠才拉開字距 →（行尾）懸掛」。現況少了第一步，
+//   所以禁則把標點推到下一行之後，那一行只能靠拉字距填滿 —— 使用者看到的「字距忽寬忽窄」。
+//
+// v274：集合擴到**括弧類**（JLReq 3.1「約物のアキ」／clreq §3.1.6 的標點擠壓表）。
+//   實測我們五套字型 22pt（字框 45.8）：
+//     句讀 。，、：； → 墨水**置中**，左右各留約 16px（台灣慣例，日文是靠角落 —— 我們跟台灣）
+//     開括號 「（《   → 墨水靠右，**左邊留 26–31px**
+//     閉括號 」）》   → 墨水靠左，**右邊留 26–31px**
+//   → 括弧那半格空白就是 JLReq 說的「約物のアキ」，行要調整時它是**第一個該讓出來的**。
+//   使用者的實例：「知識之聲」那一行因為兩個括號各佔了 0.6 格的空白而排不下一個字，只好拉字距。
+// ⚠️ ！？ 不在集合裡：clreq 的擠壓表沒有它們（它們不帶那半格 aki，墨水本來就窄）。
+inline bool isCompressibleOpenBracket(const uint32_t cp) {
+  return cp == 0x300C     // 「
+      || cp == 0x300E     // 『
+      || cp == 0xFF08     // （
+      || cp == 0x3014     // 〔
+      || cp == 0xFF3B     // ［
+      || cp == 0xFF5B     // ｛
+      || cp == 0x3008     // 〈
+      || cp == 0x300A     // 《
+      || cp == 0x3010     // 【
+      || cp == 0x3016;    // 〖
+}
+inline bool isCompressibleCloseBracket(const uint32_t cp) {
+  return cp == 0x300D     // 」
+      || cp == 0x300F     // 』
+      || cp == 0xFF09     // ）
+      || cp == 0x3015     // 〕
+      || cp == 0xFF3D     // ］
+      || cp == 0xFF5D     // ｝
+      || cp == 0x3009     // 〉
+      || cp == 0x300B     // 》
+      || cp == 0x3011     // 】
+      || cp == 0x3017;    // 〗
+}
+inline bool isCompressiblePunctuation(const uint32_t cp) {
+  return isHangablePunctuation(cp)                    // 、，。
+      || cp == 0xFF1A || cp == 0xFF1B                 // ：；（與句讀同形：墨水置中）
+      || isCompressibleOpenBracket(cp) || isCompressibleCloseBracket(cp);
+}
+
+// v274：token **前面**那個開括號的位元組長度（0 ＝沒有，或整個 token 就是括號）。
+//   尾端那條（下面）切的是「聲」」這種；這條切的是「「知」這種 —— 禁則不准在開括號後斷行，
+//   所以它會跟後面的字黏成一個 token，不切就壓不到它。
+inline size_t leadingCompressibleBracketBytes(const std::string& token) {
+  const auto* p = reinterpret_cast<const unsigned char*>(token.c_str());
+  const unsigned char* q = p;
+  const uint32_t first = utf8NextCodepoint(&q);
+  if (first == 0 || *q == '\0') return 0;  // 單獨一個碼位：不切（否則會無限迴圈）
+  if (!isCompressibleOpenBracket(first)) return 0;
+  return static_cast<size_t>(q - p);
+}
+
+// token 尾端那個可壓縮標點的位元組起點（npos ＝沒有，或整個 token 就是標點）。
+inline size_t trailingCompressiblePunctOffset(const std::string& token) {
+  const auto* p = reinterpret_cast<const unsigned char*>(token.c_str());
+  size_t lastStart = std::string::npos;
+  uint32_t last = 0;
+  size_t n = 0;
+  const unsigned char* q = p;
+  while (*q) {
+    const unsigned char* here = q;
+    const uint32_t cp = utf8NextCodepoint(&q);
+    if (cp == 0) break;
+    last = cp;
+    lastStart = static_cast<size_t>(here - p);
+    ++n;
+  }
+  if (n < 2 || !isCompressiblePunctuation(last)) return std::string::npos;
+  return lastStart;
+}
+
 
 // Soft hyphen byte pattern used throughout EPUBs (UTF-8 for U+00AD).
 constexpr char SOFT_HYPHEN_UTF8[] = "\xC2\xAD";
@@ -263,6 +338,9 @@ void* ParsedText::refusalCtx_ = nullptr;
 uint32_t ParsedText::buildGapMaxUs = 0;
 uint8_t ParsedText::buildGapSite = 0;
 uint32_t ParsedText::buildProbeCount = 0;
+ParsedText::BuildProf ParsedText::buildProf;
+bool ParsedText::buildProfInCd = false;
+int64_t ParsedText::profNowUs() { return esp_timer_get_time(); }
 
 namespace {
 int64_t g_probeLastUs = 0;
@@ -270,6 +348,11 @@ int64_t g_probeLastUs = 0;
 // 而閱讀器切到設定頁時 onExit 不一定跑過（建置還活著）——沒有這道閘，預覽的第一個探針會把
 // 「上一步到現在」這段秒級空檔算成一次盲區，gapmax 就是假的（本版唯一的產出，不能髒）。
 bool g_probeArmed = false;
+// v252：建置期間的按鍵輪詢（見 ParsedText.h）。
+bool (*g_buildInputPollHook)() = nullptr;
+bool g_buildInputPending = false;
+int64_t g_buildInputLastPollUs = 0;
+constexpr int64_t kBuildInputPollIntervalUs = 15000;
 constexpr uint8_t kBuildProbeLine = 1;
 constexpr uint8_t kBuildProbeWord = 2;
 constexpr uint8_t kBuildProbeBreaks = 6;  // v190：斷行 DP 與字寬量測必須分得開，否則證不出哪個插點真的跑過
@@ -281,6 +364,7 @@ void (*ParsedText::vertDiagHook)(const char*) = nullptr;
 namespace {
 bool g_verticalKinsoku = false;
 }
+
 void ParsedText::setVerticalKinsoku(const bool enabled) { g_verticalKinsoku = enabled; }
 bool ParsedText::verticalKinsoku() { return g_verticalKinsoku; }
 
@@ -306,7 +390,22 @@ void ParsedText::noteBuildProbe(const uint8_t site) {
   }
   g_probeLastUs = now;
   buildProbeCount++;
+  // v252：排版中的探針點平均幾 ms 一個（diag251 一章 3,662 次／29.6 秒、最長 148ms），
+  // 在這裡讀按鍵才接得住 0.1 秒的短按 —— 步與步之間（平均 0.36 秒、最長 0.8 秒）只問一次會整個漏掉。
+  // 接到之後【繼續】輪詢（codex 複查）：停下來的話放開要等這一步結束才被看到，短按會被讀成長按（長按跳章）。
+  if (g_buildInputPollHook && now - g_buildInputLastPollUs >= kBuildInputPollIntervalUs) {
+    g_buildInputLastPollUs = now;
+    if (g_buildInputPollHook()) g_buildInputPending = true;
+  }
 }
+
+void ParsedText::setBuildInputPollHook(bool (*fn)()) {
+  g_buildInputPollHook = fn;
+  g_buildInputPending = false;
+  g_buildInputLastPollUs = 0;
+}
+
+bool ParsedText::buildInputPending() { return g_buildInputPending; }
 
 void ParsedText::resetBuildProbeClock() {
   g_probeLastUs = esp_timer_get_time();  // v190：每個 parseStep 的計時起點，不含步與步之間的讓路
@@ -317,9 +416,11 @@ void ParsedText::stopBuildProbeClock() { g_probeArmed = false; }
 
 // 先到先得：不覆寫還沒被讀走的紀錄（同 ImageBlock::noteFailure 的理由）。
 static void noteRefusal(const char* what, size_t need, size_t defMax, size_t defFree) {
-  if (ParsedText::lastRefusal[0] != '\0') return;
-  snprintf(ParsedText::lastRefusal, sizeof(ParsedText::lastRefusal), "%s need=%u defMax=%u defFree=%u", what,
-           static_cast<unsigned>(need), static_cast<unsigned>(defMax), static_cast<unsigned>(defFree));
+  if (breadcrumbPending(ParsedText::lastRefusal)) return;
+  char line[sizeof(ParsedText::lastRefusal)];
+  snprintf(line, sizeof(line), "%s need=%u defMax=%u defFree=%u", what, static_cast<unsigned>(need),
+           static_cast<unsigned>(defMax), static_cast<unsigned>(defFree));
+  breadcrumbPublish(ParsedText::lastRefusal, sizeof(ParsedText::lastRefusal), line);  // v249：跨 task 交接
   if (ParsedText::refusalHook_) ParsedText::refusalHook_(ParsedText::refusalCtx_);
 }
 
@@ -332,6 +433,7 @@ void ParsedText::setBoldBodyText(const bool enabled) { g_boldBodyText = enabled;
 void ParsedText::addWord(std::string word, const EpdFontFamily::Style fontStyle, const bool underline,
                          const bool attachToPrevious, const uint32_t visibleTextOffset) {
   if (word.empty()) return;
+  buildProf.words++;  // v252（只計數，不在每個字上計時）
 
   // The device fonts carry no combining-mark positioning, so EPUB text stored in NFD
   // (a base letter followed by separate combining accents -- common for Vietnamese,
@@ -447,18 +549,64 @@ void ParsedText::addWord(std::string word, const EpdFontFamily::Style fontStyle,
     bool firstToken = true;
     size_t tokenStart = 0;
     uint32_t tokenVisibleOffset = visibleTextOffset;
+    // v272：**行尾的句讀自己一個 token**。切詞期禁則讓「英，」黏成一個 token，而黏著的標點
+    //   沒有自己的座標 —— 既不能單獨壓縮（約物擠壓），行尾懸掛也只能靠「扣寬度」間接表達。
+    //   切開之後用 `continues=true` 接回去：那個旗標的語意就是「不可以在這裡斷行、而且沒有空隙」，
+    //   所以禁則一個位元都沒鬆（DP 與貪婪斷行都看它）。
+    //   ⚠️ **只有橫排切**：直排的 `hangTailOf` 要求 token ≥2 碼位，切開會讓直排的懸掛失效
+    //      （它自己有一套，別動）。
+    const bool splitTrailingPunct = !ParsedText::verticalKinsoku();
+    const auto pushMaybeSplit = [&](std::string token, const bool continues, const bool noSpaceBefore,
+                                    const uint32_t tokenOffset) {
+      if (splitTrailingPunct) {
+        // 連續標點（例如「英，。」）要**每一個都切開**，否則前面那個還是埋在混合 token 裡、壓不到（codex）。
+        // v274：兩頭都切 —— 前面的開括號（「知）與尾端的標點（聲」、英，。）。
+        //   切出來的順序必須與原文一致：[開括號…][本體][尾端標點…]。
+        std::string body = std::move(token);
+        std::vector<std::string> pieces;
+        while (true) {
+          const size_t lead = leadingCompressibleBracketBytes(body);
+          if (lead == 0) break;
+          pieces.push_back(body.substr(0, lead));
+          body.erase(0, lead);
+        }
+        std::vector<std::string> tails;
+        while (true) {
+          const size_t tailStart = trailingCompressiblePunctOffset(body);
+          if (tailStart == std::string::npos) break;
+          tails.push_back(body.substr(tailStart));
+          body.erase(tailStart);
+        }
+        if (!pieces.empty() || !tails.empty()) {
+          if (!body.empty()) pieces.push_back(std::move(body));
+          for (auto it = tails.rbegin(); it != tails.rend(); ++it) pieces.push_back(std::move(*it));
+          uint32_t offset = tokenOffset;
+          for (size_t k = 0; k < pieces.size(); ++k) {
+            const uint32_t cps = countCodepoints(pieces[k]);
+            // 第一片繼承原 token 的旗標；其餘一律 continues＝「不可以在這裡斷行、而且沒有空隙」。
+            //   noSpaceBefore 也給 true（原文本來就沒有空白），兩個旗標要自洽，別讓將來的消費者
+            //   看到「有空白」而插出一個空隙（codex）。
+            pushToken(std::move(pieces[k]), k == 0 ? continues : true, k == 0 ? noSpaceBefore : true, false, offset);
+            offset += cps;
+          }
+          return;
+        }
+        token = std::move(body);
+      }
+      pushToken(std::move(token), continues, noSpaceBefore, false, tokenOffset);
+    };
     for (const size_t breakOffset : breakOffsets) {
       if (breakOffset <= tokenStart || breakOffset > word.size()) continue;
       const std::string_view token(word.data() + tokenStart, breakOffset - tokenStart);
-      pushToken(std::string(token), firstToken ? effectiveAttachToPrevious : false,
-                firstToken ? effectiveNoSpaceBefore : true, false, tokenVisibleOffset);
+      pushMaybeSplit(std::string(token), firstToken ? effectiveAttachToPrevious : false,
+                     firstToken ? effectiveNoSpaceBefore : true, tokenVisibleOffset);
       tokenVisibleOffset += countCodepoints(token);
       firstToken = false;
       tokenStart = breakOffset;
     }
     if (tokenStart < word.size()) {
-      pushToken(word.substr(tokenStart), firstToken ? effectiveAttachToPrevious : false,
-                firstToken ? effectiveNoSpaceBefore : true, false, tokenVisibleOffset);
+      pushMaybeSplit(word.substr(tokenStart), firstToken ? effectiveAttachToPrevious : false,
+                     firstToken ? effectiveNoSpaceBefore : true, tokenVisibleOffset);
     }
     if (wordStartsRtl) {
       hasRtlWord = true;
@@ -648,7 +796,21 @@ int ParsedText::resolveFirstLineIndent(const bool isFirstLine, const GfxRenderer
     return 0;
   }
   if (blockStyle.textIndentDefined) {
-    if (blockStyle.textIndent < 0 || !extraParagraphSpacing) {
+    if (blockStyle.textIndent < 0) {
+      // v263：懸掛縮排（負值）最多只能用掉區塊自己那一側的（正的）邊距，不再往外凸。
+      // BlockStyle::fromCssStyle 把左右邊距夾在 MAX_HORIZONTAL_INSET_EM，
+      // text-indent 卻原樣保留 —— 「margin-left:4.5em; text-indent:-2.5em」的清單
+      // 夾完變成 2em 邊距配 -2.5em 縮排，首行從版心左緣再往外 0.5em，編號被切掉一半。
+      // 凸出的那一側：LTR 是左（xpos 從縮排起算），RTL 是右（有效行寬加長、靠右對齊）；
+      // 三個呼叫點（兩種斷行＋定位）都用同一個「行寬 − 縮排」，所以斷行與位置一致。
+      // ⚠️ 邊距本身是負的（CSS 合法）時縮排歸零，但區塊自己已經在版心外，這裡救不回來。
+      // 取「邊距全部用完」而不是「照邊距被夾的比例縮小縮排」：前者留給編號的懸掛空間最大，
+      // 等比縮小（-2.5em × 2/4.5 ≈ -1.1em）會讓兩位數編號壓到續行文字底下。
+      const int inset = blockStyle.isRtl ? blockStyle.rightInset() : blockStyle.leftInset();
+      const int floor = inset > 0 ? -inset : 0;
+      return blockStyle.textIndent < floor ? floor : blockStyle.textIndent;
+    }
+    if (!extraParagraphSpacing) {
       return blockStyle.textIndent;
     }
     return 0;
@@ -665,6 +827,16 @@ void ParsedText::layoutAndExtractLines(const GfxRenderer& renderer, const int fo
   if (words.empty()) {
     return;
   }
+  // v252 BUILDPROF：整段排版（RAII：所有出口都計）。
+  struct LayProf {
+    int64_t t0 = ParsedText::profNowUs();
+    ~LayProf() {
+      const uint64_t d = static_cast<uint64_t>(ParsedText::profNowUs() - t0);
+      ParsedText::buildProf.layUs += d;
+      if (ParsedText::buildProfInCd) ParsedText::buildProf.layCdUs += d;
+      ParsedText::buildProf.layCalls++;
+    }
+  } layProf;
 
   // Per-paragraph RTL auto-detection: only when CSS/HTML didn't explicitly set direction.
   // Explicit dir="ltr" must be respected and not overridden by content heuristic.
@@ -687,23 +859,19 @@ void ParsedText::layoutAndExtractLines(const GfxRenderer& renderer, const int fo
   // (advanceX only, no bitmaps) for all unique codepoints in this paragraph so
   // that calculateWordWidths() can measure text without on-demand SD I/O.
   if (renderer.isSdCardFont(fontId)) {
-    // Style mask: only ask the SD font to load advances for styles actually
-    // used in this paragraph. Style index is the low two bits (regular/bold/
-    // italic/bold-italic); the underline bit is irrelevant to advance metrics.
-    uint8_t styleMask = 0;
-    for (auto s : wordStyles) {
-      styleMask |= static_cast<uint8_t>(1u << (static_cast<uint8_t>(s) & 0x03));
-    }
-    if (styleMask == 0) styleMask = 0x01;  // defensive: regular only
-    renderer.ensureSdCardFontReady(fontId, words, hyphenationEnabled, styleMask);
+    // v254：逐字字重 —— 每個字重只準備自己那些字的字寬（原本段落裡有一個粗體字，整段每個字都會去讀粗體字寬）。
+    const int64_t advT0 = profNowUs();
+    renderer.ensureSdCardFontReady(fontId, words, wordStyles, hyphenationEnabled);
+    buildProf.advUs += static_cast<uint64_t>(profNowUs() - advT0);
   }
 
   const int pageWidth = viewportWidth;
   auto wordWidths = calculateWordWidths(renderer, fontId);
 
   std::vector<size_t> lineBreakIndices;
-  if (hyphenationEnabled) {
+  if (hyphenationEnabled || greedyLineBreaks_) {
     // Use greedy layout that can split words mid-loop when a hyphenated prefix fits.
+    // v240：greedyLineBreaks_（txt 專用）也走這裡，但下面的斷字只在 hyphenationEnabled 時才做。
     lineBreakIndices =
         computeHyphenatedLineBreaks(renderer, fontId, pageWidth, wordWidths, wordContinues, wordNoSpaceBefore);
   } else {
@@ -806,6 +974,77 @@ int ParsedText::calculateRubyExtraEndOffset(const size_t lineStartIdx, const siz
   }
 
   return (rubyWidth - groupActualWidth) / 2;
+}
+
+// v272：約物擠壓的量。**v272 起句讀是自己一個 token**（見 addWord 的切分），
+//   所以判斷看的是 token 本身，而不是在一個混合 token 裡面找尾巴。
+//
+// ⚠️ **v273 起橫排【不做】行尾懸掛**（使用者判斷：「橫排不適合使用懸吊的方式，看起來蠻怪的」）。
+//    中文橫排的美感基礎是方格：漢字與全形標點各佔一格，版心右緣是一條直線；懸掛會把那條線打破。
+//    日本的 JLReq 也把 ぶら下げ 列為【直排】的慣例，横組み 的標準作法是把句讀收進行內（約物半角／二分）
+//    ——也就是下面這個擠壓。直排維持懸掛（ParsedTextVertical 自己那套），這裡只管橫排。
+//    v271 的 `hangWidthAt`／`hangMarginPx` 已整個移除，不要復活；要復活先讀這段與帳本。
+//
+// 擠壓：這個 token 若是單獨一個可壓縮標點，最多可以讓出「它自己的空白」，上限半格（clreq 的二分）。
+//
+// v274：**讓出的量按左右空白的比例扣**，而不是一律左移半個壓縮量。
+//   空白在哪一邊，就從哪一邊收 ——
+//     句讀（墨水置中，左右各 16px）：對半收 → 與 v272/v273 的行為**逐像素相同**。
+//     開括號 「（左邊 30px、右邊 0.8px）：幾乎全部從左邊收 → 墨水往左靠，右邊的細邊距保住。
+//     閉括號 」（左邊 1px、右邊 30px）：幾乎全部從右邊收 → 字形**不動**，只是格子變窄。
+//   這個比例規則自動滿足「不會撞到鄰字」：收掉的左側 cL ≤ 左空白、右側 cR ≤ 右空白，
+//   所以墨水一定還在（變窄後的）格子裡 —— v272 那條 `min(2·gl, 2·(advance−gl−gw))` 的特例
+//   就是這條的對稱情形，不必再另外寫（也不必再假設墨水置中）。
+// ⚠️ 墨水可能超出字框（斜體、某些字型）→ 空白算成負的，夾到 0 再算，不要讓它變成「可以多讓一點」。
+// ⚠️ 樣板：`ParsedText::words` 是 deque（分塊成長、避免大塊重配），而 extractLine 手上的是 vector。
+//    兩邊要用**同一份**判斷，否則斷行與定位會各說各話。
+struct CompressMetrics {
+  int maxAmount = 0;  // 最多讓得出來的寬度
+  int left = 0;       // 字框左側空白（夾過 0）
+  int right = 0;      // 字框右側空白（夾過 0）
+};
+
+template <typename Words, typename Styles>
+static CompressMetrics compressMetricsAt(const GfxRenderer& renderer, const int fontId, const Words& words,
+                                         const Styles& styles, const size_t idx) {
+  CompressMetrics m;
+  if (idx >= words.size()) return m;
+  const auto* p = reinterpret_cast<const unsigned char*>(words[idx].c_str());
+  const uint32_t cp = utf8NextCodepoint(&p);
+  if (cp == 0 || *p != '\0' || !isCompressiblePunctuation(cp)) return m;
+  const int advance = measureWordWidth(renderer, fontId, words[idx], styles[idx]);
+  int gw = 0, gh = 0, gl = 0, gt = 0;
+  if (!renderer.getGlyphInkBox(fontId, cp, styles[idx], &gw, &gh, &gl, &gt)) return m;
+  m.left = gl > 0 ? gl : 0;
+  const int trailing = advance - (gl + gw);
+  m.right = trailing > 0 ? trailing : 0;
+  const int room = m.left + m.right;
+  const int half = advance / 2;  // clreq §3.1.6：全形標點最多壓到二分
+  int limit = room < half ? room : half;
+  m.maxAmount = limit > 0 ? limit : 0;
+  return m;
+}
+
+template <typename Words, typename Styles>
+static uint16_t compressAmountAt(const GfxRenderer& renderer, const int fontId, const Words& words,
+                                 const Styles& styles, const size_t idx) {
+  return static_cast<uint16_t>(compressMetricsAt(renderer, fontId, words, styles, idx).maxAmount);
+}
+
+// 讓出 `amount` 時，其中有多少是從**左側**收的 ＝ 字形要往左挪多少。
+inline int compressLeftShare(const CompressMetrics& m, const int amount) {
+  const int room = m.left + m.right;
+  if (amount <= 0 || room <= 0) return 0;
+  const int share = (amount * m.left) / room;
+  return share > m.left ? m.left : share;
+}
+
+// v271（codex）／v273：**斷行與定位要用同一個判準**，不然斷行認為放得下、定位卻照原寬擺 → 出血或壓縮錯。
+//   ① 自然對齊才做（置中／逆向靠齊不做：壓縮只有在要填滿一行時才有意義）
+//   ② 整段不含右到左文字 —— BiDi 重排之後「第 k 個 token」不一定還在原來的位置
+//   ③ 專注閱讀模式不做 —— 那個模式會在詞後面另外畫東西，token 的視覺寬度不是它自己的字寬
+bool ParsedText::punctFittingAllowed() const {
+  return isNaturalAlign && !blockStyle.isRtl && !hasRtlWord && !focusReadingEnabled;
 }
 
 std::vector<uint16_t> ParsedText::calculateWordWidths(const GfxRenderer& renderer, const int fontId) {
@@ -938,6 +1177,20 @@ std::vector<size_t> ParsedText::computeLineBreaks(const GfxRenderer& renderer, c
 
   const size_t totalWordCount = words.size();
 
+  // v272：可壓縮量先算成一張表 —— 下面的 DP 是 O(n²)，內迴圈裡逐次量會讓長段落變慢。
+  //   只有自然對齊才需要（其餘對齊不壓縮），所以不是自然對齊時連配都不配。
+  //   ⚠️ 必須在上面的 hyphenateWordAtIndex 迴圈【之後】建：那個迴圈會就地拆詞，words 會變。
+  std::vector<uint16_t> compWidths;
+  if (punctFittingAllowed()) {
+    compWidths.reserve(totalWordCount);
+    for (size_t i = 0; i < totalWordCount; ++i) {
+      compWidths.push_back(compressAmountAt(renderer, fontId, words, wordStyles, i));
+    }
+  }
+  const auto compAt = [&compWidths](const size_t idx) -> int {
+    return idx < compWidths.size() ? compWidths[idx] : 0;
+  };
+
   // DP table to store the minimum badness (cost) of lines starting at index i
   std::vector<int> dp(totalWordCount);
   // 'ans[i]' stores the index 'j' of the *last word* in the optimal line starting at 'i'
@@ -952,6 +1205,7 @@ std::vector<size_t> ParsedText::computeLineBreaks(const GfxRenderer& renderer, c
       noteBuildProbe(kBuildProbeBreaks);  // v190：斷行 DP 外層，長段落的 O(n²) 才是盲區
     }
     int currlen = 0;
+    int compRun = 0;  // v272：這一行到目前為止、可以讓出的標點寬度（行內的才算，行尾那個走懸掛）
     dp[i] = MAX_COST;
 
     // First line has reduced width due to text-indent
@@ -974,8 +1228,14 @@ std::vector<size_t> ParsedText::computeLineBreaks(const GfxRenderer& renderer, c
       const int extraStartOffset = (j == i) ? calculateRubyExtraStartOffset(i, totalWordCount, renderer, fontId) : 0;
 
       currlen += wordWidths[j] + gap + (j == i ? extraStartOffset : 0);
+      compRun += compAt(j);
 
-      if (currlen > effectivePageWidth) {
+      // v272：行內的標點可以各讓出半格（約物擠壓）；v273 起**行尾那一個也照壓**
+      //   （懸掛已移除，不再有「兩者擇一」）—— 那正是日文横組み的行末約物半角。
+      //   只在自然對齊時做：置中／逆向靠齊的行本來就不需要填滿。
+      const int fitLen = currlen - compRun;
+
+      if (fitLen > effectivePageWidth) {
         break;
       }
 
@@ -985,8 +1245,12 @@ std::vector<size_t> ParsedText::computeLineBreaks(const GfxRenderer& renderer, c
       }
 
       const int extraEndOffset = calculateRubyExtraEndOffset(i, j + 1, renderer, fontId);
+      // v271（codex）：行尾有注音（ruby）突出時**整行不壓縮** —— 那個突出是相對【未扣除】的字寬
+      //   定位的，壓縮之後注音的墨水會跨出版心。有 ruby 就照原寬算（extractLine 用同一個條件）。
+      const int lineComp = extraEndOffset > 0 ? 0 : compRun;
+      const int fitLenHere = currlen - lineComp;
 
-      if (currlen + extraEndOffset > effectivePageWidth) {
+      if (fitLenHere + extraEndOffset > effectivePageWidth) {
         continue;  // Cannot split here as it would overflow the right margin
       }
 
@@ -994,7 +1258,14 @@ std::vector<size_t> ParsedText::computeLineBreaks(const GfxRenderer& renderer, c
       if (j == totalWordCount - 1) {
         cost = 0;  // Last line
       } else {
-        const int remainingSpace = effectivePageWidth - currlen;
+        // v272（codex）：**壞度要用「實際會畫成多長」算，不是用「最多能壓多少」算** ——
+        //   壓縮是【需要多少讓多少】（extractLine 那邊如此），用最大壓縮量當基準會讓
+        //   標點多的候選被系統性高估成「排得很滿」，選出比較差的斷點。
+        const int renderedLen = currlen > effectivePageWidth
+                                    ? (fitLenHere > effectivePageWidth ? fitLenHere : effectivePageWidth)
+                                    : currlen;
+        const int spaceLeft = effectivePageWidth - renderedLen - extraEndOffset;
+        const int remainingSpace = spaceLeft > 0 ? spaceLeft : 0;
         // Use long long for the square to prevent overflow
         const long long cost_ll = static_cast<long long>(remainingSpace) * remainingSpace + dp[j + 1];
 
@@ -1057,9 +1328,13 @@ std::vector<size_t> ParsedText::computeHyphenatedLineBreaks(const GfxRenderer& r
   size_t currentIndex = 0;
   bool isFirstLine = true;
 
+  const bool compOk = punctFittingAllowed() && rubyTexts.empty();
   while (currentIndex < wordWidths.size()) {
     const size_t lineStart = currentIndex;
     int lineWidth = 0;
+    // v272（codex）：這條路（斷字開啟時的貪婪斷行）原本沒有做約物擠壓 ——
+    //   那等於「開了斷字就沒有這個功能」。這裡跟著累計這一行可讓出的標點寬度。
+    int lineComp = 0;
 
     // First line has reduced width due to text-indent
     const int effectivePageWidth = isFirstLine ? pageWidth - firstLineIndent : pageWidth;
@@ -1080,9 +1355,16 @@ std::vector<size_t> ParsedText::computeHyphenatedLineBreaks(const GfxRenderer& r
       }
       const int candidateWidth = spacing + wordWidths[currentIndex];
 
+      // v272：約物擠壓 —— 這個 token 若是單獨一個句讀，它可以讓出最多半格。
+      // ⚠️ 這條（斷字開啟時的貪婪斷行）**沒有**逐行的注音突出計算，而注音是相對未扣除的字寬定位的 ——
+      //    所以只要這一段有注音就整段不壓（codex 第二輪）。DP 那條有逐行判斷，不受這個保守規則影響。
+      const int compW = compOk ? compressAmountAt(renderer, fontId, words, wordStyles, currentIndex) : 0;
+      const int lineCompIfEnds = lineComp + compW;
+
       // Word fits on current line
-      if (lineWidth + candidateWidth <= effectivePageWidth) {
+      if (lineWidth + candidateWidth - lineCompIfEnds <= effectivePageWidth) {
         lineWidth += candidateWidth;
+        lineComp += compW;
         ++currentIndex;
         continue;
       }
@@ -1091,7 +1373,7 @@ std::vector<size_t> ParsedText::computeHyphenatedLineBreaks(const GfxRenderer& r
       const int availableWidth = effectivePageWidth - lineWidth - spacing;
       const bool allowFallbackBreaks = isFirstWord;  // Only for first word on line
 
-      if (availableWidth > 0 &&
+      if (hyphenationEnabled && availableWidth > 0 &&
           hyphenateWordAtIndex(currentIndex, availableWidth, renderer, fontId, wordWidths, allowFallbackBreaks)) {
         // Prefix now fits; append it to this line and move to next line
         lineWidth += spacing + wordWidths[currentIndex];
@@ -1332,9 +1614,43 @@ void ParsedText::extractLine(const size_t breakIndex, const int pageWidth, const
           ? CssTextAlign::Right
           : blockStyle.alignment;
 
+  // v272：**約物擠壓**。這一行的句讀各可讓出半格；只讓出「這一行真的需要」的量，而且與斷行時
+  //   算的是同一份（`compressAmountAt`），否則斷行認為放得下、定位卻擺不下 → 出血。
+  //   分配方式：從行首往後逐個讓，讓滿需要的量就停（clreq 沒有規定分配法；逐個讓比平均讓更穩定，
+  //   而且同一行重排兩次結果一定相同）。
+  //   ⚠️ 只在自然對齊、整段沒有右到左文字、且行尾沒有注音突出時才做（與兩條斷行路徑同一個判準）。
+  //   ⚠️ v273：行尾那個標點不再有「懸掛」這個選項，所以它跟行內的一樣可以壓（compEnd = 全行）。
+  const bool compressHere = punctFittingAllowed() && lineWordCount > 0 && extraEndOffset == 0;
+  std::vector<uint16_t> lineCompress;
+  if (compressHere) {
+    const size_t compEnd = lineWordCount;
+    int available = 0;
+    for (size_t k = 0; k < compEnd; ++k) {
+      available += compressAmountAt(renderer, fontId, lineWords, lineWordStyles, k);
+    }
+    if (available > 0) {
+      const int contentWidth = lineWordWidthSum + totalNaturalGaps + extraStartOffset + extraEndOffset;
+      int needed = contentWidth - effectivePageWidth;
+      if (needed > 0) {
+        if (needed > available) needed = available;
+        lineCompress.assign(lineWordCount, 0);
+        for (size_t k = 0; k < compEnd && needed > 0; ++k) {
+          const int c = compressAmountAt(renderer, fontId, lineWords, lineWordStyles, k);
+          if (c <= 0) continue;
+          const int take = c < needed ? c : needed;
+          lineCompress[k] = static_cast<uint16_t>(take);
+          needed -= take;
+        }
+      }
+    }
+  }
+  int lineCompressTotal = 0;
+  for (const uint16_t c : lineCompress) lineCompressTotal += c;
+
   // For justified text, compute per-gap extra to distribute remaining space evenly.
   // extraEndOffset reserves space for any ruby group at the right edge of the line.
-  const int spareSpace = effectivePageWidth - extraStartOffset - extraEndOffset - lineWordWidthSum - totalNaturalGaps;
+  const int spareSpace = effectivePageWidth - extraStartOffset - extraEndOffset -
+                         (lineWordWidthSum - lineCompressTotal) - totalNaturalGaps;
   const int justifyExtra = (effectiveAlignment == CssTextAlign::Justify && !isLastLine)
                                ? computeJustifyExtra(spareSpace, actualGapCount)
                                : 0;
@@ -1529,11 +1845,19 @@ void ParsedText::extractLine(const size_t breakIndex, const int pageWidth, const
       }
 
       for (size_t wordIdx = 0; wordIdx < lineWordCount; wordIdx++) {
-        lineXPos.push_back(static_cast<int16_t>(xpos));
+        // v272／v274：被擠壓的標點 —— 格子變窄，字形往左挪「從左側收掉的那一份」，
+        //   墨水才會留在自己（變窄後）的格子裡。句讀是對半收 ＝ 挪半個，與 v272 相同；
+        //   括弧類的空白只在一邊，挪的量就自動變成幾乎全部或幾乎零。
+        const int compHere = wordIdx < lineCompress.size() ? lineCompress[wordIdx] : 0;
+        const int shiftHere =
+            compHere > 0
+                ? compressLeftShare(compressMetricsAt(renderer, fontId, lineWords, lineWordStyles, wordIdx), compHere)
+                : 0;
+        lineXPos.push_back(static_cast<int16_t>(xpos - shiftHere));
 
         const bool nextIsContinuation = wordIdx + 1 < lineWordCount && continuesVec[lastBreakAt + wordIdx + 1];
         if (nextIsContinuation) {
-          int advance = wordWidths[lastBreakAt + wordIdx];
+          int advance = wordWidths[lastBreakAt + wordIdx] - compHere;
           advance += renderer.getKerning(fontId, lastCodepoint(lineWords[wordIdx]),
                                          firstCodepoint(lineWords[wordIdx + 1]), lineWordStyles[wordIdx]);
           // wordIdx > 0 mirrors the gap accounting above (which skips index 0): a leading
@@ -1557,7 +1881,7 @@ void ParsedText::extractLine(const size_t breakIndex, const int pageWidth, const
           if (wordIdx + 1 < lineWordCount && effectiveAlignment == CssTextAlign::Justify && !isLastLine) {
             gap += justifyExtra;
           }
-          xpos += wordWidths[lastBreakAt + wordIdx] + gap;
+          xpos += wordWidths[lastBreakAt + wordIdx] - compHere + gap;  // v272：擠壓過的標點格子變窄
         }
       }
     }

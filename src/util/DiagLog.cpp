@@ -1,5 +1,6 @@
 #include "DiagLog.h"
 #include <BitmapHelpers.h>
+#include <Breadcrumb.h>
 #include <DataDir.h>
 #include <strings.h>  // strcasecmp -- isDiagnosticPath()
 
@@ -10,6 +11,8 @@
 #include <HalStorage.h>
 #include <Logging.h>
 #include <esp_heap_caps.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
 #include <esp_system.h>
 
 #include <cstdio>
@@ -95,10 +98,54 @@ void rotateIfNearCap() {
           (unsigned)size);
 }
 
+// v277：寫入路徑的輪替檢查與丟行統計。
+//   ⚠️ 不要每一行都去 stat 檔案（每次 open/size 都是 SD I/O，12–18ms，見 CLAUDE.md A-4）——
+//      用本地累計的**嘗試寫入**位元組數（含被上限擋掉的）估算，只有估到門檻才真的去看檔案。
+//      「嘗試」而不是「寫入」是刻意的：撞上限之後每一行都被擋，靠它才逃得出被夾住的狀態。
+//   ⚠️ 丟掉的行**必須說出來**：診斷機制自己也要有失敗回報，否則就是「看起來正常、後半段全沒了」。
+size_t g_bytesSinceCheck = 0;
+uint32_t g_droppedLines = 0;
+uint32_t g_dropNoticePending = 0;
+constexpr size_t WRITE_CHECK_INTERVAL = 8 * 1024;
+
+// v249：append 的跨 task 鎖。每一行是 open(O_APPEND)／write／flush／close 四步，Storage 的鎖只包住每一步，
+// 整段沒鎖 —— render task 與 main loop 同時各開一個把手追加時，兩邊各自以為的檔尾與檔案大小會互蓋：
+// diag248.log 的 `IMGDEC … prog=0 fil` 被截在正好等於同時寫入的 IMGPAGE 那一行的長度、IMGPAGE 本身消失。
+// 在 begin()（setup，單執行緒）建立；FreeRTOS mutex 有優先權繼承。Storage 不會回頭呼叫 DiagLog（HAL 不碰它），不會死結。
+// 靜態配置（codex 複查）：diag 最有用的時候正是堆積吃緊的時候，不能因為配不到而悄悄退回無鎖。
+StaticSemaphore_t g_appendMutexStorage;
+SemaphoreHandle_t g_appendMutex = nullptr;
+
+struct AppendLock {
+  bool held = false;
+  AppendLock() {
+    if (g_appendMutex) held = xSemaphoreTake(g_appendMutex, portMAX_DELAY) == pdTRUE;
+  }
+  ~AppendLock() {
+    if (held) xSemaphoreGive(g_appendMutex);
+  }
+};
+
 // 追加一行(自帶換行)。每次開關檔:量測點已節流,FAT 成本可接受,
 // 且避免長期持有檔案控制代碼干擾其他 SD 存取。
 bool append(const char* text) {
   if (!Storage.ready()) return false;
+  const AppendLock lock;  // v249
+
+  // v277：累積到一定量才真的去看檔案大小（stat 是 SD I/O，不能每行做），
+  //   逼近上限就地輪替 —— 把「撞上限之後無聲停寫」這條路整個拿掉。
+  //   ⚠️ 必須在鎖【之內】：輪替會 rename，跟其他 task 的 append 同時發生就會寫進被改名的舊檔。
+  g_bytesSinceCheck += strlen(text) + 1;
+  if (g_bytesSinceCheck >= WRITE_CHECK_INTERVAL) {
+    g_bytesSinceCheck = 0;
+    rotateIfNearCap();
+    if (g_droppedLines > 0) {
+      // 輪替之後新檔有空間了 → 把「剛剛丟了幾行」帶過去（下面開檔後補印）。
+      // ⚠️ 不能在這裡直接呼叫 line()／append()：這個函式已經持有 g_appendMutex，而它不是遞迴鎖。
+      g_dropNoticePending += g_droppedLines;
+      g_droppedLines = 0;
+    }
+  }
 
   const char* path = diagPath();
   HalFile f = Storage.open(path, O_WRONLY | O_CREAT | O_APPEND);
@@ -112,13 +159,60 @@ bool append(const char* text) {
       return false;
     }
   }
-  if (f.size() >= MAX_DIAG_BYTES) return false;  // 上限保護(f 於 scope 結束自動關閉)
-  const size_t len = strlen(text);
-  // v194：寫入動作與先前相同（本文、換行、flush 都做）。只把成敗回傳給 line()。
-  const bool okBody = f.write(reinterpret_cast<const uint8_t*>(text), len) == len;
-  const bool okNl = f.write(reinterpret_cast<const uint8_t*>("\n"), 1) == 1;
+  if (f.size() >= MAX_DIAG_BYTES) {
+    // v277（複查第一輪）：**就地輪替並重試**，不要等下一次 8KB 檢查 ——
+    //   否則「撞上限 → 再寫幾行 → 關機」這條路上，那幾行與計數全部只活在 RAM 裡，
+    //   永遠不會有 DIAGDROP 說出來（最多可以無聲吃掉近 8KB 的尾巴）。
+    f.close();          // ⚠️ rename 之前一定要先關檔
+    rotateIfNearCap();  // 已經撞到上限 → 必定超過門檻 → 一定會嘗試輪替
+    g_bytesSinceCheck = 0;
+    f = Storage.open(path, O_WRONLY | O_CREAT | O_APPEND);
+    if (!f || f.size() >= MAX_DIAG_BYTES) {
+      ++g_droppedLines;  // 輪替失敗（檔案系統有問題）才是真的丟掉
+      return false;
+    }
+    if (g_droppedLines > 0) {
+      g_dropNoticePending += g_droppedLines;
+      g_droppedLines = 0;
+    }
+  }
+  // v277：**寫入時也要檢查輪替**。原本 rotateIfNearCap() 只在 begin()／setForced() 跑，
+  //   所以一次開機用久了就會撞到上面那行、然後【無聲停寫】——而 line() 的回傳值沒有人接。
+  //   實測 share 裡 158 份 log 有 **17 份撞上限**（v163/164、v238、v250–258、v263/264、v267/268），
+  //   也就是那幾輪分析用的是被截斷的 log，而我當時不知道。
+  // v277：補印「剛剛丟了幾行」＋本文＋換行，**組成一筆、一次 write**（複查兩輪都打在這裡）。
+  //   分開寫的話，任何一次短寫都會在檔案裡留下半截行，後面再接上別的東西 → 壞掉的紀錄。
+  //   一次 write 之下，短寫仍可能截斷【這一筆】，但不可能把兩筆黏在一起，而且回傳 false 會被計數。
+  //   ⚠️ 時間戳用**真正的 millis**，不是 0 —— 0 會被讀成時間倒退，甚至被誤認為開機邊界。
+  // 緩衝區：通知 ≤48 ＋ 本文 ≤416（line() 的 buf 大小）＋ 換行 ＝ 465。
+  // ⚠️ 堆疊預算：繪圖任務 8192 bytes，line() 的 384+416 加上這裡的 480 ＝ 約 1.3KB（16%）。
+  //    要再加欄位就先算這筆帳，不要無限長大。
+  char out[480];
+  size_t len = strlen(text);
+  if (len > sizeof(out) - 2) len = sizeof(out) - 2;  // 減法形式：任何輸入都不可能溢位（複查第四輪）
+  size_t noticeLen = 0;
+  const uint32_t noticeCount = g_dropNoticePending;
+  if (noticeCount > 0 && len < sizeof(out) - 2) {
+    const int n = snprintf(out, sizeof(out) - len - 2, "%lu DIAGDROP lost=%lu\n",
+                           static_cast<unsigned long>(millis()), static_cast<unsigned long>(noticeCount));
+    if (n > 0 && static_cast<size_t>(n) < sizeof(out) - len - 2) noticeLen = static_cast<size_t>(n);
+  }
+  memcpy(out + noticeLen, text, len);
+  const size_t outLen = noticeLen + len + 1;
+  out[outLen - 1] = '\n';
+  const size_t written = f.write(reinterpret_cast<const uint8_t*>(out), outLen);
+  const bool ok = written == outLen;
+  // 通知那一段確定寫進去了就結清（用「寫了多少」判斷，不是用整筆成敗 —— 否則本文短寫會讓
+  //   同一筆 DIAGDROP 再印一次）。期間若又有新的丟行，只扣掉這次帶走的量，不會被抹掉。
+  if (noticeLen > 0 && written >= noticeLen) g_dropNoticePending -= noticeCount;
+  if (!ok) {
+    ++g_droppedLines;  // 短寫／寫失敗也是丟掉，要算進去
+    // 半截行**封口**：補一個換行，下一筆才不會黏在它後面變成一行壞紀錄。
+    // 盡力而為（卡真的滿了就補不上），但它把「污染下一行」這個後果擋掉。
+    if (written > 0 && out[written - 1] != '\n') f.write(reinterpret_cast<const uint8_t*>("\n"), 1);
+  }
   f.flush();
-  return okBody && okNl;
+  return ok;
 }
 }  // namespace
 
@@ -159,6 +253,7 @@ bool walkCb(walker_heap_into_t heap, walker_block_info_t block, void* userData) 
 }  // namespace
 
 void DiagLog::begin() {
+  if (!g_appendMutex) g_appendMutex = xSemaphoreCreateMutexStatic(&g_appendMutexStorage);  // v249：見 append()
   // 必須在 Storage.begin() 成功且 DataDir::resolve() 之後呼叫(哨兵檔路徑依賴資料目錄)。
   if (!Storage.ready()) {
     enabled_ = false;
@@ -196,14 +291,8 @@ void DiagLog::begin() {
         boot_recovery::consumeBootComboBreadcrumb();
       }
     }
-    if (HalStorage::lastAllocFail[0] != '\0') {
-      line("ALLOCFAIL %s", HalStorage::lastAllocFail);
-      HalStorage::lastAllocFail[0] = '\0';
-    }
-    if (ditherLastAllocFail[0] != '\0') {
-      line("ALLOCFAIL %s", ditherLastAllocFail);
-      ditherLastAllocFail[0] = '\0';
-    }
+    crumb("ALLOCFAIL", HalStorage::lastAllocFail, sizeof(HalStorage::lastAllocFail));
+    crumb("ALLOCFAIL", ditherLastAllocFail, sizeof(ditherLastAllocFail));
   }
 }
 
@@ -378,17 +467,25 @@ bool DiagLog::line(const char* fmt, ...) {
   // v58:放大到 384。加了 reuse/cum_reuse 之後最壞情況已達 252 字元,對 256 只剩 4 bytes——
   // 而新欄位都在【行尾】,截斷會剛好吃掉要量的東西(這正是原註解警告的情況再次發生),
   // 且 cum_reuse 會隨閱讀時間變長。
-  char body[384];
-  va_list args;
-  va_start(args, fmt);
-  vsnprintf(body, sizeof(body), fmt, args);
-  va_end(args);
-
-  char buf[416];  // body + "<millis> " 前綴
-  snprintf(buf, sizeof(buf), "%lu %s", static_cast<unsigned long>(millis()), body);
+  // v277：原本是 body[384] ＋ buf[416] 兩個緩衝區（800 bytes）。append() 為了「一次寫入」
+  //   另外用了 480 —— 而這條路是從排版／繪圖深處呼叫的。**合併成一個**，總量從 800 變 480，
+  //   淨增只有 160 bytes（繪圖任務堆疊 8192，見 ActivityManager.cpp）。輸出格式一個位元組沒變。
+  char buf[480];
+  const int pre = snprintf(buf, sizeof(buf), "%lu ", static_cast<unsigned long>(millis()));
+  if (pre > 0 && static_cast<size_t>(pre) < sizeof(buf)) {
+    va_list args;
+    va_start(args, fmt);
+    vsnprintf(buf + pre, sizeof(buf) - static_cast<size_t>(pre), fmt, args);
+    va_end(args);
+  }
   const bool ok = append(buf);
   LOG_INF("DIAG", "%s", buf);
   return ok;
+}
+
+void DiagLog::crumb(const char* prefix, char* buf, const size_t cap) {
+  char out[320];  // 最大的麵包屑是 ImageBlock::lastDecodeWitness[300]
+  if (breadcrumbTake(buf, cap, out, sizeof(out))) line("%s %s", prefix, out);
 }
 
 bool DiagLog::isDiagnosticPath(const char* path) {

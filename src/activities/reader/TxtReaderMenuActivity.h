@@ -22,12 +22,16 @@
 // 進度會漂掉。串流之後兩者都只是「用同一個位元組位移重排當前頁」,約一秒。
 class TxtReaderMenuActivity final : public Activity {
  public:
-  enum class MenuAction { GO_TO_PERCENT, FONT_SIZE, ROTATE_SCREEN };
+  // v286：**FONT_SIZE 已移除** —— 加了「文字設定」入口之後它就是真重複（字級是那一頁的分頁之一），
+  // 而 EPUB 的閱讀選單從來就只有「文字設定」、沒有獨立的字級。實機回報：「Txt 的字級跟文字設定
+  // 是重複的」。同 v130 砍 EPUB 兩項真重複的判準（docs/specs/2026-08-12-reader-menu-ia.md）。
+  // ⚠️ 連帶把點數集、標籤、pendingFontSize 一起拔掉 —— 拔功能要連入口與管線一起拔
+  //    （教訓 27 的反向：留著死碼 flash 收不回來，而這顆晶片的 app 槽已用 97.4%）。
+  enum class MenuAction { GO_TO_PERCENT, BOOKMARKS, TOGGLE_BOOKMARK, TEXT_SETTINGS, ROTATE_SCREEN, SCREENSHOT, DISPLAY_QR,
+                         DELETE_CACHE };
 
-  // v161：字級改點數制（upstream 1.5 的 per-family 可用點數集），由呼叫端傳入
   explicit TxtReaderMenuActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, const std::string& title,
-                                 float bookProgressPercent, uint8_t currentOrientation,
-                                 std::vector<uint8_t> pointSizes);
+                                 float bookProgressPercent, uint8_t currentOrientation, bool hasBookmarks);
 
   void onEnter() override;
   void onExit() override;
@@ -40,21 +44,22 @@ class TxtReaderMenuActivity final : public Activity {
     StrId labelId;
   };
 
-  static std::vector<MenuItem> buildMenuItems();
+  static std::vector<MenuItem> buildMenuItems(bool hasBookmarks);
 
   const std::vector<MenuItem> menuItems;
   int selectedIndex = 0;
 
+  // v289：與 EPUB 同一組選項（只清快取／連進度一起重設）。
+  // ⚠️ txt 的進度檔就住在快取資料夾裡（ProgressFile 寫在 getCachePath() 下），
+  //    而 Txt::clearCache() 是整包 removeDir —— **不保護就會把閱讀進度一起刪掉**。
+  const std::vector<StrId> clearCacheLabels = {StrId::STR_CLEAR_CACHE_KEEP_PROGRESS,
+                                              StrId::STR_CLEAR_CACHE_RESET_PROGRESS};
   ButtonNavigator buttonNavigator;
   OptionPopup optionPopup;
   std::string title;
   uint8_t pendingOrientation = 0;
-  uint8_t pendingFontSize = 0;
   float bookProgressPercent = 0.0f;
 
   const std::vector<StrId> orientationLabels = {StrId::STR_PORTRAIT, StrId::STR_LANDSCAPE_CW,
                                                 StrId::STR_ORIENTATION_INVERTED, StrId::STR_LANDSCAPE_CCW};
-  // v161：點數集與其標籤（"16 pt"）；pendingFontSize 存【點數】不是 enum 槽位
-  std::vector<uint8_t> pointSizes_;
-  std::vector<std::string> fontSizeLabels_;
 };

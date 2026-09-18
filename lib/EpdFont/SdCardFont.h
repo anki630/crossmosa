@@ -1,6 +1,9 @@
 #pragma once
 
 #include <HalStorage.h>  // v154: HalFile sharedFile_
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
+#include <freertos/task.h>
 #include <cstdint>
 #include <deque>
 #include <string>
@@ -8,6 +11,7 @@
 
 #include "EpdFont.h"
 #include "EpdFontData.h"
+#include "EpdFontFamily.h"
 
 // On-disk binary format version for .cpfont files. Defined as a preprocessor
 // macro (rather than a constexpr) so it can be stringified into the SD-fonts
@@ -24,24 +28,42 @@ class SdCardFont {
  public:
   // v153：最後一次字型系統配置失敗的描述（靜態、先到先得、由 src 端讀走進 diag.log）。
   // v151 的兩行 mini bitmap 失敗只在 LOG_ERR（沒序列埠＝丟掉），慢頁的頭號嫌犯因此隱形。
-  static char lastAllocFail[96];
+  static char lastAllocFail[128];  // v244：96→128，mini-bitmap 行多了 cap= kept= moved= post=
   static void noteAllocFail(const char* what, unsigned bytes, unsigned defMax, unsigned defFree);
   // v191：建置探針 hook。lib/EpdFont 對 lib/Epub 零依賴，閱讀器把 site 7 轉去 noteBuildProbe。
   static void setBuildProbeHook(void (*fn)(uint8_t));
   // v192：字寬表診斷（靜態、無配置）。lib/EpdFont 對 lib/Epub 零依賴，由 app 在 BUILD 視窗讀走。
   static uint32_t advanceMissCount_;
   static uint32_t advanceSdReadCount_;
+  static uint64_t advanceSdReadUs_;  // v252：asd 那些讀取花的時間
   static uint32_t advanceRejectCount_;
   static uint32_t advanceEvictCount_;
+  // v253：CJK 等寬字寬（見 .cpp scanCjkAdvances）。hit＝快路徑直接回答的次數；
+  // fetch＝fetchAdvancesForCodepoints 真的去 SD 讀的筆數與時間（開檔＋seek＋read）；scan＝掃描時間。
+  static uint32_t advanceCjkHitCount_;
+  // v253：頁面預載時拿讀到的字形紀錄核對快路徑（開機以來累計，resetAdvanceDiag 不清）。
+  static uint32_t advanceCjkCrossChecks_;
+  static uint32_t advanceCjkCrossMismatch_;
+  static uint32_t advanceFetchReadCount_;
+  static uint64_t advanceFetchUs_;
+  static uint64_t advanceScanUs_;
+  // v253：每次掃描完成（成功或放棄）放一行，內容是所有已掃字面的狀態（見 publishAdvScanWitness）。
+  static char lastAdvScan[256];
   static void resetAdvanceDiag();
   // v192：asd 計 fallback 讀 glyph 的嘗試次數；巢狀深度避免內層提早歸零。
   static void setAdvanceSdProbe(bool on);
+  // v255：CJK 字寬掃描（一次約 0.6–0.8 秒）只在呼叫端開啟的「允許視窗」內做：背景排版 tick、txt 停留時的預取。
+  //   使用者正在等的排版（翻到新章的同步排版、txt 翻頁）不掃，條件已滿足就記 deferred、留到下次允許。
+  //   視窗屬於開啟它的 task；abortFn 在掃描前與每批之後問一次，回 true＝有按鍵／畫面在等 → 中止（不算失敗，之後重來）。
+  static void openCjkScanWindow(bool (*abortFn)(void*), void* abortCtx);
+  static void closeCjkScanWindow();
+  static uint32_t advanceScanDeferred_;
  private:
  public:
   static constexpr uint16_t MAX_PAGE_GLYPHS = 512;
   static constexpr uint8_t MAX_STYLES = 4;
 
-  SdCardFont() = default;
+  SdCardFont();  // v255：建立 sharedFile_ 的遞迴鎖（靜態配置）
   ~SdCardFont();
   // Owns raw buffers freed in dtor — no shallow-copy semantics. Make any
   // accidental pass-by-value or move a compile-time error.
@@ -71,6 +93,12 @@ class SdCardFont {
   int buildAdvanceTable(const char* utf8Text, uint8_t styleMask = 0x0F, const char* extraText = nullptr);
   int buildAdvanceTable(const std::deque<std::string>& words, bool includeHyphen, uint8_t styleMask = 0x0F,
                         const char* extraText = nullptr);
+  // v254：逐字字重版 —— 每個實際字面只準備自己那些字（wordStyles 與 words 平行）。排版引擎（橫排／直排）用這個。
+  // v262：cpFilter 非空時只收它回 true 的碼位（空白照舊一律準備；includeHyphen 時的連字號也照舊）。直排用它跳過漢字 —— 直排的漢字一律佔 em 格、
+  //   不量 advance（ParsedTextVertical::planToken），替它們逐字讀 SD 是白工（diag261：一章 fetchms 1.3–1.6 秒）。
+  //   表裡少哪些字只影響速度：讀字寬的地方查不到都會退回讀字形紀錄（v254）。
+  int buildAdvanceTable(const std::deque<std::string>& words, const std::vector<EpdFontFamily::Style>& wordStyles,
+                        bool includeHyphen, const char* extraText = nullptr, bool (*cpFilter)(uint32_t) = nullptr);
 
   // Look up advanceX for a codepoint from the advance table.
   // Returns the 12.4 fixed-point advance, or 0 if not found.
@@ -99,7 +127,8 @@ class SdCardFont {
   // v193：換章時清空各字面 advance 表的「用量」但【保留已配置的 768 格】。
   // 表是一次配滿 ADVANCE_CACHE_LIMIT、之後原地合併（見 mergeIntoAdvanceTable），
   // 釋放再重配會在 p2 挖洞。回傳清之前各字面 size 加總，給呼叫端印 ADVRESET。
-  uint32_t resetAdvanceTables();
+  // v253：CJK 掃描已就緒、表又不到 1/4 滿的字面不清（keptOut＝留下的筆數），見 .cpp。
+  uint32_t resetAdvanceTables(uint32_t* keptOut = nullptr);
 
   // Returns pointer to the managed EpdFont for a given style.
   // Returns nullptr if the style is not present.
@@ -137,6 +166,8 @@ class SdCardFont {
     // v161（TXTPAGE 回退判準；v121 折算預取統計用）：
     uint32_t bitmapAllocFailures = 0;  // 撞到連續區塊天花板的次數（觸發降級階梯）
     uint32_t bitmapGlyphsDropped = 0;  // 階梯實際丟掉的字圖數（仍由 miss ring 畫出）
+    // v243 起：取整成長配不到、但這頁仍不必降級的次數（v244 起＝換到別處一整塊後裝得下）。
+    uint32_t bitmapExactRescues = 0;
   };
   void logStats(const char* label = "SDCF");
   void resetStats();
@@ -293,6 +324,11 @@ class SdCardFont {
   //    正是被點名合法的那類。freeAll() 負責關閉。
   HalFile sharedFile_;
   bool ensureFileOpen();
+  // v255：sharedFile_ 的 seek＋read 序列鎖（見 .cpp SharedFileLock）與出錯後關檔。
+  StaticSemaphore_t sharedFileMutexStorage_{};
+  SemaphoreHandle_t sharedFileMutex_ = nullptr;
+  struct SharedFileLock;
+  void dropSharedFile();
 
   static constexpr uint32_t OVERFLOW_CAPACITY = 32;
   struct OverflowEntry {
@@ -328,6 +364,41 @@ class SdCardFont {
   // advance table for styleIdx, preserving sort order; cap-truncates the tail.
   void mergeIntoAdvanceTable(uint8_t styleIdx, const AdvanceEntry* sortedNew, uint32_t newCount);
   static uint8_t advanceSdProbeDepth_;
+  static TaskHandle_t scanWindowOwner_;
+  static uint8_t scanWindowDepth_;
+  static bool (*scanAbortHook_)(void*);
+  static void* scanAbortCtx_;
+
+  // v253：U+4E00–9FFF 的字寬＝「標準字寬」＋少數例外（五套中文 SD 字型實測每字面 0–13 個例外）。
+  // 每個字面用量夠多之後把那段字形紀錄循序讀一次（約 336KB），之後這段的字寬不再查表、不讀 SD。
+  // 結果只取決於字型檔，跟著載入走（clearPersistentCache／freeAll 清），不隨換章清。
+  // 例外存在物件裡的固定陣列（每字面 32 格 × 4B）：掃描路徑不做任何堆積配置（codex 複查：
+  // 建置視窗裡的配置在見底時可能直接 abort，而同一章重開機會再走一次＝開機迴圈）。
+  enum : uint8_t { CJK_SCAN_NONE = 0, CJK_SCAN_READY = 1, CJK_SCAN_UNUSABLE = 2 };
+  static constexpr uint16_t CJK_MAX_EXCEPTIONS = 32;
+  struct CjkException {
+    uint16_t cpOffset;  // codepoint − U+4E00（範圍內最大 0x51FF）
+    uint16_t advanceX;  // 12.4 fixed-point
+  };
+  struct CjkAdvance {
+    uint8_t state = CJK_SCAN_NONE;
+    uint8_t why = 0;       // 最後一次結束的原因（witness 用）
+    uint8_t retries = 0;   // 可重試的失敗已重試過幾次
+    uint16_t uniform = 0;  // 12.4 fixed-point
+    uint16_t exceptionCount = 0;
+    uint16_t verified = 0;
+    uint32_t covered = 0;     // 範圍內字型有的碼位數
+    uint32_t scanMs = 0;
+    uint32_t oldPathCjk = 0;  // 觸發條件：舊路徑為這個字面【成功】從 SD 讀到的範圍內碼位累計
+    CjkException exceptions[CJK_MAX_EXCEPTIONS] = {};  // 依 cpOffset 排序；只有 READY 時才被讀
+  };
+  CjkAdvance cjk_[MAX_STYLES] = {};
+  uint32_t lastCjkScanEndMs_ = 0;  // 兩次掃描之間至少隔一段時間（同一個 tick 裡不連掃兩個字面）
+  bool cjkScannedOnce_ = false;
+  bool cjkAdvanceLookup(uint8_t styleIdx, uint32_t codepoint, uint16_t* outAdvance) const;
+  void scanCjkAdvances(uint8_t styleIdx, uint8_t* ioBuf, uint32_t ioRecords, bool (*abortFn)(void*), void* abortCtx);
+  void resetCjkAdvances();
+  void publishAdvScanWitness() const;
 
   Stats stats_;
   uint32_t contentHash_ = 0;
@@ -349,8 +420,9 @@ class SdCardFont {
   int32_t findGlobalGlyphIndex(const PerStyle& s, uint32_t codepoint) const;
   int fetchAdvancesForCodepoints(uint32_t* codepoints, uint32_t cpCount, uint8_t styleMask);
   template <typename Iter>
-  int buildAdvanceTableRange(Iter begin, Iter end, bool includeSpace, bool includeHyphen, uint8_t styleMask,
-                             const char* extraText = nullptr);
+  int buildAdvanceTableRange(Iter begin, Iter end, const std::vector<EpdFontFamily::Style>* wordStyles,
+                             bool includeSpace, bool includeHyphen, uint8_t styleMask, const char* extraText = nullptr,
+                             bool (*cpFilter)(uint32_t) = nullptr);
   int prewarmStyle(uint8_t styleIdx, const uint32_t* codepoints, uint32_t cpCount, bool metadataOnly);
 
   // Global helpers

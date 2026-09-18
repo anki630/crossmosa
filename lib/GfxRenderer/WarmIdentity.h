@@ -20,7 +20,10 @@ struct WarmIdentity {
   int32_t fontId = 0;
   uint16_t viewportWidth = 0;        // 已折入方向/邊距/狀態列/自動翻頁指示
   uint16_t viewportHeight = 0;
-  uint32_t lineCompressionBits = 0;  // float 位元精確儲存(floatBits)
+  // v284：記的是**解析後的實際行距（像素）**，不是使用者設定的 em 倍數。
+  // ⚠️ 設定一樣但字身框量測結果不同時，版面其實不同 —— 只比設定會沿用錯的暖頁
+  //    （codex 複查）。欄位名保留 Bits 是因為仍走 floatBits 精確比對。
+  uint32_t lineHeightEmBits = 0;
   uint8_t paragraphAlignment = 0;
   uint8_t imageRendering = 0;
   bool extraParagraphSpacing = false;
@@ -44,7 +47,7 @@ struct WarmIdentity {
   bool matches(const WarmIdentity& cur) const {
     return valid && cur.valid && bookHash == cur.bookHash && spineIndex == cur.spineIndex &&
            pageNumber == cur.pageNumber && fontId == cur.fontId && viewportWidth == cur.viewportWidth &&
-           viewportHeight == cur.viewportHeight && lineCompressionBits == cur.lineCompressionBits &&
+           viewportHeight == cur.viewportHeight && lineHeightEmBits == cur.lineHeightEmBits &&
            paragraphAlignment == cur.paragraphAlignment && imageRendering == cur.imageRendering &&
            extraParagraphSpacing == cur.extraParagraphSpacing && hyphenationEnabled == cur.hyphenationEnabled &&
            embeddedStyle == cur.embeddedStyle && focusReadingEnabled == cur.focusReadingEnabled &&

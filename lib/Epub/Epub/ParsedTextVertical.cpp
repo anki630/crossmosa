@@ -235,6 +235,16 @@ void ParsedText::layoutAndExtractColumns(
     const GfxRenderer& renderer, const int fontId, const uint16_t columnLength,
     const std::function<void(std::shared_ptr<TextBlock>, uint32_t, int)>& processColumn, const bool includeLastColumn) {
   if (words.empty()) return;
+  // v252 BUILDPROF：整段排版（RAII：所有出口都計，含 consumeAllAndBail）。
+  struct LayProf {
+    int64_t t0 = ParsedText::profNowUs();
+    ~LayProf() {
+      const uint64_t d = static_cast<uint64_t>(ParsedText::profNowUs() - t0);
+      ParsedText::buildProf.layUs += d;
+      if (ParsedText::buildProfInCd) ParsedText::buildProf.layCdUs += d;
+      ParsedText::buildProf.layCalls++;
+    }
+  } layProf;
 
   // ⚠️⚠️ **任何早退都不可以只是 `return`。**（ParsedText.h:28-30 / 本檔檔頭的 v139 教訓）
   //    呼叫端（ChapterHtmlSlimParser）看到「沒有產出任何欄」就會再排一次同一段 →
@@ -259,7 +269,18 @@ void ParsedText::layoutAndExtractColumns(
   updateNaturalAlign();
 
   // SD 字型的 advance 預熱（只載 advance 不載點陣）——與橫排同，這一段是軸無關的。
-  renderer.ensureSdCardFontReady(fontId, words, false);
+  // v254：原本不帶字重遮罩＝預設四個字重全要 → 每段都替粗體逐字讀、累積到門檻還掃了粗體（txt 根本沒有粗體）。
+  //   改成與橫排同一個逐字字重版本。
+  {
+    const int64_t advT0 = profNowUs();
+    // v262：直排只量西文 token（planToken：isWesternToken → getTextAdvanceX；漢字／句讀／直排形一律 em 格、不量 advance；
+    //   詞間空白只在兩側都是西文時補）。所以只替西文碼位預載字寬 —— diag261 直排書一章 fetchn 551–620、fetchms 1.3–1.6 秒
+    //   幾乎都是替漢字讀的，而且這些讀取還會累積成 CJK 掃描的觸發條件（直排根本用不到掃描結果，cjkhit=0）。
+    //   空白照舊一律準備（表的配置與 v254 起的 hasAdvanceTable 行為不變）；漏掉的字只會退回讀字形紀錄，結果相同。
+    //   證人：BUILD end 的 asd=（退回讀字形的次數）—— 如果直排某處其實有量漢字寬度，這個數字會暴增。
+    renderer.ensureSdCardFontReady(fontId, words, wordStyles, false, &vtext::isWesternCodepoint);
+    buildProf.advUs += static_cast<uint64_t>(profNowUs() - advT0);
+  }
 
   // em 的探測有備援鏈：U+3000 表意空格 → U+4E00「一」（任何中文字型都有）。
   // ⚠️ 原本只探 U+3000 就放棄 —— 而字型【可以】沒有它（SD 字型是我們自己產的，

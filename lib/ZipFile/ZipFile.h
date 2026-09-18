@@ -6,6 +6,26 @@
 #include <string_view>
 #include <unordered_map>
 
+// v247 儀器：readFileToStream 的時間分解（第一次打開圖片頁時「從 EPUB 抽圖到 SD」佔 38%，v246 實機）。
+// 每次 readFileToStream 開頭歸零；呼叫端（ImageBlock 的懶抽取）在返回後立刻讀走。只做加法與 micros()。
+struct ZipStreamStats {
+  uint32_t setupUs = 0;    // 開 zip ＋ 找項目 ＋ 算資料偏移 ＋ seek
+  uint32_t readUs = 0;     // 讀 zip 本體（stored 的 file.read；deflated 的 fill 回呼）
+  uint32_t readBytes = 0;
+  uint32_t inflateUs = 0;  // readAtMost 扣掉 fill 讀取＝解壓 CPU
+  uint32_t writeUs = 0;    // out.write（寫到 SD 的抽出檔）
+  uint32_t compressed = 0;
+  uint32_t uncompressed = 0;
+  uint16_t method = 0xFFFF;  // 0 stored、8 deflated
+  // v250（ZipEntryReader 串流開啟）：壓縮讀取緩衝實際配到的位元組數；開啟失敗在哪一步、當時最大連續塊。
+  uint16_t inBufBytes = 0;
+  // 0＝沒失敗。1 ZipFile 物件 2 開 zip 3 找項目 4 資料偏移 5 大小／方法 6 stored 跳位 7 inflate（跳位／狀態／視窗） 8 讀取緩衝
+  // v251 抽圖（readFileToStream）另有：9 輸出緩衝 10 讀不到 11 寫不進 12 大小不符 13 解壓錯誤
+  uint8_t openFailStage = 0;
+  uint32_t openFailMax = 0;
+};
+inline ZipStreamStats g_zipStreamStats;
+
 class ZipFile {
  public:
   struct FileStatSlim {
@@ -39,6 +59,7 @@ class ZipFile {
   }
 
  private:
+  friend class ZipEntryReader;  // v248：圖片解碼直接從書裡讀，需要檔柄、項目查找與資料偏移
   const std::string& filePath;
   HalFile file;
   ZipDetails zipDetails = {0, 0, false};

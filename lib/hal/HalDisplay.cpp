@@ -61,18 +61,24 @@ EInkDisplay::RefreshMode convertRefreshMode(HalDisplay::RefreshMode mode) {
 }
 
 void HalDisplay::displayBuffer(HalDisplay::RefreshMode mode, bool turnOffScreen) {
-  if (gpio.deviceIsX3() && mode == RefreshMode::HALF_REFRESH) {
+  // v269：面板上若還留著抗鋸齒的灰，這一次整頁刷新就要走清潔路徑（見 noteGrayPanelDirty）。
+  //   exchange：誰先取到誰負責清，不會兩個畫面各清一次。
+  const bool grayDirty = grayPanelDirty_.exchange(false, std::memory_order_relaxed);
+  if (gpio.deviceIsX3() && (mode == RefreshMode::HALF_REFRESH || grayDirty)) {
     einkDisplay.requestResync(1);
   }
 
+  frameSeq_++;
   einkDisplay.displayBuffer(convertRefreshMode(mode), turnOffScreen);
 }
 
 void HalDisplay::displayBufferAsync(HalDisplay::RefreshMode mode) {
-  if (gpio.deviceIsX3() && mode == RefreshMode::HALF_REFRESH) {
+  const bool grayDirty = grayPanelDirty_.exchange(false, std::memory_order_relaxed);  // v269，同 displayBuffer
+  if (gpio.deviceIsX3() && (mode == RefreshMode::HALF_REFRESH || grayDirty)) {
     einkDisplay.requestResync(1);
   }
 
+  frameSeq_++;
   einkDisplay.displayBufferAsyncNoShadow(convertRefreshMode(mode));
 }
 
@@ -81,10 +87,12 @@ void HalDisplay::waitRefreshComplete() { einkDisplay.waitRefreshComplete(); }
 bool HalDisplay::supportsAsyncRefresh() const { return einkDisplay.supportsAsyncRefresh(); }
 
 void HalDisplay::refreshDisplay(HalDisplay::RefreshMode mode, bool turnOffScreen) {
-  if (gpio.deviceIsX3() && mode == RefreshMode::HALF_REFRESH) {
+  const bool grayDirty = grayPanelDirty_.exchange(false, std::memory_order_relaxed);  // v269，同 displayBuffer
+  if (gpio.deviceIsX3() && (mode == RefreshMode::HALF_REFRESH || grayDirty)) {
     einkDisplay.requestResync(1);
   }
 
+  frameSeq_++;
   einkDisplay.refreshDisplay(convertRefreshMode(mode), turnOffScreen);
 }
 
@@ -112,12 +120,17 @@ void HalDisplay::displayGrayscaleBase(RefreshMode fallback, bool turnOffScreen) 
     einkDisplay.requestResync(1);
   }
 
+  frameSeq_++;
   einkDisplay.displayGrayscaleBase(convertRefreshMode(fallback), turnOffScreen);
 }
 
-void HalDisplay::preconditionGrayscale() { einkDisplay.preconditionGrayscale(); }
+void HalDisplay::preconditionGrayscale() {
+  frameSeq_++;
+  einkDisplay.preconditionGrayscale();
+}
 
 void HalDisplay::preconditionGrayscale(uint16_t x, uint16_t y, uint16_t w, uint16_t h) {
+  frameSeq_++;
   einkDisplay.preconditionGrayscale(x, y, w, h);
 }
 
@@ -128,6 +141,7 @@ void HalDisplay::copyGrayscaleMsbBuffers(const uint8_t* msbBuffer) { einkDisplay
 void HalDisplay::cleanupGrayscaleBuffers(const uint8_t* bwBuffer) { einkDisplay.cleanupGrayscaleBuffers(bwBuffer); }
 
 void HalDisplay::displayGrayBuffer(bool turnOffScreen, bool absolute) {
+  frameSeq_++;
   einkDisplay.displayGrayBuffer(turnOffScreen, nullptr, absolute);
 }
 

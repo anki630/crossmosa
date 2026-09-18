@@ -48,10 +48,20 @@ class InflateStream {
   InflateStream(const InflateStream&) = delete;
   InflateStream& operator=(const InflateStream&) = delete;
 
-  // Allocate decompressor state (and the 32KB window when streaming) and reset
-  // stream state. Reuses existing allocations on repeated calls. Returns false
-  // on OOM.
-  bool init(bool streaming);
+  // Allocate decompressor state (and the ring window when streaming) and reset
+  // stream state. Releases any previous allocation and allocates afresh on
+  // every call. Returns false on OOM (nothing stays allocated).
+  //
+  // v251: windowBytes sizes the streaming ring (rounded up to a power of two,
+  // clamped to [4096, 32768]). A ring at least as large as the stream's
+  // TOTAL output never wraps, so every back-reference (distance <= bytes
+  // produced so far) resolves correctly -- callers that know the uncompressed
+  // size pass it (ringBytesFor) and a 10KB image needs a 16KB ring instead of
+  // 32KB. A stream that produces more than that is a size lie; callers already
+  // reject output beyond the declared size.
+  bool init(bool streaming, size_t windowBytes = 32768);
+  static size_t ringBytesFor(size_t totalOutputBytes);
+  size_t windowBytes() const { return windowSize; }
 
   // Free the decompressor state and window.
   void deinit();
@@ -74,7 +84,8 @@ class InflateStream {
 
  private:
   tinfl_decompressor_tag* state = nullptr;  // ~11KB: heap, or inside the claimed build scratch
-  uint8_t* window = nullptr;                // 32KB ring, streaming mode only
+  uint8_t* window = nullptr;                // ring (<= 32KB), streaming mode only
+  size_t windowSize = 0;                    // ring length, power of two
   uint8_t* arenaBase = nullptr;             // non-null when state/window live in lent framebuffer bytes
   size_t windowPos = 0;                     // ring write cursor
   // Decompressed-but-undelivered region of the window (tinfl can overshoot the

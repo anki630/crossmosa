@@ -116,6 +116,8 @@ class GfxRenderer {
   // per-pixel rotation, no per-pixel RMW.
   template <Color color>
   void fillRectImpl(int x, int y, int width, int height) const;
+  // v254：SD 字型的空白字寬（12.4）：表裡查不到就讀字形紀錄（getSpaceWidth／getSpaceAdvance 共用）。
+  int32_t sdSpaceAdvanceFP(const SdCardFont& sdFont, int fontId, EpdFontFamily::Style style) const;
 
  public:
   explicit GfxRenderer(HalDisplay& halDisplay)
@@ -209,6 +211,10 @@ class GfxRenderer {
   void ensureSdCardFontReady(int fontId, const char* utf8Text, uint8_t styleMask = 0x0F) const;
   void ensureSdCardFontReady(int fontId, const std::deque<std::string>& words, bool includeHyphen,
                              uint8_t styleMask = 0x0F) const;
+  // v254：逐字字重版（wordStyles 與 words 平行）：每個字重只準備自己那些字的字寬。
+  void ensureSdCardFontReady(int fontId, const std::deque<std::string>& words,
+                             const std::vector<EpdFontFamily::Style>& wordStyles, bool includeHyphen,
+                             bool (*cpFilter)(uint32_t) = nullptr) const;
 
   // Orientation control (affects logical width/height and coordinate transforms)
   void setOrientation(const Orientation o) { orientation = o; }
@@ -228,6 +234,8 @@ class GfxRenderer {
   // a blocking refresh when fadingFix is enabled or the panel lacks deferral
   // support. See HalDisplay::displayBufferAsync for the baseline contract.
   void displayBufferAsync(HalDisplay::RefreshMode refreshMode = HalDisplay::FAST_REFRESH) const;
+  // v269：面板上留著抗鋸齒灰 —— 下一次整頁刷新要走清潔路徑（狀態住在 HalDisplay，見那裡的註解）。
+  void noteGrayPanelDirty() const;
   void waitRefreshComplete() const;
   // True when displayBufferAsync() genuinely overlaps: panel defers and
   // fadingFix isn't forcing the blocking path. Callers can skip overlap
@@ -343,8 +351,20 @@ class GfxRenderer {
                       int* top) const;
   int getTextAdvanceX(int fontId, const char* text, EpdFontFamily::Style style) const;
   int getFontAscenderSize(int fontId) const;
+  // ⚠️ UI 專用：回傳【字型自己宣告的】advanceY。內文行距不要用這支（見下）。
   int getLineHeight(int fontId) const;
-  int getLineHeight(int fontId, float compression) const;
+
+  // v284：量一個全形字的字身框（em），12.4 定點；量不到回 0。
+  //   ⭐ 直排的欄距與橫排的行距**共用這一支** —— 兩軸同一把尺，才不會各自漂移。
+  //   （`vtext::probeEmFP` 現在是這支的薄包裝，保留是為了讓桌面的 vertical-oracle 不必改。）
+  int32_t probeEmFP(int fontId) const;
+
+  // v284：**內文行距 ＝ 字身框 × pitchEm**，與直排欄距同源（都是 em 的倍數）。
+  //   在此之前橫排行距直接用字型宣告的 advanceY —— 等於**交給六個字型廠商各自決定**，
+  //   實測同一個字級差到兩倍（RoundTC／原俠正楷 1.00 em ＝ 零行距，IBMPlex 2.01 em）。
+  //   ⚠️ 量不到 em 時退回 advanceY，**且該次「行距」設定不生效** —— 這是安全的退化，
+  //      不是正確性問題；**絕不回 0**（0 會讓分頁的「一頁塞幾行」除以零）。
+  int getReaderLineHeight(int fontId, float pitchEm) const;
   std::string truncatedText(int fontId, const char* text, int maxWidth,
                             EpdFontFamily::Style style = EpdFontFamily::REGULAR) const;
   /// Word-wrap \p text into at most \p maxLines lines, each no wider than
@@ -387,6 +407,8 @@ class GfxRenderer {
   bool textAaDarkOnly() const { return textAaDarkOnly_; }
   // v185 bench 證人：最近一次 B/W 刷新選到的 bank（見 HalDisplay::lastRefreshBank）。
   uint8_t lastRefreshBank() const { return display.lastRefreshBank(); }
+  // v245：面板刷新序號（見 HalDisplay::frameSeq）。
+  uint32_t displayFrameSeq() const { return display.frameSeq(); }
   bool supportsAbsoluteGrayscale() const { return display.supportsAbsoluteGrayscale(); }
   bool prefersScrubClean() const { return display.prefersScrubClean(); }
 

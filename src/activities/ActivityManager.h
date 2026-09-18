@@ -46,6 +46,7 @@ class ActivityManager {
 
   // Pending activity to be launched on next loop iteration
   std::unique_ptr<Activity> pendingActivity;
+  unsigned long readerTransitionStartMs_ = 0;  // v280，見 goToReader
   enum class PendingAction { None, Push, Pop, Replace };
   PendingAction pendingAction = PendingAction::None;
 
@@ -90,6 +91,16 @@ class ActivityManager {
   void goToFileBrowser(std::string path = {});
   void goToRecentBooks();
   void goToBrowser();
+  // v280：goToReader 被呼叫的時刻（喚醒路徑分項計時）。
+  // ⚠️ **取走即清空**（複查抓到）：不清的話，之後任何一次沒有經過 goToReader 的 `onEnter`
+  //    （從註腳／選單回到閱讀器）都會拿到上一次的時刻，印出一個看起來合理、實際上毫無意義的
+  //    `trans=`。清掉之後那些情況會印 -1，一眼就知道「這次不是從那條路進來的」。
+  [[nodiscard]] unsigned long takeReaderTransitionStartMs() {
+    const unsigned long v = readerTransitionStartMs_;
+    readerTransitionStartMs_ = 0;
+    return v;
+  }
+
   void goToReader(std::string path, bool allowFastInitialRefresh = false);
   void goToSleep(bool fromTimeout = false);
   void goToBoot();

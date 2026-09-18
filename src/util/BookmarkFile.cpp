@@ -33,6 +33,10 @@ bool BookmarkFile::load(const std::string& bookPath, std::vector<BookmarkEntry>&
       bookmark.visibleTextOffset = obj["vo"] | static_cast<uint32_t>(0);
       bookmark.hasVisibleTextOffset = true;
     }
+    if (!obj["bo"].isNull()) {  // v290：txt 的位元組位移
+      bookmark.byteOffset = obj["bo"] | static_cast<uint32_t>(0);
+      bookmark.hasByteOffset = true;
+    }
   }
 
   LOG_DBG("BKM", "Loaded %zu bookmarks from file", bookmarks.size());
@@ -53,6 +57,9 @@ bool BookmarkFile::save(const std::string& bookPath, const std::vector<BookmarkE
     obj["pp"] = bookmark.computedChapterProgress;
     if (bookmark.hasVisibleTextOffset) {
       obj["vo"] = bookmark.visibleTextOffset;
+    }
+    if (bookmark.hasByteOffset) {
+      obj["bo"] = bookmark.byteOffset;
     }
   }
 

@@ -52,15 +52,27 @@ class ChapterHtmlSlimParser {
   // 直排：欄的位置，從右緣往【左】遞減（欄由右往左）。橫排不使用。
   int16_t currentPageNextX = 0;
   int fontId;
-  float lineCompression;
-  // 直排的欄距係數（em 的倍數）。⭐ **不能從 lineCompression 反推** ——
-  // getReaderLineCompression() 對 SD 字型與 NOTOSERIF 回 0.95/1.0/1.1、對 NOTOSANS 回
-  // 0.90/0.95/1.0，同一個 1.0 在前者是「標準」、後者是「寬」。所以另外送進來。
+  // v284：橫排行距，**已解析好的像素值**（＝量到的字身框 × 檔位係數）。
+  // ⚠️ 刻意不是「em 倍數 ＋ 每次現算」：`probeEmFP` 有兩條精度不同的路（advance 表建好前
+  //    走整數 px 的備援、建好後走 12.4 定點），**同一章前後可能差 1px** → 頁界不一致，
+  //    而快取身分只記使用者設定，看不出差別（codex 複查抓到）。所以由 Section 解析一次、
+  //    連同這個像素值一起寫進 section 檔頭，整章凍結。
+  int lineHeightPx;
+  // v284：建置凍結的字身框（12.4 定點）。直排欄距也由它算 —— parser 內不再 probe。
+  int32_t frozenEmFP_ = -1;
+  // 直排的欄距係數（em 的倍數）。
+  // ⚠️ **v284 更正**：本欄原本寫著「不能從行距反推 —— 它是 advanceY 的壓縮率，
+  //    值域還隨字型家族重疊（同一個 1.0 在兩邊是不同檔位）」。**那個前提已經不成立**：
+  //    v284 之後兩者同源（都是量到的字身框 × 檔位係數），只是這欄已先乘好成像素。
+  //    仍然分開送，是因為**它們是兩個獨立的使用者設定**（橫排 `lineSpacing`／直排
+  //    `readerColumnPitch`），不是因為推不出來。
   // ⚠️ 而它【必須進 section 檔頭】，否則換檔位會讀到用舊幾何排的快取。
   //    已在 Section.cpp 的 columnPitchTier 欄位（v104）。曾規劃摺進側檔檔名，已放棄。
   float columnPitchFactor = 1.50f;
+  mutable int columnPitchCache_ = -1;  // v284：由 frozenEmFP_ 算一次就記住（見 .cpp columnPitchPx）
   bool vertColLogged = false;  // VERTCOL 每次建置只印一行
   uint8_t vertImgDropLogged = 0;  // VERTIMGDROP 上限 3 筆
+  uint8_t imgPlaceLogged = 0;     // v255：IMGPLACE 每章上限 6 筆
   // 直排欄頂。由 layoutCurrentBlock 夾限後寫入，addColumnToPage 直接用 ——
   // 兩處各自讀 BlockStyle 就可能不一致，而 colTop + colLen <= viewportHeight 靠它們一致。
   int16_t verticalColTop = 0;
@@ -173,9 +185,12 @@ class ChapterHtmlSlimParser {
   static void XMLCALL endElement(void* userData, const XML_Char* name);
 
  public:
+  // v258：預排接手時補上 popup callback（預排的 startBuild 沒有給；同 showBuildPopup 自己的 buildPopupPending 閘門）。
+  void setPopupFn(std::function<void()> fn) { popupFn = std::move(fn); }
   explicit ChapterHtmlSlimParser(
       std::shared_ptr<Epub> epub, const std::string& filepath, GfxRenderer& renderer, const int fontId,
-      const float lineCompression, const bool extraParagraphSpacing, const uint8_t paragraphAlignment,
+      const int lineHeightPx, const int32_t frozenEmFP, const bool extraParagraphSpacing,
+      const uint8_t paragraphAlignment,
       const uint16_t viewportWidth, const uint16_t viewportHeight, const bool hyphenationEnabled,
       const bool focusReadingEnabled,
       const std::function<void(std::unique_ptr<Page>, uint16_t, uint16_t, uint32_t)>& completePageFn,
@@ -198,7 +213,8 @@ class ChapterHtmlSlimParser {
         filepath(filepath),
         renderer(renderer),
         fontId(fontId),
-        lineCompression(lineCompression),
+        lineHeightPx(lineHeightPx),
+        frozenEmFP_(frozenEmFP),
         columnPitchFactor(vtext::columnPitchForTier(columnPitchTier)),
         extraParagraphSpacing(extraParagraphSpacing),
         paragraphAlignment(paragraphAlignment),
@@ -248,6 +264,24 @@ class ChapterHtmlSlimParser {
   bool verticalBeginIsolated(uint32_t visibleTextOffset);
   void verticalEndIsolated();
   int columnPitchPx() const;
+  // v275：**巢狀區塊的左右內縮會累加，而累加沒有上限** —— `getCombinedBlockStyle` 是父子相加，
+  //   `fromCssStyle` 只夾了【單一元素】的 2em。實例（2026-09-17 實機回報）：
+  //   `div{margin:1em;padding:1em}` ＋ `p{margin-left:2em}` ＝ 左 4em ＋ 右 2em，
+  //   512px 的版心只剩 188px ＝ **一行 4.1 個字**。這種 CSS 是為寬螢幕寫的，在 528px 上就是災難。
+  //   → 對**累加後**的總內縮設上限，兩側等比例縮（左右比例保住，縮排的視覺線索還在）。
+  //   ⚠️ **只在橫排做**：直排的欄幾何另有一套，而且目前直排的表現是好的，不要順手動它。
+  [[nodiscard]] int16_t maxTotalHorizontalInset() const;
+  void clampHorizontalInsets(BlockStyle& style) const;
+  mutable int16_t maxTotalInsetCache_ = -1;  // 版心與字級在一次解析裡不變 → 只算一次
+  // v276：**垂直空間儀器**（純觀測，不改任何排版行為）。
+  //   要查的事：某本中文書的一章，一頁 11 行只用 4–5 行——標題各佔一整頁、段落之間空 268px，
+  //   而那本書的 CSS 上 `p{margin:0}`、`h1{margin:0}`，找不到來源。**推理已經錯兩次，改用量的。**
+  //   裝在 `makePages()`（區塊級上下間距唯一的套用點）＋ `addLineToPage`（行數）。
+  //   ⚠️ 額度要夾住：diag.log 有大小上限，撞到會**無聲停寫**（memory
+  //      `diagnostics-need-their-own-failure-audit`）。每章 24 行、每次開機 120 行封頂。
+  uint16_t vspaceBlockSeq_ = 0;   // 本章第幾個區塊
+  uint16_t vspaceLines_ = 0;      // 這個區塊吐了幾行（addLineToPage 累加）
+  static uint16_t vspaceBudget_;  // 每次開機的總額度
   const std::vector<std::pair<std::string, uint16_t>>& getAnchors() const { return anchorData; }
 
   // Byte progress of the in-flight parse, used to estimate a still-building section's total page

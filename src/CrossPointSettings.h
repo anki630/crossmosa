@@ -302,7 +302,9 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   //
   // ⚠️⚠️ **每一個閱讀器都必須在 onEnter 寫入它**：
   //    `EpubReaderActivity` 寫 `resolveVerticalFor(epub->hasRtlPageProgression())`；
-  //    `TxtReaderActivity` 與 `XtcReaderActivity` 寫 **0**（那兩種格式沒有直排）。
+  //    `TxtReaderActivity` 寫 `resolveVerticalFor(true)`（v242：txt 沒有出版社訊號，視為直排出版 ——
+  //    只有全域「橫排」時 txt 才橫排）；
+  //    `XtcReaderActivity` 寫 **0**（XTC 每頁是預先算好的點陣圖，結構上沒有直排）。
   //
   // ⚠️ 複查兩輪都打在這裡，記著兩個失敗的版本：
   //    ① 只有 EPUB 那邊寫、`onExit` 不清 → 讀完直排 EPUB 再開 .txt，按鍵全反。
@@ -430,7 +432,7 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   static void validateFrontButtonMapping(CrossPointSettings& settings);
   static uint8_t sleepTimeoutEnumToMinutes(uint8_t legacyValue);
 
-  float getReaderLineCompression() const;
+  float getReaderLinePitchEm() const;  // v284：行距＝字身框的倍數（見 .cpp）
   unsigned long getSleepTimeoutMs() const;
   int getRefreshFrequency() const;
 };

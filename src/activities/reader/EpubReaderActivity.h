@@ -1,4 +1,6 @@
 #pragma once
+
+#include <atomic>
 #include <WarmIdentity.h>
 #include <Epub.h>
 #include <Epub/FootnoteEntry.h>
@@ -44,21 +46,23 @@ class EpubReaderActivity final : public Activity {
   // Resolved in render() once the section is loaded/built far enough, then cleared. Unlike a
   // settings-change reposition it always resolves by content, so it survives any re-pagination.
   std::optional<uint32_t> pendingOffsetJump;
+  // ⚠️ v288 拔掉自動翻頁時【保留】這個成員 —— 它同時是預建／預取的閒置判準
+  //    （NEXT_PREBUILD_IDLE_MS、NEXT_PREBUILD_STEAL_DWELL_MS），不是自動翻頁專用的。
   unsigned long lastPageTurnTime = 0UL;
-  unsigned long pageTurnDuration = 0UL;
   // Signals that the next render should reposition within the newly loaded section
   // based on a cross-book percentage jump.
   bool pendingPercentJump = false;
   // Normalized 0.0-1.0 progress within the target spine item, computed from book percentage.
   float pendingSpineProgress = 0.0f;
   bool pendingScreenshot = false;
+  bool imagePassAborted_ = false;
+  int32_t lastRenderTailMs_ = -1;  // v261：上一次 render 在 renderContents 之後的尾段毫秒（存進度＋預取等；render task；-1＝不知道）  // v260：這次 renderContents 的補圖那一遍被按鍵中止（render task；render() 尾端讀）
   bool pendingSyncSaveError = false;
   // Consecutive page-load failures. Each failure drops the section and rebuilds on the next render,
   // which recovers a transiently corrupt cache; capped so a persistently bad page can't spin forever.
   uint8_t pageLoadRetryCount = 0;
   static constexpr uint8_t MAX_PAGE_LOAD_RETRIES = 3;
   bool skipNextButtonCheck = false;  // Skip button processing for one frame after subactivity exit
-  bool automaticPageTurnActive = false;
   bool showBookmarkMessage = false;
   // "No dictionary set" popup, shown when a lookup is triggered without a configured dictionary.
   bool showDictionaryMessage = false;
@@ -141,6 +145,8 @@ class EpubReaderActivity final : public Activity {
   static bool prefetchShouldAbort(void* ctx);
   static bool prefetchShouldAbortOrInput(void* ctx);
   WarmIdentity buildWarmIdentity(int pageNumber) const;
+  // v257：章末的預取跨到下一章第一頁（下一章已有完整快取時）。回 true＝已處理（diagPfGate 已設）。
+  bool prefetchIntoNextChapter(int fontId, int marginTop, int marginLeft, bool abortOnInput);
   void renderContents(std::unique_ptr<Page> page, int pageNo, int orientedMarginTop, int orientedMarginRight,
                       int orientedMarginBottom, int orientedMarginLeft);
   void renderStatusBar() const;
@@ -221,6 +227,8 @@ class EpubReaderActivity final : public Activity {
   // （原始電平或去彈跳未收斂；不碰邊緣狀態）：按鍵在主任務輪詢，tick 持鎖期間主迴圈讀不到
   // update()，只有這樣才能在使用者按下去的那一個 parseStep 內把鎖還出去。
   static bool buildShouldYield(void* ctx);
+  // v252：背景建置 tick 內、在排版探針點被呼叫（ParsedText::setBuildInputPollHook）。
+  static bool pollInputDuringBuild();
   // v189 儀器（複查後重做：原本只在 tick 分支印、sync 收尾與 section.reset 都看不到，計數還會漏到
   // 下一章）。三個 startBuild 站點呼叫 noteBuildStart；結束由 tick 自己（done/lowmem/failed）或
   // loop() 開頭的轉態偵測（sync 收尾、reset）印 `BUILD end`。
@@ -241,7 +249,60 @@ class EpubReaderActivity final : public Activity {
     int spine = -1;
     int page = -1;
   } lastDeferredKey_;
+  // v245：延後的那一遍當文字頁上面板之後，記下「面板上是哪一頁的文字版、當時的刷新序號」。
+  // 緊接著的補圖那一遍若序號沒變（中間沒有別的畫面上過面板），就跳過「先閃佔位框頁」。每次 renderContents 讀完即清。
+  int deferredTextOnlySpine_ = -1;
+  int deferredTextOnlyPage_ = -1;
+  uint32_t deferredTextOnlyFrameSeq_ = 0;
   int lastAdvanceSpine_ = -1;  // v193：上次清空 advance 表的章；同章重建（方向／設定）不准清
+  // v257：預排下一章。實機（v256）：翻進還沒排的新章按下到畫完 1.9 秒、接下來幾頁 1.9–2.4 秒（新章還在排、不能預取）；
+  //   翻進已經排好的章只要 0.66 秒。→ 目前這章排完之後，背景把下一章排好寫進 SD 快取。
+  //   ⚠️ 只在目前 section【沒有建置】時跑：CSS 解析器整本書共用一個（epub->getCssParser()），兩個建置同時會互相覆寫。
+  //   生命週期：render 的 !section 分支（所有換章／重建的唯一收斂點）一律先停掉它（有頁就以 partial 落地，
+  //   新 section 載入時直接用）；onExit 也停。完成＝檔案已 commit，物件立刻釋放。
+  std::unique_ptr<Section> nextSection_;
+  int nextPrebuildSpine_ = -1;       // 這個 section 期間已嘗試預排的 spine（成功、失敗都算，避免重試迴圈）
+  int nextPrebuiltReadySpine_ = -1;  // 確認有完整快取的 spine（跨章預取與 CHAPTER 證人用）
+  unsigned long nextBuildStartMs_ = 0;
+  uint32_t nextBuildTicks_ = 0;
+  bool nextPrebuildWaiting_ = false;          // 堆積不夠而沒開始：退避中（不標記已嘗試，稍後再試）
+  unsigned long nextPrebuildWaitStartMs_ = 0;  // 退避起點（用差值比，millis 回捲安全）
+  bool nextBuildTurnSinceTick_ = true;         // 上一次預排 tick 之後讀者翻過頁 → 預排暫停中，預取照常
+  static constexpr unsigned long NEXT_PREBUILD_IDLE_MS = 2000;  // 翻頁之後至少停這麼久，預排才開始／繼續
+  static constexpr unsigned long NEXT_PREBUILD_STEAL_DWELL_MS = 3000;  // v259：停這麼久之後，預取的字型快取讓路給預排
+  static constexpr uint32_t NEXT_PREBUILD_MAX_STEALS = 6;             // v259：每個預排最多讓幾次
+  static constexpr unsigned long NEXT_PREBUILD_MAX_AGE_MS = 10UL * 60UL * 1000UL;  // v259：預排壽命上限
+  // codex（v257）：不只開始，【每一個】預排 tick 都要讀者停了 2 秒；註腳裡不跑。暫停時 skipLoopDelay 也回到省電。
+  bool nextBuildTickDue() const {
+    return nextSection_ && nextSection_->isBuilding() && section && !section->isBuilding() && footnoteDepth == 0 &&
+           millis() - lastPageTurnTime >= NEXT_PREBUILD_IDLE_MS;
+  }
+  // v258：接手。讀者一路翻進正在預排的那一章時，預排中的建置直接變成這一章的背景建置，不停下、不從第 1 頁重排。
+  //   ⚠️ 只有排版規格與開始預排時完全相同才接手（nextBuildSpec_）；跳頁／錨點／百分比／設定重定位一律走舊路。
+  ReaderRenderSpec nextBuildSpec_{};
+  uint32_t nextBuildCssSeq_ = 0;  // 開始預排時 CSS 解析器的 mutationSeq_（接手時必須沒變：沒有別人清過或重載過）
+  // v258 證人（diag257 spine 6：可用空檔 11.5 秒卻只排 11 頁，log 看不出卡在哪）。
+  //   busy＝tick 本身的時間；blk＝被堆積地板擋住的 tick 次數／連續被擋的時間（相鄰兩次被擋 <200ms 才累計，
+  //   翻頁暫停造成的空檔不算）；warm＝其中「預取的 warm 身分握著、不放快取直接返回」的次數；
+  //   minfree／minmax＝被擋時看到的最小總量／最大連續塊（KB）。
+  uint32_t nextBuildBusyMs_ = 0;
+  uint32_t nextBuildHeapBlocks_ = 0;
+  uint32_t nextBuildHeapBlockedMs_ = 0;
+  uint32_t nextBuildWarmBlocks_ = 0;
+  uint32_t nextBuildSteals_ = 0;        // v259：停留夠久、預取讓路給預排的次數（steal=次數/沒打開地板的次數）
+  uint32_t nextBuildStealsNoGain_ = 0;
+  bool nextBuildStealNoGain_ = false;   // 讓過一次卻沒打開地板 → 這個預排不再讓，被擋算真的缺記憶體
+  uint32_t nextBuildMinFreeKb_ = 0;
+  uint32_t nextBuildMinMaxKb_ = 0;
+  uint32_t nextBuildBlockedRunMs_ = 0;  // 從上一次成功 tick 之後連續被擋的累計（60 秒 stall 判準）
+  unsigned long nextBuildLastBlockMs_ = 0;
+  bool nextBuildLastTickBlocked_ = false;
+  void resetNextBuildWitness();
+  void noteNextBuildHeapBlocked(bool warmHeld);
+  void nextBuildWitness(char* buf, size_t n) const;
+  void maybeStartNextChapterPrebuild();
+  void tickNextChapterPrebuild();
+  void stopNextChapterPrebuild(const char* why);
   bool diagBuildActive = false;
   bool diagYieldRun = false;
   int diagBuildSpine = -1;  // 建置開始時的章（章切換後 currentSpineIndex 已是新章）
@@ -297,8 +358,42 @@ class EpubReaderActivity final : public Activity {
   // Returns true if sync acted (launched, or surfaced a save error); false if it was a no-op
   // because no KOReader credentials are stored.
   void applyOrientation(uint8_t orientation);
-  void toggleAutoPageTurn(uint8_t selectedPageTurnOption);
   void pageTurn(bool isForwardTurn);
+  // v264：已經在書首（第一個 spine 的第一頁）。「上一頁」在這裡沒有地方可去 ——
+  //   不重畫、不重載章節、不中止正在補的圖（直排／橫排只差在哪顆鍵是「上一頁」，這裡看的是邏輯方向）。
+  // ⚠️ 主任務**不可以**自己去看 `section->currentPage`（codex 複查）：render task 會 reset 它，
+  //   「測指標、再解參考」中間被搶走就是 use-after-free，而且 loop 前後兩次各看一次還可能不一致。
+  //   所以由 render task 在「待處理的跳頁全部套用完、要畫哪一頁已定案」時發佈這個旗標，主任務只讀。
+  //   讀的時候還要**沒有等待中的重畫請求**：主任務任何移動位置的動作都會 `requestUpdate()`，
+  //   有請求在等就表示這個快照已經過時 —— 這樣不必逐一去改每個移動位置的地方（漏一個就會吃掉該有的按鍵）。
+  // v279：開書時的兩個 SD 寫檔延後到第一頁畫完之後（見 .cpp 的說明）。
+  //   `firstRenderDone_` 由繪圖任務寫、主任務讀 → atomic。
+  bool deferredOpenStatePending_ = false;
+  std::atomic<bool> firstRenderDone_{false};
+  void flushDeferredOpenState(bool force = false);
+  // v278：onEnter 結束的時刻（喚醒路徑分項計時用；ADVRESET 印出兩者的差）。
+  // ⚠️ 主任務寫、**繪圖任務讀** → 必須是 atomic（非 atomic 的並行讀寫是 UB，複查抓到）。
+  //    ADVRESET 用 `exchange(0)` 取走，所以只會用一次。
+  std::atomic<uint32_t> readerEnterDoneMs_{0};
+  std::atomic<bool> bookStartShown_{false};
+  [[nodiscard]] bool atBookStart() const;
+  // v264（codex 第三輪）：**每一次要求重畫就先作廢快照**。只靠 `isRenderPending()` 不夠 ——
+  //   render task 是「取件時」清掉那個旗標、進了 render() 才作廢快照，兩件事不是原子的，
+  //   中間主任務讀到的是上一頁留下的 true，該有的上一頁會被吃掉。
+  //   改寫這個虛擬函式 ＝ 唯一的中央點：主任務所有移動位置的動作（翻頁、跳章、書籤、註腳、
+  //   百分比、KOReader 同步、轉方向）最後都會走到它，不必逐一去改十幾個地方（漏一個就是漏洞）。
+  void requestUpdate(bool immediate = false) override {
+    bookStartShown_.store(false, std::memory_order_relaxed);
+    Activity::requestUpdate(immediate);
+  }
+  void requestUpdateAndWait() override {
+    bookStartShown_.store(false, std::memory_order_relaxed);
+    Activity::requestUpdateAndWait();
+  }
+  void publishBookStart();  // render task 專用
+  void noteBookStartNoop(const char* why);
+  uint8_t bookStartNoopLogged_ = 0;  // v264 證人：每次進書最多印幾行
+  uint8_t bookStartDecodeKept_ = 0;  // v264：這次空按有沒有順便保住解碼（印在同一行，不另外寫 SD）
   void loadCachedBookmarks();
   void addBookmark();
   void updateBookmarkFlag();
@@ -306,6 +401,7 @@ class EpubReaderActivity final : public Activity {
   // Footnote navigation
   void navigateToHref(const std::string& href, bool savePosition = false);
   void restoreSavedPosition();
+  std::atomic<uint32_t> pressMs_{0};  // v243 EPLAT：主任務記按鍵時刻，render 取走
 
  public:
   explicit EpubReaderActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::unique_ptr<Epub> epub,
@@ -325,7 +421,7 @@ class EpubReaderActivity final : public Activity {
   // speed would only burn battery; the paused gate still retries every loop pass).
   // v189：看 buildTickDue() 不看 isBuilding()——閒置在 BUILD_AHEAD_CAP 的建置沒有工作要做。
   // （舊視窗設計下這裡整章為真：4 次翻頁 3 次沒有 tick，CPU 卻整章全速。）
-  bool skipLoopDelay() override { return buildTickDue() && !buildHeapPaused; }
+  bool skipLoopDelay() override { return (buildTickDue() || nextBuildTickDue()) && !buildHeapPaused; }
   bool isReaderActivity() const override { return true; }
   bool handleForcedRefresh() override {
     {

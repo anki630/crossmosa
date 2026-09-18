@@ -25,7 +25,21 @@ std::vector<EpubReaderMenuActivity::MenuItem> EpubReaderMenuActivity::buildMenuI
   // ⚠️ 直向可見 12 列是硬上限，而最壞情況（有註腳＋有書籤）正好 12 項——【零餘裕】。
   // reserve 不是上限，加到第 13 項時 vector 照常成長、編譯與執行都不會警告。
   // 這條不變量只靠這行註解與 CLAUDE.md 守著：要加任何一項，必須先砍一項。
-  items.reserve(12);
+  // v288：**「回主畫面」與「自動翻頁」都已移除**，最壞情況 12 → 10 項（終於有餘裕了）。
+  //   ・回主畫面：還原 v130 的定案（換基底時它又長回來了）——閱讀中 Back 鍵本來就回得了。
+  //   ・自動翻頁：**維護者拍板移除**，理由是【閱讀體驗】不是成本：
+  //       被打斷回來時頁面已經自己走掉，而且不一定馬上發現 —— 慢了只是等（無害），
+  //       快了就得往回翻並重新找行。它把配速的主導權從讀者手上拿走，
+  //       撞上 v107 立的「閱讀體驗優先，這是基本功能」（教訓 35）。
+  //     ⭐ 拍板前唯一的反對理由（「手不方便的人只有它」）**已被推翻**：這台機器有
+  //       **傾斜翻頁**（`tiltPageTurn`，IMU），同樣免按鍵而且是**讀者配速**的。
+  //     ⚠️ 但傾斜翻頁只在 IMU 探測成功時才插進設定清單（教訓 A-1）——沒有 IMU 的機器
+  //       就只剩按鍵。重啟條件：有人回報需要定速翻頁，或傾斜翻頁在他的機器上不可用。
+  //   ⚠️ **「截圖」刻意留著，不要照 v130 一起刪。** v130 說它也是真重複（全域組合鍵
+  //      電源＋下任何畫面有效），但那個前提是「兩個入口一樣好用」——實機回報組合鍵
+  //      按不準就截不到圖（實機回報），所以選單版不是重複，是**更可靠的那一個**。
+  //      判準會帶著它的適用條件，抽成絕對規則就會出錯。
+  items.reserve(10);
   items.push_back({MenuAction::SELECT_CHAPTER, StrId::STR_SELECT_CHAPTER});
   if (hasFootnotes) {
     items.push_back({MenuAction::FOOTNOTES, StrId::STR_FOOTNOTES});
@@ -36,11 +50,9 @@ std::vector<EpubReaderMenuActivity::MenuItem> EpubReaderMenuActivity::buildMenuI
   items.push_back({MenuAction::TOGGLE_BOOKMARK, StrId::STR_TOGGLE_BOOKMARK});
   items.push_back({MenuAction::TEXT_SETTINGS, StrId::STR_TEXT_SETTINGS});
   items.push_back({MenuAction::ROTATE_SCREEN, StrId::STR_ORIENTATION});
-  items.push_back({MenuAction::AUTO_PAGE_TURN, StrId::STR_AUTO_TURN_PAGES_PER_MIN});
   items.push_back({MenuAction::GO_TO_PERCENT, StrId::STR_GO_TO_PERCENT});
   items.push_back({MenuAction::SCREENSHOT, StrId::STR_SCREENSHOT_BUTTON});
   items.push_back({MenuAction::DISPLAY_QR, StrId::STR_DISPLAY_QR});
-  items.push_back({MenuAction::GO_HOME, StrId::STR_GO_HOME_BUTTON});
   items.push_back({MenuAction::DELETE_CACHE, StrId::STR_DELETE_CACHE});
   return items;
 }
@@ -55,7 +67,7 @@ void EpubReaderMenuActivity::onExit() { Activity::onExit(); }
 void EpubReaderMenuActivity::closeCancelled() {
   ActivityResult result;
   result.isCancelled = true;
-  result.data = MenuResult{-1, pendingOrientation, selectedPageTurnOption};
+  result.data = MenuResult{.action = -1, .orientation = pendingOrientation};
   setResult(std::move(result));
   finish();
 }
@@ -102,23 +114,14 @@ void EpubReaderMenuActivity::loop() {
       return;
     }
 
-    if (selectedAction == MenuAction::AUTO_PAGE_TURN) {
-      optionPopup.show(I18N.get(StrId::STR_AUTO_TURN_PAGES_PER_MIN), pageTurnLabels.data(),
-                       static_cast<int>(pageTurnLabels.size()), selectedPageTurnOption, [this](int idx) {
-                         selectedPageTurnOption = idx;
-                         requestUpdate();
-                       });
-      requestUpdate();
-      return;
-    }
 
     if (selectedAction == MenuAction::DELETE_CACHE) {
       // v184（維護者）：清快取時追加詢問 —— 只清快取（保留進度）／連進度一起重設。
-      // 閱讀選單直向 12 項零餘裕，不能加項目，所以做成詢問。
+      // v288 前閱讀選單是 12 項零餘裕，不能加項目，所以「連進度一起重設」做成詢問而不是另一列。
+      // （v288 拔掉兩項之後有餘裕了，但這個形狀本身沒有不好 —— 不為了有空位就改它。）
       optionPopup.show(StrId::STR_DELETE_CACHE, clearCacheLabels.data(), static_cast<int>(clearCacheLabels.size()),
                        0, [this](int idx) {
-                         MenuResult r{static_cast<int>(MenuAction::DELETE_CACHE), pendingOrientation,
-                                      selectedPageTurnOption};
+                         MenuResult r{.action = static_cast<int>(MenuAction::DELETE_CACHE), .orientation = pendingOrientation};
                          r.resetProgress = idx == 1 ? 1 : 0;
                          setResult(std::move(r));
                          finish();
@@ -127,7 +130,7 @@ void EpubReaderMenuActivity::loop() {
       return;
     }
 
-    setResult(MenuResult{static_cast<int>(selectedAction), pendingOrientation, selectedPageTurnOption});
+    setResult(MenuResult{.action = static_cast<int>(selectedAction), .orientation = pendingOrientation});
     finish();
   };
 
@@ -210,15 +213,13 @@ void EpubReaderMenuActivity::render(RenderLock&&) {
         const auto value = menuItems[index].action;
         if (value == MenuAction::ROTATE_SCREEN) {
           return I18N.get(orientationLabels[pendingOrientation]);
-        } else if (value == MenuAction::AUTO_PAGE_TURN) {
-          return pageTurnLabels[selectedPageTurnOption];
-        } else {
+                } else {
           return "";
         }
       },
       [this](int index) {
         const auto a = menuItems[index].action;
-        return a == MenuAction::TEXT_SETTINGS || a == MenuAction::SCREENSHOT || a == MenuAction::GO_HOME;
+        return a == MenuAction::TEXT_SETTINGS || a == MenuAction::SCREENSHOT;
       });
 
   // Footer / Hints

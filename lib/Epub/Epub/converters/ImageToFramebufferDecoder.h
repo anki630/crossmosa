@@ -1,6 +1,7 @@
 #pragma once
 #include <HalStorage.h>
 
+#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -37,10 +38,35 @@ class ImageToFramebufferDecoder {
   // 低記憶體就讓同一張章首圖整個 session 都是方框（實機 diag175）。
   static char lastError[64];
   static bool lastErrorTransient;
+  // v255：配置失敗時「那一塊要多大」（bytes；0＝不是單一配置失敗）。ImageBlock 用它決定何時重試：
+  //   原本看「最大塊 ≥ 失敗當時的最大塊＋8KB」，v254 實機一張 PNG 差 1KB 失敗後，其後最大塊 41–49KB（夠了）卻門檻 46.9KB，
+  //   章首圖整個 session 是方框。setLastError 會把它歸零，配置失敗的出口在 setLastError 之後另設。
+  static uint32_t lastErrorNeedBytes;
   static void setLastError(bool transient, const char* fmt, ...) __attribute__((format(printf, 2, 3)));
   static void clearLastError() {
     lastError[0] = '\0';
     lastErrorTransient = false;
+    lastErrorNeedBytes = 0;
+    lastDecodeAborted = false;
+  }
+
+  // v260：按鍵中止解碼。diag259：翻過全頁大圖（1.2–1.5MB JPEG，解碼 4–5 秒）時按下一頁，要等 3.9–5.5 秒。
+  //   主任務每看到一次按下就把序號加一（noteUserInput，atomic、不拿鎖）；閱讀器只在「補圖那一遍的解碼」前後
+  //   arm／disarm（render task），解碼回呼（JPEG／PNG）每一列檢查一次序號有沒有變。變了 → 回呼回 0 讓解碼器停下，
+  //   轉換器丟掉半截的像素快取、設 lastDecodeAborted＝true（不是失敗：呼叫端不記失敗表、不畫方框）。
+  //   沒 arm 的解碼（主畫面縮圖、待機封面、BW 趟裡的補解）完全不受影響。GIF 的回呼沒有回傳值，不支援中止。
+  static bool lastDecodeAborted;
+  static void noteUserInput() { inputSeq_.fetch_add(1, std::memory_order_relaxed); }
+  // codex（v260）：arm 用的序號要在【這次繪製一開始】就取 —— 在 arm 當下才取，繪製開始到解碼之間（含佔位框預閃）
+  //   按的鍵會被當成「arm 之前的」而漏掉，跨章翻頁的主任務卻已經在等鎖。
+  static uint32_t currentInputSeq() { return inputSeq_.load(std::memory_order_relaxed); }
+  static bool inputSeqChangedSince(const uint32_t seq) { return currentInputSeq() != seq; }
+  static void armInputAbort(const bool on, const uint32_t sinceSeq) {
+    armedSeq_ = sinceSeq;
+    inputAbortArmed_ = on;
+  }
+  static bool inputAbortRequested() {
+    return inputAbortArmed_ && inputSeq_.load(std::memory_order_relaxed) != armedSeq_;
   }
 
   // 上游 #2959：解碼回呼裡每 250ms 讓一個 tick，幾秒的大圖解碼不會把 idle task 的看門狗餓死。
@@ -72,6 +98,13 @@ class ImageToFramebufferDecoder {
   // 成本 ~1.1 秒/百萬像素且只付一次（.pxc 快取）；render 階段守衛 → 不 bump、自癒。
   static constexpr int64_t MAX_SOURCE_DIMENSION = INT16_MAX;  // ImageDimensions 是 int16
   static constexpr int64_t MAX_SOURCE_PIXELS = 8388608;
+
+ private:
+  inline static std::atomic<uint32_t> inputSeq_{0};
+  inline static uint32_t armedSeq_ = 0;       // render task 專用（arm 與檢查在同一個 task）
+  inline static bool inputAbortArmed_ = false;  // 同上
+
+ protected:
 
   void warnUnsupportedFeature(const std::string& feature, const std::string& imagePath);
 };

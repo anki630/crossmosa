@@ -2,6 +2,7 @@
 #include <esp_timer.h>
 #include "Section.h"
 
+#include <Breadcrumb.h>
 #include <HalStorage.h>
 #include <Logging.h>
 #include <Memory.h>
@@ -74,7 +75,7 @@ namespace {
 // （置中／貼欄尾）。兩者都改變版面。
 // v218：110 → 111。混合 token 依「漢字段／ASCII 段」拆開、縦中横規則放寬到「一到三位
 // 數字＋可選結尾標點」。兩者都改變 unit 切分，也就改變版面。
-constexpr uint8_t SECTION_FILE_VERSION = 122;  // v236：旋轉西文改成固定基線（cross 烤進 arena 並逐位元組序列化，不跳號＝已讀過的書永遠保持舊偏移）
+constexpr uint8_t SECTION_FILE_VERSION = 130;  // v285：檔頭新增凍結的 emFP 欄位（佈局改變），且行距檔位回到快取身分裡，v284 是 129
 // v187 檔頭的 cssState 欄位：0 = 沒用 CSS（embeddedStyle 關或載入失敗）、1 = 規則全載、
 // 2 = 撞記憶體地板被截斷（樣式打折的版面）。loadSectionFile 看到 2 且此刻記憶體寬裕就重排。
 constexpr uint8_t CSS_STATE_NONE = 0;
@@ -105,7 +106,8 @@ constexpr uint8_t SECTION_FILE_PARTIAL_VERSION = 0xFE - (SECTION_FILE_VERSION - 
 // 原本完全沒有護欄。純編譯期，不影響執行期行為。
 static_assert(SECTION_FILE_PARTIAL_VERSION != SECTION_FILE_VERSION,
               "SECTION_FILE_PARTIAL_VERSION collides with SECTION_FILE_VERSION (they meet at 141)");
-constexpr uint32_t HEADER_SIZE = sizeof(uint8_t) + sizeof(int) + sizeof(float) + sizeof(bool) + sizeof(uint8_t) +
+constexpr uint32_t HEADER_SIZE = sizeof(uint8_t) + sizeof(int) + sizeof(float) + sizeof(int32_t) /*v284 emFP*/ +
+                                 sizeof(bool) + sizeof(uint8_t) +
                                  sizeof(uint16_t) + sizeof(uint16_t) + sizeof(uint16_t) + sizeof(bool) + sizeof(bool) +
                                  sizeof(uint8_t) + sizeof(bool) + sizeof(bool) /*boldBodyText*/ +
                                  sizeof(bool) /*verticalLayout*/ + sizeof(uint8_t) /*columnPitchTier*/ +
@@ -134,6 +136,10 @@ Section::Section(const std::shared_ptr<Epub>& epub, const int spineIndex, GfxRen
 Section::~Section() { suspendBuild(); }
 
 uint32_t Section::onPageComplete(std::unique_ptr<Page> page) {
+  struct SerProf {  // v252 BUILDPROF
+    int64_t t0 = ParsedText::profNowUs();
+    ~SerProf() { ParsedText::buildProf.serUs += static_cast<uint64_t>(ParsedText::profNowUs() - t0); }
+  } serProf;
   if (!file) {
     LOG_ERR("SCT", "File not open for writing page %d", builtPageCount_);
     return 0;
@@ -156,25 +162,47 @@ uint32_t Section::onPageComplete(std::unique_ptr<Page> page) {
   return position;
 }
 
+// v284：由【凍結的 emFP】算出這次建置要用的像素行距。
+// ⚠️ 不在這裡 probe —— probe 只發生在 `startBuild` 那一次（`frozenEmFP_`）。
+//    `probeEmFP` 有兩條精度不同的路（advance 表建好前走整數 px 的備援、建好後走 12.4 定點），
+//    任何「用的時候再量」都可能讓排版與檔頭對不起來。
+int Section::lineHeightPxFor(const ReaderRenderSpec& spec, const int32_t emFP) const {
+  if (emFP > 16 && spec.lineHeightEm > 0.0f) {
+    const int h = static_cast<int>((static_cast<float>(emFP) * spec.lineHeightEm) / 16.0f + 0.5f);
+    if (h > 0) return h;
+  }
+  const int declared = renderer.getLineHeight(spec.fontId);  // 量不到字身框時的安全退化
+  return declared > 0 ? declared : 1;
+}
+
 void Section::writeSectionFileHeader(const ReaderRenderSpec& spec) {
   if (!file) {
     LOG_DBG("SCT", "File not open for writing header");
     return;
   }
-  static_assert(HEADER_SIZE == sizeof(SECTION_FILE_VERSION) + sizeof(spec.fontId) + sizeof(spec.lineCompression) +
+  static_assert(HEADER_SIZE == sizeof(SECTION_FILE_VERSION) + sizeof(spec.fontId) + sizeof(spec.lineHeightEm) + sizeof(int32_t) /* v284：凍結的 emFP */ +
                                    sizeof(spec.extraParagraphSpacing) + sizeof(spec.paragraphAlignment) +
                                    sizeof(spec.viewportWidth) + sizeof(spec.viewportHeight) + sizeof(pageCount) +
                                    sizeof(spec.hyphenationEnabled) + sizeof(spec.embeddedStyle) +
                                    sizeof(spec.imageRendering) + sizeof(spec.focusReadingEnabled) +
                                    sizeof(spec.boldBodyText) + sizeof(spec.verticalLayout) +
-                                   sizeof(spec.columnPitchTier) + sizeof(uint8_t) + sizeof(uint32_t) +
+                                   sizeof(spec.columnPitchTier) +
+                                   sizeof(uint8_t) + sizeof(uint32_t) +
                                    sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint32_t),
                 "Header size mismatch");
   // Written as the incomplete sentinel; finalizeBuild() patches it to
   // SECTION_FILE_VERSION as the last step, committing the file.
   serialization::writePod(file, SECTION_FILE_INCOMPLETE_VERSION);
   serialization::writePod(file, spec.fontId);
-  serialization::writePod(file, spec.lineCompression);
+  serialization::writePod(file, spec.lineHeightEm);
+  // v284：**這次建置凍結的字身框**，是【新增】的欄位，不是拿上面那個來挪用。
+  //   ⚠️⚠️ 實機教訓（實機回報「三檔行距完全失效」）：我第一版把使用者設定
+  //     那個欄位【改成】存 emFP —— 於是換行距檔位時 em 沒變 → 檔頭相符 → 快取命中 →
+  //     沿用舊版面，設定看起來完全沒有作用。**新增語意不要挪用既有欄位。**
+  //   它要在的理由（codex 複查）：`probeEmFP` 可能暫時量不到（字型還沒載完、advance 表
+  //   還沒建、SD 讀取失敗）→ 那次是【不同的幾何】，但使用者設定一模一樣。少了這個欄位，
+  //   那份錯版面會變成永久有效的快取，環境恢復也不會重排。有了它就自癒。
+  serialization::writePod(file, frozenEmFP_);
   serialization::writePod(file, spec.extraParagraphSpacing);
   serialization::writePod(file, spec.paragraphAlignment);
   serialization::writePod(file, spec.viewportWidth);
@@ -219,7 +247,8 @@ bool Section::loadSectionFile(const ReaderRenderSpec& spec) {
 
     int fileFontId;
     uint16_t fileViewportWidth, fileViewportHeight;
-    float fileLineCompression;
+    float fileLineHeightEm;
+    int32_t fileEmFP;
     bool fileExtraParagraphSpacing;
     uint8_t fileParagraphAlignment;
     bool fileHyphenationEnabled;
@@ -231,7 +260,8 @@ bool Section::loadSectionFile(const ReaderRenderSpec& spec) {
     uint8_t fileColumnPitchTier;
     uint8_t fileCssState;
     serialization::readPod(file, fileFontId);
-    serialization::readPod(file, fileLineCompression);
+    serialization::readPod(file, fileLineHeightEm);
+    serialization::readPod(file, fileEmFP);
     serialization::readPod(file, fileExtraParagraphSpacing);
     serialization::readPod(file, fileParagraphAlignment);
     serialization::readPod(file, fileViewportWidth);
@@ -260,7 +290,8 @@ bool Section::loadSectionFile(const ReaderRenderSpec& spec) {
       return false;
     }
 
-    if (spec.fontId != fileFontId || spec.lineCompression != fileLineCompression ||
+    if (spec.fontId != fileFontId || spec.lineHeightEm != fileLineHeightEm ||
+        renderer.probeEmFP(spec.fontId) != fileEmFP ||
         spec.extraParagraphSpacing != fileExtraParagraphSpacing || spec.paragraphAlignment != fileParagraphAlignment ||
         spec.viewportWidth != fileViewportWidth || spec.viewportHeight != fileViewportHeight ||
         spec.hyphenationEnabled != fileHyphenationEnabled || spec.embeddedStyle != fileEmbeddedStyle ||
@@ -373,6 +404,9 @@ bool Section::startBuild(const ReaderRenderSpec& spec, const std::function<void(
   //    先前只設一次不還原，讀完直排書之後設定頁預覽會用直排禁則切橫排的詞。
   const GfxRenderer::VerticalScope verticalScope(renderer, buildVertical_);
   const ParsedText::VerticalKinsokuScope kinsokuScope(buildVertical_);
+  // v284：**這次建置唯一的一次 probe。** 之後排版、直排欄距、section 檔頭全部用這個值 ——
+  //   誰想再量一次，寫出來的快取就會宣稱一個不是它自己用過的幾何（codex 第二輪）。
+  frozenEmFP_ = renderer.probeEmFP(spec.fontId);
   lastBuildWasLowMemory_ = false;
   if (build_) {
     LOG_ERR("SCT", "startBuild called while a build is already active");
@@ -529,7 +563,7 @@ bool Section::startBuild(const ReaderRenderSpec& spec, const std::function<void(
   // context for the parser's whole lifetime.
   BuildContext* ctxPtr = ctx.get();
   ctx->parser = makeUniqueNoThrow<ChapterHtmlSlimParser>(
-      epub, ctxPtr->parsePath, renderer, spec.fontId, spec.lineCompression, spec.extraParagraphSpacing,
+      epub, ctxPtr->parsePath, renderer, spec.fontId, lineHeightPxFor(spec, frozenEmFP_), frozenEmFP_, spec.extraParagraphSpacing,
       spec.paragraphAlignment, spec.viewportWidth, spec.viewportHeight, spec.hyphenationEnabled,
       spec.focusReadingEnabled,
       [this, ctxPtr](std::unique_ptr<Page> page, const uint16_t paragraphIndex, const uint16_t listItemIndex,
@@ -596,7 +630,7 @@ bool Section::buildSomeMore(const int maxPages, bool (*shouldYield)(void*), void
   const int startCount = builtPageCount_;
   for (;;) {
     // v189：每一步之前問一次（第一步也問：按鍵已經按著就一步都別做）。
-    if (shouldYield && shouldYield(yieldCtx)) {
+    if ((shouldYield && shouldYield(yieldCtx)) || ParsedText::buildInputPending()) {  // v252：探針點接到的按鍵
       build_->bytesConsumed = build_->parser->parseBytesConsumed();
       return true;
     }
@@ -640,6 +674,10 @@ bool Section::buildSomeMore(const int maxPages, bool (*shouldYield)(void*), void
       return true;
     }
   }
+}
+
+void Section::setBuildPopupFn(std::function<void()> fn) {
+  if (build_ && build_->parser) build_->parser->setPopupFn(std::move(fn));
 }
 
 bool Section::hasHtmlCache() const {
@@ -922,11 +960,12 @@ std::unique_ptr<Page> Section::loadPageDuringBuild(const int page) {
   // the write cursor so the next onPageComplete keeps appending where it left off.
   const uint32_t writePos = file.position();
   file.seek(pos);
+  const uint32_t allocFailsBefore = Page::allocFailCount();
   auto p = Page::deserialize(file);
   file.seek(writePos);
   if (p) {
     p->visibleTextOffset = build_->lut[page].visibleTextOffset;
-  } else if (Page::lastAllocFail[0] != '\0') {
+  } else if (Page::allocFailCount() != allocFailsBefore) {
     // v194：反序列化配不到 Page → 暫時性 OOM，不是壞檔。
     lastLoadWasLowMemory_ = true;
   }
@@ -964,10 +1003,11 @@ std::unique_ptr<Page> Section::loadPageAt(const int page) const {
   }
 
   f.seek(pagePos);
+  const uint32_t allocFailsBefore = Page::allocFailCount();
   auto p = Page::deserialize(f);
   if (p) {
     p->visibleTextOffset = visibleTextOffset;
-  } else if (Page::lastAllocFail[0] != '\0') {
+  } else if (Page::allocFailCount() != allocFailsBefore) {
     lastLoadWasLowMemory_ = true;
   }
   return p;

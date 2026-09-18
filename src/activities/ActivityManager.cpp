@@ -233,6 +233,9 @@ void ActivityManager::goToBrowser() {
 }
 
 void ActivityManager::goToReader(std::string path, const bool allowFastInitialRefresh) {
+  // v280：喚醒路徑上 `WAKE toreader` → `loadEpub` 之間有 1.1–1.4 秒完全沒有儀器
+  //   （v279 量到 `BOOKOPEN` 自己只有 191ms）。記下起點，`ReaderActivity::onEnter` 會把中間拆開。
+  readerTransitionStartMs_ = millis();
   replaceActivity(std::make_unique<ReaderActivity>(renderer, mappedInput, std::move(path), allowFastInitialRefresh));
 }
 

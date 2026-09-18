@@ -1,13 +1,19 @@
 #include <esp_heap_caps.h>
+#include <esp_timer.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
+#include <freertos/task.h>
 #include <Arduino.h>
 #include "SdCardFont.h"
 
+#include <Breadcrumb.h>
 #include <HalStorage.h>
 #include <Logging.h>
 #include <Utf8.h>
 
 #include <algorithm>
 #include <climits>
+#include <cstddef>
 #include <cstring>
 #include <memory>
 
@@ -47,11 +53,13 @@ inline uint32_t readU32(const uint8_t* p) { return p[0] | (p[1] << 8) | (p[2] <<
 // Walks a null-terminated UTF-8 string and appends each unique codepoint to
 // codepoints[0..cpCount-1] via O(n²) dedup.  Returns true if the buffer
 // reached maxCount (cap hit), false if all codepoints fit.
-bool collectUniqueCodepoints(const char* text, uint32_t* codepoints, uint32_t& cpCount, uint32_t maxCount) {
+bool collectUniqueCodepoints(const char* text, uint32_t* codepoints, uint32_t& cpCount, uint32_t maxCount,
+                             bool (*cpFilter)(uint32_t) = nullptr) {
   const unsigned char* p = reinterpret_cast<const unsigned char*>(text);
   while (*p) {
     uint32_t cp = utf8NextCodepoint(&p);
     if (cp == 0) break;
+    if (cpFilter && !cpFilter(cp)) continue;  // v262：呼叫端不需要的碼位（直排的漢字）不進表
     bool found = false;
     for (uint32_t i = 0; i < cpCount; i++) {
       if (codepoints[i] == cp) {
@@ -112,6 +120,8 @@ constexpr uint8_t MINI_UNDERUSE_RUNS_BEFORE_FREE = 3;
 //    有的是元素數（miniIntervals / miniGlyphs / kern classes）。
 // ⚠️ CapT 可能是 uint16_t（kern class 計數）—— 夾限，否則截斷後 capacity 會記成比實際
 //    配置【小】的值，下一次判斷就錯，反而變成每頁都重配。
+// ⚠️ miniBitmap【不走這裡】（v244 起走 growMiniBitmap）：這裡是先 delete 再 new，
+//    配不到時舊的已經沒了 —— 對幾百位元組的陣列無所謂，對 30–45KB 的 bitmap 會讓降級階梯每頁重切一塊。
 template <typename T, typename CapT>
 bool ensureArrayCapacity(T*& buf, CapT& capacity, const uint32_t needed) {
   if (buf && capacity >= needed) return true;
@@ -138,21 +148,182 @@ bool ensureArrayCapacity(T*& buf, CapT& capacity, const uint32_t needed) {
   return buf != nullptr;
 }
 
+// v244：mini-bitmap 專用的成長（取代 ensureArrayCapacity ＋ v243 的階梯配置）。
+//
+// v243 實機（diag243.log，EPUB NotoSerifTC 22pt）量到的病：取整放不下時，階梯在最大塊裡切一塊「剛好」的，
+// 留下 ≥4KB 的尾巴；下一頁 prewarm 之前才載入的排版物件（小配置）正好坐在尾巴裡，buffer 放掉也合併不回來
+// → 最大塊每頁降 4KB（34,804 → 30,708 → 26,612 → 22,516），連續 18 頁降級。
+//
+// ⭐ 大小選「TLSF 區間邊界 − 12」（IDF 5.5.2 tlsf.c／multi_heap_poisoning.c 讀碼）：malloc(n) 在池內實際要 n＋12
+//   （CONFIG_HEAP_POISONING_LIGHT），mapping_search 把它【往上】取到區間邊界才去找；放掉的洞則歸在【往下】取整的那一格。
+//   n＋12 在邊界上時兩者同格，放掉再要回同樣大小一定找得到那個洞；不在邊界上時要看洞有沒有碰巧併到旁邊的碎片。
+//   `heap_caps_get_largest_free_block()` 回報的值（tlsf_fit_size − 12）天生就是這種大小；8KB 級距也是邊界
+//   （≤64KB 的區間寬 ≤2,048，都整除 8,192），所以取整成 8KB − 12。
+//   ⚠️ 12 綁著 sdkconfig 的 poisoning 等級；換掉只會失去這個性質，不影響正確性。
+//
+// 形狀：先放掉舊的（前後的空塊都能合併進來 —— realloc 只能往後長，codex 複查指出那樣會比 v242 更常降級），
+//   取整配得到就照舊；配不到就把【當下最大的一塊整塊】吃下（它包含剛放掉、合併過的區域，所以通常 ≥ 原容量）。
+// 不留保留量（codex 兩輪複查＋桌機重播後定案）：
+//   - 第一版「吃完別處剩 <16KB 就原地退 4KB」會【製造】它要防的東西：退出去的尾巴緊貼 buffer，下一次成長時正好被
+//     下一頁的排版物件坐住，放掉 buffer 也拿不回來 → 容量永久少 4KB，重播裡 9 次／2.2KB 變 14 次／4.9KB。
+//   - 真的見底時已有兩道既有防線：下一頁 clearCache 的 heap-tight 地板（最大塊 <16KB 就整個放掉 mini）；
+//     miss ring 的字圖配置有事前檢查＋nothrow（v167），配不到只是那個字不畫，不會 abort。
+//   - v243 實機 21 筆，吃完之後別處都還有 19,444–25,588（post=，本版照印，繼續盯）。
+//
+// ✅ 桌機重播（工作區 tools/tlsf-minibitmap-sim：IDF 5.5.2 的 tlsf.c 原檔 ＋ poisoning 模型 ＋ 每頁
+//    「clearCache 清 miss ring → 載入下一頁排版物件 → prewarm → 放掉排版物件 → 被丟的字進 ring」的順序）：
+//    v243 策略逐位元組重現實機階梯（34,804 → 30,708 → 26,612 → 22,516 → 跳回）；這個策略在四種情境
+//    （有無小碎片 × v243 的 18 頁失敗序列／疏密交錯 72 頁）都不下降，失敗頁 12–35 → 9、每頁平均丟字 5.5–13.4KB → 2.2KB。
+//    ⚠️ 重播用的是【自己抄的一份策略】，不是編這個檔（它在匿名命名空間、帶 Arduino 相依）—— 改這裡要同步改那份。
+//
+// 回傳值只給證人用；成敗看 buf／capacity 與 needed 的關係。
+constexpr uint32_t kPoisonOverhead = 12;
+
+struct MiniBitmapGrowth {
+  bool grabbed = false;   // 取整配不到，改吃下當下最大的一塊
+  size_t largest = 0;     // 吃之前的最大塊（已含剛放掉的舊 buffer）
+};
+
+MiniBitmapGrowth growMiniBitmap(uint8_t*& buf, uint32_t& capacity, const uint32_t needed) {
+  MiniBitmapGrowth g;
+  if (buf && capacity >= needed) return g;
+
+  constexpr uint32_t kStep = 8 * 1024;
+  uint32_t want = needed > 0 ? needed : 1;
+  if (want >= kStep - kPoisonOverhead && want <= UINT32_MAX - (kPoisonOverhead + kStep - 1)) {  // 溢位防呆（codex）
+    want = ((want + kPoisonOverhead + kStep - 1) / kStep) * kStep - kPoisonOverhead;
+  }
+
+  heap_caps_free(buf);  // 先放：這塊內容每次重建都會整個重讀，不必 realloc 搬（也省掉兩塊並存的尖峰）
+  buf = nullptr;
+  capacity = 0;
+
+  if (void* p = heap_caps_malloc(want, MALLOC_CAP_DEFAULT)) {
+    buf = static_cast<uint8_t*>(p);
+    capacity = want;
+    return g;
+  }
+
+  // 查詢與配置之間別的 task 可能動到堆積 → 失敗就重查一次（第二次也失敗＝這頁沒有 buffer，走既有的 exhausted 路徑）。
+  for (uint8_t attempt = 0; attempt < 2 && !buf; attempt++) {
+    const size_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT);
+    if (attempt == 0) g.largest = largest;
+    if (largest == 0) break;
+    // 通常 largest < want（否則上面已經配到）；別的 task 剛好放了一塊大的時就照 want 配。
+    const uint32_t grab = largest < want ? static_cast<uint32_t>(largest) : want;
+    if (void* p = heap_caps_malloc(grab, MALLOC_CAP_DEFAULT)) {
+      buf = static_cast<uint8_t*>(p);
+      capacity = grab;
+      g.grabbed = true;
+    }
+  }
+  return g;
+}
+
 }  // namespace
 
-char SdCardFont::lastAllocFail[96] = {0};
+namespace {
+// v253：CJK 等寬字寬。範圍只取 U+4E00–9FFF：常用字全在這段；擴充 A、相容表意字很少出現，照舊走查表。
+constexpr uint32_t CJK_FAST_FIRST = 0x4E00;
+constexpr uint32_t CJK_FAST_LAST = 0x9FFF;
+// 舊路徑為某字面【成功】讀過這麼多個範圍內字寬才掃。v253 實機：一筆舊讀取約 3.4ms、掃描 578–766ms。
+// v254：【內文字面】128（約 0.45 秒）—— 中文書的內文一定用得回來，早點掃只是少付掃描前的逐字讀
+//   （v253 開機後第一個大章掃描前付了 1.3–2.5 秒，其中一半是直排替粗體讀的，已另修）。
+// 其他字面（粗體等）256：codex 算過回本點約 300 筆，粗體可能只出現一兩百個字，掃了是白付 0.6–0.8 秒。
+constexpr uint32_t CJK_SCAN_TRIGGER_BODY = 128;
+constexpr uint32_t CJK_SCAN_TRIGGER = 256;
+constexpr uint32_t CJK_VERIFY_SAMPLES = 16;
+constexpr uint8_t CJK_MAX_RETRIES = 1;
+// 單次掃描的時間上限：正常卡約 0.7 秒；SD 卡慢到這個程度就放棄（不再試），照舊查表。
+// 每一次 SD 操作之前都檢查（取樣、整段、抽驗）；單一個卡住的 SD 呼叫本身無法從這裡中斷（與其他讀取相同）。
+constexpr int64_t CJK_SCAN_DEADLINE_US = 3000000;
+// 兩次掃描之間的最短間隔：避免同一個建置步驟裡背對背掃兩個字面（每個都持 RenderLock）。
+constexpr uint32_t CJK_SCAN_SPACING_MS = 2000;
+// 掃描借 cpScratch_（uint32_t[4096+2]＝16,392B）當讀取緩衝：一次 1,024 筆（16,384B）。
+constexpr uint32_t CJK_SCAN_SCRATCH_SLOTS = 4096 + 2;
+constexpr uint32_t CJK_SCAN_IO_RECORDS = (CJK_SCAN_SCRATCH_SLOTS * sizeof(uint32_t)) / sizeof(EpdGlyph);
+constexpr size_t GLYPH_ADVANCE_OFFSET = offsetof(EpdGlyph, advanceX);
+
+enum : uint8_t {
+  CJK_WHY_OK = 0,
+  CJK_WHY_NONE,     // 這個字面在範圍內沒有字
+  CJK_WHY_OPEN,     // 以下三個是 SD 讀取失敗（可重試一次）
+  CJK_WHY_SEEK,
+  CJK_WHY_READ,
+  CJK_WHY_NOMAJ,    // 取樣找不到過半的字寬
+  CJK_WHY_ZERO,     // 標準字寬是 0（getAdvance 的 0 是「沒查到」，不能拿來當答案）
+  CJK_WHY_EXC,      // 例外超過 CJK_MAX_EXCEPTIONS
+  CJK_WHY_SUM,      // 讀到的字寬總和與「標準字寬＋例外」算回來的不同（記帳錯）
+  CJK_WHY_VERIFY,   // 抽驗與逐筆讀的結果不同
+  CJK_WHY_VREAD,    // 抽驗時讀取失敗（可重試一次）
+  CJK_WHY_SLOW,     // 超過時間上限
+  CJK_WHY_RUNTIME,  // 頁面預載讀到的字寬與快路徑不同（prewarmStyle 的核對）
+  CJK_WHY_ABORT,    // v255：使用者按了鍵／有畫面在等 → 中止，不算失敗，下個允許的時機重來
+};
+constexpr const char* CJK_WHY_NAME[] = {"ok",  "none",   "open",  "seek", "read", "nomaj",  "zero",
+                                        "exc", "sum",    "verify", "vread", "slow", "runtime", "abort"};
+}  // namespace
+
+char SdCardFont::lastAllocFail[128] = {0};
 void (*SdCardFont::buildProbeHook_)(uint8_t) = nullptr;
 uint32_t SdCardFont::advanceMissCount_ = 0;
 uint32_t SdCardFont::advanceSdReadCount_ = 0;
+uint64_t SdCardFont::advanceSdReadUs_ = 0;
 uint32_t SdCardFont::advanceRejectCount_ = 0;
 uint32_t SdCardFont::advanceEvictCount_ = 0;
 uint8_t SdCardFont::advanceSdProbeDepth_ = 0;
+uint32_t SdCardFont::advanceCjkHitCount_ = 0;
+TaskHandle_t SdCardFont::scanWindowOwner_ = nullptr;
+uint8_t SdCardFont::scanWindowDepth_ = 0;
+bool (*SdCardFont::scanAbortHook_)(void*) = nullptr;
+void* SdCardFont::scanAbortCtx_ = nullptr;
+namespace {
+portMUX_TYPE g_scanWindowMux = portMUX_INITIALIZER_UNLOCKED;  // v255：擁有者／深度／鉤子／參數一起讀寫
+}
+uint32_t SdCardFont::advanceScanDeferred_ = 0;
+uint32_t SdCardFont::advanceCjkCrossChecks_ = 0;
+uint32_t SdCardFont::advanceCjkCrossMismatch_ = 0;
+uint32_t SdCardFont::advanceFetchReadCount_ = 0;
+uint64_t SdCardFont::advanceFetchUs_ = 0;
+uint64_t SdCardFont::advanceScanUs_ = 0;
+char SdCardFont::lastAdvScan[256] = {0};
 
 void SdCardFont::resetAdvanceDiag() {
   advanceMissCount_ = 0;
   advanceSdReadCount_ = 0;
+  advanceSdReadUs_ = 0;
   advanceRejectCount_ = 0;
   advanceEvictCount_ = 0;
+  advanceCjkHitCount_ = 0;
+  advanceFetchReadCount_ = 0;
+  advanceFetchUs_ = 0;
+  advanceScanUs_ = 0;
+  advanceScanDeferred_ = 0;
+}
+
+// v255（codex 第二輪）：允許視窗屬於【開啟它的那個 task】。擁有者、深度、中止鉤子與它的參數在同一個臨界區內一起設、
+//   一起讀 —— 別的 task 在這段時間排版不會拿到允許、也不會拿到錯配的鉤子參數。巢狀開啟保留最外層的鉤子。
+void SdCardFont::openCjkScanWindow(bool (*abortFn)(void*), void* abortCtx) {
+  const TaskHandle_t me = xTaskGetCurrentTaskHandle();
+  portENTER_CRITICAL(&g_scanWindowMux);
+  if (scanWindowDepth_ == 0) {
+    scanWindowOwner_ = me;
+    scanAbortHook_ = abortFn;
+    scanAbortCtx_ = abortCtx;
+  }
+  if (scanWindowOwner_ == me && scanWindowDepth_ < 255) ++scanWindowDepth_;
+  portEXIT_CRITICAL(&g_scanWindowMux);
+}
+
+void SdCardFont::closeCjkScanWindow() {
+  const TaskHandle_t me = xTaskGetCurrentTaskHandle();
+  portENTER_CRITICAL(&g_scanWindowMux);
+  if (scanWindowOwner_ == me && scanWindowDepth_ > 0 && --scanWindowDepth_ == 0) {
+    scanWindowOwner_ = nullptr;
+    scanAbortHook_ = nullptr;
+    scanAbortCtx_ = nullptr;
+  }
+  portEXIT_CRITICAL(&g_scanWindowMux);
 }
 
 void SdCardFont::setAdvanceSdProbe(bool on) {
@@ -165,8 +336,10 @@ void SdCardFont::setAdvanceSdProbe(bool on) {
 }
 
 void SdCardFont::noteAllocFail(const char* what, unsigned bytes, unsigned defMax, unsigned defFree) {
-  if (lastAllocFail[0] != '\0') return;  // 先到先得
-  snprintf(lastAllocFail, sizeof(lastAllocFail), "%s bytes=%u defMax=%u defFree=%u", what, bytes, defMax, defFree);
+  if (breadcrumbPending(lastAllocFail)) return;  // 先到先得
+  char local[sizeof(lastAllocFail)];
+  snprintf(local, sizeof(local), "%s bytes=%u defMax=%u defFree=%u", what, bytes, defMax, defFree);
+  breadcrumbPublish(lastAllocFail, sizeof(lastAllocFail), local);  // v249：跨 task 交接（見 Breadcrumb.h）
 }
 
 void SdCardFont::setBuildProbeHook(void (*fn)(uint8_t)) { buildProbeHook_ = fn; }
@@ -184,7 +357,7 @@ void SdCardFont::freeStyleMiniData(PerStyle& s) {
   s.miniIntervals = nullptr;
   delete[] s.miniGlyphs;
   s.miniGlyphs = nullptr;
-  delete[] s.miniBitmap;
+  heap_caps_free(s.miniBitmap);  // v244：growMiniBitmap 用 heap_caps_malloc 配的
   s.miniBitmap = nullptr;
   s.miniIntervalCount = 0;
   s.miniGlyphCount = 0;
@@ -270,6 +443,28 @@ void SdCardFont::freeStyleAll(PerStyle& s) {
 
 // --- Global free/cleanup ---
 
+// v255：sharedFile_ 的使用者（prewarmStyle、onGlyphMiss、fetchAdvancesForCodepoints、buildMiniKernMatrix）
+// 各自的「seek＋read」序列要不被別的使用者插隊。RenderLock 管得住排版與畫頁，但字典頁的 onEnter 不持 RenderLock
+// 也會量字寬（codex 複查）。HalFile 每個呼叫各自持 StorageLock，只保證單一呼叫不壞，不保證位置不被搬走。
+// 遞迴互斥鎖（同一 task 巢狀進來不自鎖），靜態配置、不佔堆積。鎖內只做 SD 讀寫，不去拿 RenderLock，不會形成環。
+struct SdCardFont::SharedFileLock {
+  SemaphoreHandle_t m;
+  explicit SharedFileLock(const SdCardFont& f) : m(f.sharedFileMutex_) {
+    if (m) xSemaphoreTakeRecursive(m, portMAX_DELAY);
+  }
+  ~SharedFileLock() {
+    if (m) xSemaphoreGiveRecursive(m);
+  }
+  SharedFileLock(const SharedFileLock&) = delete;
+  SharedFileLock& operator=(const SharedFileLock&) = delete;
+};
+
+SdCardFont::SdCardFont() { sharedFileMutex_ = xSemaphoreCreateRecursiveMutexStatic(&sharedFileMutexStorage_); }
+
+// v255：SD seek／read 出錯之後把共用檔柄關掉，下一次 ensureFileOpen 重開 —— 不讓一次暫時性錯誤毒化整個 session。
+// 呼叫端必須持有 SharedFileLock。
+void SdCardFont::dropSharedFile() { sharedFile_ = HalFile{}; }
+
 bool SdCardFont::ensureFileOpen() {
   if (sharedFile_) return true;
   if (!filePath_[0]) return false;
@@ -283,9 +478,12 @@ bool SdCardFont::ensureFileOpen() {
 void SdCardFont::freeAll() {
   delete[] cpScratch_;
   cpScratch_ = nullptr;
-  sharedFile_ = HalFile{};  // 關閉共用檔柄（移動指派讓舊的解構→close）
+  {
+    const SharedFileLock fileLock(*this);  // v255：別的 task 正在用它讀的話，等讀完再關
+    sharedFile_ = HalFile{};  // 關閉共用檔柄（移動指派讓舊的解構→close）
+  }
   clearOverflow();
-  clearPersistentCache();
+  clearPersistentCache();  // v253：含掃描結果
   for (uint8_t i = 0; i < MAX_STYLES; i++) {
     freeStyleAll(styles_[i]);
   }
@@ -521,12 +719,15 @@ bool SdCardFont::buildMiniKernMatrix(PerStyle& s, const uint32_t* codepoints, ui
   // Step 6: read the full matrix's rows for each used left class, keep only
   // columns for used right classes. One SD seek + one read per used left class;
   // a row is kernRightClassCount bytes (~200 for Literata).
-  HalFile file;
-  if (!Storage.openFileForRead("SDCF", filePath_, file)) {
+  // v255：共用檔柄（prewarmStyle 讀字圖用的同一個；呼叫時字圖已讀完，下面每列都自己 seek）。
+  //   原本每一次畫頁預載都另開一次 .cpfont（12–18ms，A-4）只為了讀這幾列字距。
+  const SharedFileLock fileLock(*this);  // v255
+  if (!ensureFileOpen()) {
     LOG_ERR("SDCF", "Failed to open .cpfont for mini kern: %s", filePath_);
     freeStyleMiniKern(s);
     return false;
   }
+  HalFile& file = sharedFile_;
 
   std::unique_ptr<int8_t[]> rowBuf(new (std::nothrow) int8_t[s.header.kernRightClassCount]);
   if (!rowBuf) {
@@ -540,12 +741,14 @@ bool SdCardFont::buildMiniKernMatrix(PerStyle& s, const uint32_t* codepoints, ui
     const uint32_t rowFileOff = s.kernMatrixFileOffset + (oldL - 1u) * s.header.kernRightClassCount;
     if (!file.seekSet(rowFileOff)) {
       LOG_ERR("SDCF", "Failed to seek to kern row %u", oldL);
+      dropSharedFile();  // v255
       freeStyleMiniKern(s);
       return false;
     }
     if (file.read(reinterpret_cast<uint8_t*>(rowBuf.get()), s.header.kernRightClassCount) !=
         static_cast<int>(s.header.kernRightClassCount)) {
       LOG_ERR("SDCF", "Failed to read kern row %u", oldL);
+      dropSharedFile();  // v255
       freeStyleMiniKern(s);
       return false;
     }
@@ -1064,6 +1267,8 @@ int SdCardFont::prewarmStyle(uint8_t styleIdx, const uint32_t* codepoints, uint3
             [&](uint32_t a, uint32_t b) { return mappings[a].globalIndex < mappings[b].globalIndex; });
 
   // v154：共用檔柄 —— 每頁 prewarm 省一次 12–18ms 的開檔。
+  // v255：鎖到函式結束（含後面的 buildMiniKernMatrix，遞迴鎖）。
+  const SharedFileLock fileLock(*this);
   if (!ensureFileOpen()) {
     delete[] readOrder;
     delete[] mappings;
@@ -1090,6 +1295,7 @@ int SdCardFont::prewarmStyle(uint8_t styleIdx, const uint32_t* codepoints, uint3
     if (gIdx != lastReadIndex + 1) {
       if (!file.seekSet(fileOff)) {
         LOG_ERR("SDCF", "Prewarm: failed to seek to glyph %d (style %u)", gIdx, styleIdx);
+        dropSharedFile();  // v255
         delete[] readOrder;
         delete[] mappings;
         freeStyleMiniData(s);
@@ -1099,12 +1305,31 @@ int SdCardFont::prewarmStyle(uint8_t styleIdx, const uint32_t* codepoints, uint3
     }
     if (file.read(reinterpret_cast<uint8_t*>(&s.miniGlyphs[mapIdx]), sizeof(EpdGlyph)) != sizeof(EpdGlyph)) {
       LOG_ERR("SDCF", "Prewarm: short glyph read (style %u, glyph %d)", styleIdx, gIdx);
+      dropSharedFile();  // v255
       delete[] readOrder;
       delete[] mappings;
       freeStyleMiniData(s);
       return static_cast<int>(cpCount);
     }
     lastReadIndex = gIdx;
+  }
+
+  // v253：頁面預載剛讀進來的字形紀錄是現成的對照組 —— 範圍內的字都拿來核對掃描結果，零額外 I/O。
+  // 掃描後的抽驗只看 16 個字＋前 8 個例外；這裡是每一頁實際出現的字。對不上＝快路徑停用（之後照舊查表）。
+  if (cjk_[styleIdx].state == CJK_SCAN_READY) {
+    for (uint32_t i = 0; i < validCount; i++) {
+      uint16_t fast = 0;
+      if (!cjkAdvanceLookup(styleIdx, mappings[i].codepoint, &fast)) continue;
+      ++advanceCjkCrossChecks_;
+      if (fast != s.miniGlyphs[i].advanceX) {
+        ++advanceCjkCrossMismatch_;
+        CjkAdvance& c = cjk_[styleIdx];
+        c.state = CJK_SCAN_UNUSABLE;
+        c.why = CJK_WHY_RUNTIME;
+        publishAdvScanWitness();
+        break;
+      }
+    }
   }
 
   uint32_t totalBitmapSize = 0;
@@ -1116,7 +1341,21 @@ int SdCardFont::prewarmStyle(uint8_t styleIdx, const uint32_t* codepoints, uint3
       totalBitmapSize += s.miniGlyphs[i].dataLength;
     }
 
-    if (!ensureArrayCapacity(s.miniBitmap, s.miniBitmapCapacity, totalBitmapSize)) {
+    const MiniBitmapGrowth growth = growMiniBitmap(s.miniBitmap, s.miniBitmapCapacity, totalBitmapSize);
+    if (growth.grabbed && s.miniBitmapCapacity >= totalBitmapSize) {
+      // 取整配不到，但吃下當下最大的一塊之後裝得下 → 這頁完全不降級。
+      stats_.bitmapExactRescues++;
+      // 證人走 SDCFFAIL 既有的印出點（兩個閱讀器都有），不新增印出站點（CLAUDE.md B-22）。
+      if (!breadcrumbPending(lastAllocFail)) {
+        char local[sizeof(lastAllocFail)];
+        snprintf(local, sizeof(local), "mini-rescue bytes=%u defMax=%u cap=%u post=%u",
+                 static_cast<unsigned>(totalBitmapSize), static_cast<unsigned>(growth.largest),
+                 static_cast<unsigned>(s.miniBitmapCapacity),
+                 static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT)));
+        breadcrumbPublish(lastAllocFail, sizeof(lastAllocFail), local);
+      }
+    }
+    if (!s.miniBitmap || s.miniBitmapCapacity < totalBitmapSize) {
       // v154（P1 效能止血①）：miniBitmap 降級階梯 —— 搬回舊樹（v55 系）的作法。
       //
       // 原本這裡整段放棄（freeStyleMiniData + return cpCount）＝整頁的字全走
@@ -1129,10 +1368,15 @@ int SdCardFont::prewarmStyle(uint8_t styleIdx, const uint32_t* codepoints, uint3
       // 排版不受影響 —— advanceX 走獨立的 advanceTable_，這裡只關 render。
       // 被丟的字由 glyph-miss ring 承接（OVERFLOW_CAPACITY 本版一併 8→32，
       // 帳本記過兩者是配套：ring 太小時被丟的字每一趟都重新 miss）。
-      const unsigned dm0 = heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT);
+      //
+      // v244：階梯裡不再配置 —— growMiniBitmap 已經吃下當下最大的一塊（大小對齊區間邊界，下次回收得回來），
+      //   這裡只丟到裝得進它為止。v243 是「照最大塊 − 4KB 切剛好的」，尾巴被佔住就每頁把最大塊切小一截。
       stats_.bitmapAllocFailures++;
-      noteAllocFail("mini-bitmap", totalBitmapSize, dm0,
-                    static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_DEFAULT)));
+      // v249：整行在本地組好，階梯跑完一次發佈（原本先寫基本欄位、之後再補，主任務可能在中間讀走）。
+      char crumb[sizeof(lastAllocFail)];
+      int crumbLen = snprintf(crumb, sizeof(crumb), "mini-bitmap bytes=%u defMax=%u defFree=%u",
+                              static_cast<unsigned>(totalBitmapSize), static_cast<unsigned>(growth.largest),
+                              static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_DEFAULT)));
 
       // 依 bitmap 大小遞減排序（readOrder 此刻的 glyph-index 排序已用完，可以重用；
       // 下面讀 bitmap 前反正會再按 dataOffset 重排）。
@@ -1140,30 +1384,24 @@ int SdCardFont::prewarmStyle(uint8_t styleIdx, const uint32_t* codepoints, uint3
                 [&](uint32_t a, uint32_t b) { return s.miniGlyphs[a].dataLength > s.miniGlyphs[b].dataLength; });
 
       // dropped 標記借用 mappings[].globalIndex（metadata 已讀完，它不再被使用）。
-      static constexpr uint32_t BITMAP_BUDGET_MARGIN = 4096;  // TLSF 取整律：貼上限配必失敗
-      // codex P2：ensureArrayCapacity 對 >=8KB 的配置會取整到 8KB 級距 —— 預算必須比較
-      // 【量化後】的實配大小，否則「看似符合、實配仍失敗」-> 白白多砍 25%、多丟字，
-      // 正好把 dropped 數推過 miss ring 的容量臨界點。
-      const auto quantized = [](uint32_t n) -> uint32_t {
-        return n >= 8 * 1024 ? ((n + 8 * 1024 - 1) / (8 * 1024)) * (8 * 1024) : n;
-      };
+      const uint32_t cap = s.miniBitmap ? s.miniBitmapCapacity : 0;
       uint32_t dropCursor = 0;
       uint32_t remaining = totalBitmapSize;
-      bool bitmapOk = false;
-      for (uint8_t attempt = 0; attempt < 4 && !bitmapOk; attempt++) {
-        const size_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT);
-        while (dropCursor < validCount &&
-               (largest <= BITMAP_BUDGET_MARGIN ||
-                quantized(remaining) + BITMAP_BUDGET_MARGIN > static_cast<uint32_t>(largest))) {
-          const uint32_t idx = readOrder[dropCursor++];
-          // dataLength==0 的字（空格等）不佔 bitmap，丟了只是白佔 ring —— 跳過。
-          if (s.miniGlyphs[idx].dataLength == 0) continue;
-          remaining -= s.miniGlyphs[idx].dataLength;
-          mappings[idx].globalIndex = -1;  // 丟棄標記
-        }
-        if (dropCursor >= validCount && quantized(remaining) + BITMAP_BUDGET_MARGIN > largest) break;
-        bitmapOk = ensureArrayCapacity(s.miniBitmap, s.miniBitmapCapacity, remaining > 0 ? remaining : 1);
+      while (dropCursor < validCount && remaining > cap) {
+        const uint32_t idx = readOrder[dropCursor++];
+        // dataLength==0 的字（空格等）不佔 bitmap，丟了只是白佔 ring —— 跳過。
+        if (s.miniGlyphs[idx].dataLength == 0) continue;
+        remaining -= s.miniGlyphs[idx].dataLength;
+        mappings[idx].globalIndex = -1;  // 丟棄標記
       }
+      const bool bitmapOk = s.miniBitmap != nullptr && remaining <= cap;
+      if (bitmapOk && crumbLen > 0 && crumbLen < static_cast<int>(sizeof(crumb))) {
+        // 證人：手上這塊多大、留下多少、有沒有整塊吃、配完之後別處的最大塊。
+        snprintf(crumb + crumbLen, sizeof(crumb) - crumbLen, " cap=%u kept=%u grab=%u post=%u",
+                 static_cast<unsigned>(cap), static_cast<unsigned>(remaining), growth.grabbed ? 1u : 0u,
+                 static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT)));
+      }
+      breadcrumbPublish(lastAllocFail, sizeof(lastAllocFail), crumb);  // 先到先得（交接內判斷）
 
       if (!bitmapOk) {
         LOG_ERR("SDCF", "mini bitmap ladder exhausted (%u bytes) style %u", totalBitmapSize, styleIdx);
@@ -1256,6 +1494,7 @@ int SdCardFont::prewarmStyle(uint8_t styleIdx, const uint32_t* codepoints, uint3
       if (fileOff != lastBitmapEnd) {
         if (!file.seekSet(fileOff)) {
           LOG_ERR("SDCF", "Prewarm: failed to seek to bitmap (style %u)", styleIdx);
+          dropSharedFile();  // v255
           delete[] readOrder;
           delete[] mappings;
           freeStyleMiniData(s);
@@ -1265,6 +1504,7 @@ int SdCardFont::prewarmStyle(uint8_t styleIdx, const uint32_t* codepoints, uint3
       }
       if (file.read(s.miniBitmap + miniBitmapOffset, glyph.dataLength) != static_cast<int>(glyph.dataLength)) {
         LOG_ERR("SDCF", "Prewarm: short bitmap read (style %u)", styleIdx);
+        dropSharedFile();  // v255
         delete[] readOrder;
         delete[] mappings;
         freeStyleMiniData(s);
@@ -1368,21 +1608,310 @@ size_t SdCardFont::retainedMiniBitmapCapacity() const {
 
 // --- Advance table ---
 
+void SdCardFont::resetCjkAdvances() {
+  for (uint8_t i = 0; i < MAX_STYLES; i++) cjk_[i] = CjkAdvance{};
+  lastCjkScanEndMs_ = 0;
+  cjkScannedOnce_ = false;
+}
+
+bool SdCardFont::cjkAdvanceLookup(const uint8_t styleIdx, const uint32_t codepoint, uint16_t* const outAdvance) const {
+  if (codepoint < CJK_FAST_FIRST || codepoint > CJK_FAST_LAST) return false;
+  const CjkAdvance& c = cjk_[styleIdx];
+  if (c.state != CJK_SCAN_READY) return false;
+  // 字型沒有的字交給舊路徑：那邊會換成替代字形的字寬（fetchAdvancesForCodepoints 的 replacementIdx）。
+  if (findGlobalGlyphIndex(styles_[styleIdx], codepoint) < 0) return false;
+  const uint16_t off = static_cast<uint16_t>(codepoint - CJK_FAST_FIRST);
+  uint16_t adv = c.uniform;
+  uint32_t lo = 0;
+  uint32_t hi = c.exceptionCount;
+  while (lo < hi) {
+    const uint32_t mid = lo + (hi - lo) / 2;
+    if (c.exceptions[mid].cpOffset < off) {
+      lo = mid + 1;
+    } else {
+      hi = mid;
+    }
+  }
+  if (lo < c.exceptionCount && c.exceptions[lo].cpOffset == off) adv = c.exceptions[lo].advanceX;
+  if (outAdvance) *outAdvance = adv;
+  return true;
+}
+
+// v253：為什麼要掃。v252 BUILDPROF：一本中文小說的一章 56 頁排版 8.3 秒，其中 7.1 秒在拿字寬 ——
+//   ① 每段文字把新出現的字逐筆 seek＋read 字形紀錄（字散在 336KB 的表裡，幾乎每筆一個磁區）；
+//   ② 表每章清空、上限 768，中文一章兩三千個不同的字，滿了之後每個字退回 getGlyph（連字圖一起讀，約 14ms）。
+// 而中文字型的漢字字寬幾乎全部相同。所以一次循序讀完那一段（約 0.7 秒，之後不再讀），
+// 記住標準字寬與例外，查詢結果與逐筆讀【逐位元組相同】—— 例外也照實記，不是近似。
+//
+// 自我核對三層，對不上就放棄（照舊查表），不會帶著錯的字寬繼續排版：
+//   ① 總和：讀到的每一筆字寬加總，必須等於「標準字寬 × 字數 ＋ 例外的差額」—— 抓記帳錯（例外漏記、記錯值）；
+//   ② 抽驗：均勻分布 16 個字＋全部例外，走產品的查找（findGlobalGlyphIndex＋整筆 EpdGlyph）逐筆讀，
+//      與掃描的區段算術是兩條獨立的路 —— 抓位置錯（區段、索引、碼位對錯）；
+//   ③ 執行期：每一頁預載讀進來的字形紀錄都拿來比（prewarmStyle）。
+// ⚠️ ③ 抓到時，之前已排好的頁不會重排（只停用快路徑）。邏輯本身由桌機測試對五套字型的每個碼位驗過
+//    （tools/advance-scan-check），③ 是給「裝置上才會發生的分歧」的證人。
+void SdCardFont::scanCjkAdvances(const uint8_t si, uint8_t* const io, const uint32_t ioRecords,
+                                 bool (*const abortFn)(void*), void* const abortCtx) {
+  CjkAdvance& c = cjk_[si];
+  const PerStyle& s = styles_[si];
+  const int64_t t0 = esp_timer_get_time();
+  HalFile file;
+  bool opened = false;
+  // 所有出口都經過這裡：關檔、記時間、決定狀態、放 witness。
+  const auto finish = [&](const uint8_t why) {
+    if (opened) file.close();
+    const int64_t dt = esp_timer_get_time() - t0;
+    advanceScanUs_ += static_cast<uint64_t>(dt);
+    c.scanMs = static_cast<uint32_t>(dt / 1000);
+    c.why = why;
+    lastCjkScanEndMs_ = millis();
+    cjkScannedOnce_ = true;
+    if (why == CJK_WHY_OK) {
+      c.state = CJK_SCAN_READY;
+    } else if (why == CJK_WHY_ABORT) {
+      c.state = CJK_SCAN_NONE;  // 條件仍滿足，下一個允許的時機（至少隔 CJK_SCAN_SPACING_MS）重掃；不佔重試次數
+    } else {
+      const bool retryable =
+          why == CJK_WHY_OPEN || why == CJK_WHY_SEEK || why == CJK_WHY_READ || why == CJK_WHY_VREAD;
+      if (retryable && c.retries < CJK_MAX_RETRIES) {
+        ++c.retries;
+        c.state = CJK_SCAN_NONE;
+        c.oldPathCjk = 0;  // 再累積一輪才重試，不在同一段文字裡連續重掃
+      } else {
+        c.state = CJK_SCAN_UNUSABLE;
+      }
+    }
+    publishAdvScanWitness();
+  };
+  const auto intervalAt = [&s](const uint32_t i, uint32_t& first, uint32_t& last, uint32_t& offset) {
+    if (s.intervalsAreBmp16) {
+      first = s.bmpIntervals[i].first;
+      last = s.bmpIntervals[i].last;
+      offset = s.bmpIntervals[i].offset;
+    } else {
+      first = s.fullIntervals[i].first;
+      last = s.fullIntervals[i].last;
+      offset = s.fullIntervals[i].offset;
+    }
+  };
+  const auto advAt = [io](const uint32_t k) { return readU16(io + k * sizeof(EpdGlyph) + GLYPH_ADVANCE_OFFSET); };
+
+  c.state = CJK_SCAN_NONE;  // 掃描途中快路徑一律不用（例外陣列還沒填完）
+  c.exceptionCount = 0;
+  c.verified = 0;
+  c.covered = 0;
+  c.uniform = 0;
+  if (!s.present || (s.intervalsAreBmp16 ? !s.bmpIntervals : !s.fullIntervals) || ioRecords == 0) {
+    return finish(CJK_WHY_NONE);
+  }
+
+  // 1) 範圍內有幾個字、哪個區段最長（取樣用）。load() 已驗過區段排序、不重疊、offset 連續且不越界。
+  uint32_t first = 0, last = 0, offset = 0;
+  uint32_t bestIv = 0, bestSpan = 0;
+  for (uint32_t i = 0; i < s.header.intervalCount; i++) {
+    intervalAt(i, first, last, offset);
+    if (last < CJK_FAST_FIRST) continue;
+    if (first > CJK_FAST_LAST) break;
+    const uint32_t span = std::min(last, CJK_FAST_LAST) - std::max(first, CJK_FAST_FIRST) + 1;
+    c.covered += span;
+    if (span > bestSpan) {
+      bestSpan = span;
+      bestIv = i;
+    }
+  }
+  if (c.covered == 0) return finish(CJK_WHY_NONE);
+
+  if (!Storage.openFileForRead("SDCF", filePath_, file)) return finish(CJK_WHY_OPEN);
+  opened = true;
+
+  // 2) 標準字寬＝最長區段開頭一批裡過半的那個值（Boyer–Moore 多數決，再數一次確認真的過半）。
+  {
+    intervalAt(bestIv, first, last, offset);
+    const uint32_t lo = std::max(first, CJK_FAST_FIRST);
+    const uint32_t n = std::min(bestSpan, ioRecords);
+    const uint32_t glyphIdx = offset + (lo - first);
+    if (esp_timer_get_time() - t0 > CJK_SCAN_DEADLINE_US) return finish(CJK_WHY_SLOW);  // 開檔本身可能就很慢
+    if (!file.seekSet(s.glyphsFileOffset + glyphIdx * sizeof(EpdGlyph))) return finish(CJK_WHY_SEEK);
+    if (file.read(io, n * sizeof(EpdGlyph)) != static_cast<int>(n * sizeof(EpdGlyph))) return finish(CJK_WHY_READ);
+    uint16_t cand = 0;
+    uint32_t votes = 0;
+    for (uint32_t k = 0; k < n; k++) {
+      const uint16_t adv = advAt(k);
+      if (votes == 0) {
+        cand = adv;
+        votes = 1;
+      } else if (adv == cand) {
+        ++votes;
+      } else {
+        --votes;
+      }
+    }
+    uint32_t occ = 0;
+    for (uint32_t k = 0; k < n; k++) {
+      if (advAt(k) == cand) ++occ;
+    }
+    if (occ * 2 <= n) return finish(CJK_WHY_NOMAJ);
+    if (cand == 0) return finish(CJK_WHY_ZERO);
+    c.uniform = cand;
+  }
+
+  // 3) 整段循序讀，記下每個字寬不等於標準值的碼位（區段依碼位排序 → 例外自然排好序）。
+  uint64_t rawSum = 0;
+  uint32_t filePosIdx = UINT32_MAX;  // 檔案位置（以字形索引計）；取樣之後未知，第一段一定 seek
+  for (uint32_t i = 0; i < s.header.intervalCount; i++) {
+    intervalAt(i, first, last, offset);
+    if (last < CJK_FAST_FIRST) continue;
+    if (first > CJK_FAST_LAST) break;
+    const uint32_t lo = std::max(first, CJK_FAST_FIRST);
+    const uint32_t hi = std::min(last, CJK_FAST_LAST);
+    uint32_t glyphIdx = offset + (lo - first);
+    uint32_t cp = lo;
+    uint32_t remaining = hi - lo + 1;
+    if (glyphIdx != filePosIdx && !file.seekSet(s.glyphsFileOffset + glyphIdx * sizeof(EpdGlyph))) {
+      return finish(CJK_WHY_SEEK);
+    }
+    while (remaining > 0) {
+      if (esp_timer_get_time() - t0 > CJK_SCAN_DEADLINE_US) return finish(CJK_WHY_SLOW);
+      const uint32_t n = std::min(remaining, ioRecords);
+      if (file.read(io, n * sizeof(EpdGlyph)) != static_cast<int>(n * sizeof(EpdGlyph))) return finish(CJK_WHY_READ);
+      for (uint32_t k = 0; k < n; k++, cp++) {
+        const uint16_t adv = advAt(k);
+        rawSum += adv;
+        if (adv == c.uniform) continue;
+        if (c.exceptionCount >= CJK_MAX_EXCEPTIONS) return finish(CJK_WHY_EXC);
+        c.exceptions[c.exceptionCount].cpOffset = static_cast<uint16_t>(cp - CJK_FAST_FIRST);
+        c.exceptions[c.exceptionCount].advanceX = adv;
+        ++c.exceptionCount;
+      }
+      remaining -= n;
+      glyphIdx += n;
+      if (buildProbeHook_) buildProbeHook_(7);  // 每批約 16KB：讓建置探針（含按鍵輪詢）照常跑
+      if (abortFn && abortFn(abortCtx)) return finish(CJK_WHY_ABORT);  // v255
+    }
+    filePosIdx = glyphIdx;
+  }
+
+  // 4) 總和核對。
+  {
+    uint64_t expect = static_cast<uint64_t>(c.uniform) * (c.covered - c.exceptionCount);
+    for (uint16_t k = 0; k < c.exceptionCount; k++) expect += c.exceptions[k].advanceX;
+    if (expect != rawSum) return finish(CJK_WHY_SUM);
+  }
+
+  // 5) 抽驗：均勻 16 個字＋全部例外（最多 32 個）。查找要 READY 才回答；任何失敗 finish 會改掉狀態。
+  c.state = CJK_SCAN_READY;
+  const auto verifyOne = [&](const uint32_t cp) -> uint8_t {
+    if (esp_timer_get_time() - t0 > CJK_SCAN_DEADLINE_US) return CJK_WHY_SLOW;
+    if (abortFn && abortFn(abortCtx)) return CJK_WHY_ABORT;  // v255
+    const int32_t gi = findGlobalGlyphIndex(s, cp);
+    if (gi < 0) return CJK_WHY_VERIFY;
+    EpdGlyph g{};
+    if (!file.seekSet(s.glyphsFileOffset + static_cast<uint32_t>(gi) * sizeof(EpdGlyph))) return CJK_WHY_VREAD;
+    if (file.read(reinterpret_cast<uint8_t*>(&g), sizeof(EpdGlyph)) != sizeof(EpdGlyph)) return CJK_WHY_VREAD;
+    uint16_t fast = 0;
+    if (!cjkAdvanceLookup(si, cp, &fast) || fast != g.advanceX) return CJK_WHY_VERIFY;
+    ++c.verified;
+    return CJK_WHY_OK;
+  };
+  for (uint32_t j = 0; j < CJK_VERIFY_SAMPLES; j++) {
+    uint32_t ord = static_cast<uint32_t>(static_cast<uint64_t>(j) * (c.covered - 1) / (CJK_VERIFY_SAMPLES - 1));
+    uint32_t cp = 0;
+    for (uint32_t i = 0; i < s.header.intervalCount; i++) {
+      intervalAt(i, first, last, offset);
+      if (last < CJK_FAST_FIRST) continue;
+      if (first > CJK_FAST_LAST) break;
+      const uint32_t lo = std::max(first, CJK_FAST_FIRST);
+      const uint32_t span = std::min(last, CJK_FAST_LAST) - lo + 1;
+      if (ord < span) {
+        cp = lo + ord;
+        break;
+      }
+      ord -= span;
+    }
+    const uint8_t why = verifyOne(cp);
+    if (why != CJK_WHY_OK) return finish(why);
+  }
+  for (uint16_t k = 0; k < c.exceptionCount; k++) {
+    const uint8_t why = verifyOne(CJK_FAST_FIRST + c.exceptions[k].cpOffset);
+    if (why != CJK_WHY_OK) return finish(why);
+  }
+
+  // 6) 表裡在掃描之前讀進來的範圍內項目已經多餘（值相同），壓掉，讓出格子給標點與範圍外的字。
+  //    穩定的原地過濾：剩下的仍依碼位排序。
+  if (AdvanceEntry* const tbl = advanceTable_[si]) {
+    uint32_t w = 0;
+    for (uint32_t r = 0; r < advanceTableSize_[si]; r++) {
+      if (cjkAdvanceLookup(si, tbl[r].codepoint, nullptr)) continue;
+      tbl[w++] = tbl[r];
+    }
+    advanceTableSize_[si] = w;
+  }
+  finish(CJK_WHY_OK);
+}
+
+void SdCardFont::publishAdvScanWitness() const {
+  // 一行含所有掃過的字面，開頭是字型的內容雜湊（區分換字型／換字級）與這個 task 的堆疊最低剩餘量（hwm，bytes：
+  // 掃描在很深的排版呼叫鏈裡跑，codex 要求實機量）。每個字面最長 54 字元
+  // （" s3=rt:runtime u=65535 e=32+ n=20992 ms=99999 v=48 t=1"），四個＋開頭 240 < 255；超過時最後一字元改成 '~'。
+  // line 用 static：這個函式在排版／畫頁的深處被呼叫，256B 放堆疊不划算；呼叫端（掃描、prewarm 核對）都在 RenderLock 內串行。
+  static char line[sizeof(lastAdvScan)];
+  int n = snprintf(line, sizeof(line), "font=%08x hwm=%u", static_cast<unsigned>(contentHash_),
+                   static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr)));
+  size_t pos = n > 0 ? static_cast<size_t>(n) : 0;
+  bool truncated = false;
+  for (uint8_t i = 0; i < MAX_STYLES; i++) {
+    const CjkAdvance& c = cjk_[i];
+    if (c.state == CJK_SCAN_NONE && c.retries == 0 && c.scanMs == 0 && c.why == CJK_WHY_OK) continue;  // 還沒掃過
+    const char* const st = c.state == CJK_SCAN_READY ? "ok" : (c.state == CJK_SCAN_UNUSABLE ? "na" : "rt");
+    const char* const why = c.why < sizeof(CJK_WHY_NAME) / sizeof(CJK_WHY_NAME[0]) ? CJK_WHY_NAME[c.why] : "?";
+    const unsigned ms = c.scanMs > 99999 ? 99999u : static_cast<unsigned>(c.scanMs);
+    n = snprintf(line + pos, sizeof(line) - pos, " s%u=%s%s%s u=%u e=%u%s n=%u ms=%u v=%u t=%u", static_cast<unsigned>(i),
+                 st, c.state == CJK_SCAN_READY ? "" : ":", c.state == CJK_SCAN_READY ? "" : why,
+                 static_cast<unsigned>(c.uniform), static_cast<unsigned>(c.exceptionCount),
+                 c.why == CJK_WHY_EXC ? "+" : "", static_cast<unsigned>(c.covered), ms,
+                 static_cast<unsigned>(c.verified), static_cast<unsigned>(c.retries));
+    if (n < 0) break;
+    if (pos + static_cast<size_t>(n) >= sizeof(line)) {
+      truncated = true;
+      pos = sizeof(line) - 1;
+      break;
+    }
+    pos += static_cast<size_t>(n);
+  }
+  if (truncated) line[sizeof(line) - 2] = '~';
+  // 新的一行含所有字面的狀態，所以先丟掉還沒被讀走的舊行再放（Breadcrumb 本身是先到先得）。
+  char discard[1];
+  breadcrumbTake(lastAdvScan, sizeof(lastAdvScan), discard, sizeof(discard));
+  breadcrumbPublish(lastAdvScan, sizeof(lastAdvScan), line);
+}
+
 void SdCardFont::clearPersistentCache() {
   for (uint8_t i = 0; i < MAX_STYLES; i++) {
     delete[] advanceTable_[i];
     advanceTable_[i] = nullptr;
     advanceTableSize_[i] = 0;
   }
+  // v253：掃描結果跟著表一起丟。READY 的前提是那個字面的表已配置（觸發條件），
+  // 表沒了還留著 READY，renderer 的 hasAdvanceTable() 閘就可能擋掉快路徑、而 fetch 又略過漢字。
+  resetCjkAdvances();
 }
 
-uint32_t SdCardFont::resetAdvanceTables() {
+uint32_t SdCardFont::resetAdvanceTables(uint32_t* const keptOut) {
   // v193：一次配滿 768 格之後就地重用；只把 size 歸零，下一章直接往同一塊寫。
+  // v253：CJK 掃描就緒的字面，表裡只剩標點、拉丁字母與範圍外的字 —— 整本書就那一兩百個。
+  //   每章清掉只是讓下一章把同一批再從 SD 讀一次（一筆一次 seek＋read）。不到 1/4 滿就留著（新章仍有
+  //   ≥577 格）；超過才照 v193 清（清的理由是「表滿會把新章的字擋在外面」）。
   uint32_t used = 0;
+  uint32_t kept = 0;
   for (uint8_t i = 0; i < MAX_STYLES; i++) {
     used += advanceTableSize_[i];
+    if (cjk_[i].state == CJK_SCAN_READY && advanceTableSize_[i] < ADVANCE_CACHE_LIMIT / 4) {
+      kept += advanceTableSize_[i];
+      continue;
+    }
     advanceTableSize_[i] = 0;
   }
+  if (keptOut) *keptOut = kept;
   return used;
 }
 
@@ -1493,6 +2022,11 @@ bool SdCardFont::hasAdvanceTable() const {
 
 uint16_t SdCardFont::getAdvance(uint32_t codepoint, uint8_t style) const {
   style &= (MAX_STYLES - 1);
+  uint16_t cjkAdv = 0;
+  if (cjkAdvanceLookup(style, codepoint, &cjkAdv)) {  // v253：掃描過的漢字，值與表／逐筆讀相同
+    ++advanceCjkHitCount_;
+    return cjkAdv;
+  }
   if (!advanceTable_[style]) {
     ++advanceMissCount_;  // v192：量測路徑沒命中才可能去打 SD
     return 0;
@@ -1530,6 +2064,7 @@ int SdCardFont::fetchAdvancesForCodepoints(uint32_t* codepoints, uint32_t cpCoun
     // (returns 0); the slow path is still correct for those codepoints.
     if (advanceTableSize_[si] >= ADVANCE_CACHE_LIMIT) {
       for (uint32_t i = 0; i < cpCount; i++) {
+        if (cjkAdvanceLookup(si, codepoints[i], nullptr)) continue;  // v253：掃描已涵蓋，不需要進表
         if (advanceTableLookup(si, codepoints[i], nullptr)) continue;
         // v192：確定有新碼位要插、表滿插不進才算；整批早已在表裡不准假陽性。
         ++advanceRejectCount_;
@@ -1557,6 +2092,7 @@ int SdCardFont::fetchAdvancesForCodepoints(uint32_t* codepoints, uint32_t cpCoun
     const int32_t replacementIdx = findGlobalGlyphIndex(s, REPLACEMENT_GLYPH);
     for (uint32_t i = 0; i < cpCount; i++) {
       const uint32_t cp = codepoints[i];
+      if (cjkAdvanceLookup(si, cp, nullptr)) continue;    // v253：掃描已涵蓋
       if (advanceTableLookup(si, cp, nullptr)) continue;  // already cached
       int32_t idx = findGlobalGlyphIndex(s, cp);
       if (idx < 0) {
@@ -1578,37 +2114,56 @@ int SdCardFont::fetchAdvancesForCodepoints(uint32_t* codepoints, uint32_t cpCoun
     std::sort(mappings.get(), mappings.get() + needCount,
               [](const CpIdx& a, const CpIdx& b) { return a.glyphIndex < b.glyphIndex; });
 
-    // Open file once and read advanceX for each needed glyph.
-    HalFile file;
-    if (!Storage.openFileForRead("SDCF", filePath_, file)) {
-      LOG_ERR("SDCF", "buildAdvanceTable: failed to open .cpfont for style %u", si);
-      continue;
-    }
+    // v253：這一段（開檔到關檔，含所有出口）的時間與讀取筆數進 BUILDPROF 的 fetchms／fetchn。
+    struct FetchProf {
+      int64_t t0 = esp_timer_get_time();
+      uint32_t reads = 0;
+      ~FetchProf() {
+        SdCardFont::advanceFetchUs_ += static_cast<uint64_t>(esp_timer_get_time() - t0);
+        SdCardFont::advanceFetchReadCount_ += reads;
+      }
+    } fetchProf;
 
+    // v255：用常駐的共用檔柄（sharedFile_），不再每次呼叫、每個字重各開一次檔。
+    //   v254 實機：一章 110 筆讀取卻花 1,197ms（≈11ms／筆）—— 一段只補一兩個新字也付一次 12–18ms 的開檔（A-4）。
+    //   sharedFile_ 本來就被 prewarmStyle 與 onGlyphMiss（排版量字寬的退路也走它）共用，
+    //   都在 RenderLock 串行之下；這裡每次讀取前都自己 seek（lastReadIndex 初值 INT32_MIN），不依賴前一個使用者留下的位置。
     std::unique_ptr<AdvanceEntry[]> staged(new (std::nothrow) AdvanceEntry[needCount]);
     if (!staged) {
       LOG_ERR("SDCF", "buildAdvanceTable: failed to allocate staging for style %u", si);
-      file.close();
       continue;
     }
+    const SharedFileLock fileLock(*this);
+    if (!ensureFileOpen()) {
+      LOG_ERR("SDCF", "buildAdvanceTable: failed to open .cpfont for style %u", si);
+      continue;
+    }
+    HalFile& file = sharedFile_;
 
     uint32_t fetched = 0;
     EpdGlyph tempGlyph;
-    int32_t lastReadIndex = INT32_MIN;
     for (uint32_t i = 0; i < needCount; i++) {
       int32_t gIdx = mappings[i].glyphIndex;
       uint32_t fileOff = s.glyphsFileOffset + static_cast<uint32_t>(gIdx) * sizeof(EpdGlyph);
-      if (gIdx != lastReadIndex + 1) {
-        if (!file.seekSet(fileOff)) {
-          LOG_ERR("SDCF", "buildAdvanceTable: failed to seek to glyph %d (style %u)", gIdx, si);
-          break;
-        }
+      // v255：每一筆都自己 seek（原本連號的字省略 seek）—— 迴圈尾端的 buildProbeHook_ 回呼出去，
+      //   不依賴「回來時檔案位置還在上一筆後面」（codex 複查）。這裡的字本來就散，省略 seek 的機會很少。
+      if (!file.seekSet(fileOff)) {
+        LOG_ERR("SDCF", "buildAdvanceTable: failed to seek to glyph %d (style %u)", gIdx, si);
+        dropSharedFile();
+        break;
       }
       if (file.read(reinterpret_cast<uint8_t*>(&tempGlyph), sizeof(EpdGlyph)) != sizeof(EpdGlyph)) {
         LOG_ERR("SDCF", "buildAdvanceTable: short glyph read (style %u, glyph %d)", si, gIdx);
+        dropSharedFile();
         break;
       }
-      lastReadIndex = gIdx;
+      ++fetchProf.reads;
+      // v253：掃描的觸發條件只算【成功讀到】的範圍內字（codex：算「打算讀的」會在讀取失敗時提早觸發）。
+      // mappings 裡的 glyphIndex 可能是替代字形（字型沒有這個字），那種不算。
+      if (mappings[i].codepoint >= CJK_FAST_FIRST && mappings[i].codepoint <= CJK_FAST_LAST &&
+          gIdx == findGlobalGlyphIndex(s, mappings[i].codepoint) && cjk_[si].oldPathCjk < UINT32_MAX) {
+        ++cjk_[si].oldPathCjk;
+      }
       staged[fetched].codepoint = mappings[i].codepoint;
       staged[fetched].advanceX = tempGlyph.advanceX;
       fetched++;
@@ -1616,7 +2171,6 @@ int SdCardFont::fetchAdvancesForCodepoints(uint32_t* codepoints, uint32_t cpCoun
       // 沒有後續 site 7 收尾，空窗會被下一個字寬探針收走而繼續誤報成 gapsite=2，儀器目的落空（複查抓到）。
       if (buildProbeHook_) buildProbeHook_(7);
     }
-    file.close();
 
     if (fetched > 0) {
       // Sort staged by codepoint, then merge into the persistent table.
@@ -1633,8 +2187,9 @@ int SdCardFont::fetchAdvancesForCodepoints(uint32_t* codepoints, uint32_t cpCoun
 }
 
 template <typename Iter>
-int SdCardFont::buildAdvanceTableRange(Iter begin, Iter end, bool includeSpace, bool includeHyphen, uint8_t styleMask,
-                                       const char* extraText) {
+int SdCardFont::buildAdvanceTableRange(Iter begin, Iter end, const std::vector<EpdFontFamily::Style>* wordStyles,
+                                       bool includeSpace, bool includeHyphen, uint8_t styleMask, const char* extraText,
+                                       bool (*cpFilter)(uint32_t)) {
   if (!loaded_) return -1;
   styleMask = resolveStyleMask(styleMask);
   if (styleMask == 0) return 0;
@@ -1665,38 +2220,108 @@ int SdCardFont::buildAdvanceTableRange(Iter begin, Iter end, bool includeSpace, 
     }
     return -1;
   }
-  uint32_t cpCount = 0;
-  bool hitCap = false;
 
-  for (auto it = begin; it != end && !hitCap; ++it) {
-    hitCap = collectUniqueCodepoints(asCStr(*it), codepoints, cpCount, MAX_UNIQUE_CODEPOINTS);
+  // v253：先掃描、再收集碼位 —— 掃描借用 cpScratch_ 當讀取緩衝，不另配記憶體。
+  // 條件：這個字面舊路徑成功讀過 ≥128（內文）／256（其他）個範圍內字、表已配置（READY 之後 renderer 的 hasAdvanceTable 閘必過）、
+  // 距上一次掃描 ≥2 秒（同一個建置步驟裡不背對背掃兩個字面）。一次呼叫最多掃一個。
+  static_assert(CJK_SCAN_SCRATCH_SLOTS == MAX_UNIQUE_CODEPOINTS + 2, "scan buffer must match cpScratch_ size");
+  // v255：只在呼叫端允許的時候掃（背景排版的 tick、txt 閱讀停留時的預取）。v254 實機：內文掃描 743ms 落在
+  //   翻到新章的同步排版裡（使用者正在等那一頁），txt 則落在翻頁的排版裡。條件滿足但不允許 → 記一筆 deferred，
+  //   這一段照舊逐字讀，留給下一個允許的時機。
+  bool scanWindow = false;
+  bool (*abortFn)(void*) = nullptr;
+  void* abortCtx = nullptr;
+  {
+    const TaskHandle_t me = xTaskGetCurrentTaskHandle();
+    portENTER_CRITICAL(&g_scanWindowMux);
+    if (scanWindowDepth_ > 0 && scanWindowOwner_ == me) {
+      scanWindow = true;
+      abortFn = scanAbortHook_;
+      abortCtx = scanAbortCtx_;
+    }
+    portEXIT_CRITICAL(&g_scanWindowMux);
   }
-  if (extraText && !hitCap) {
-    hitCap = collectUniqueCodepoints(extraText, codepoints, cpCount, MAX_UNIQUE_CODEPOINTS);
+  if (!cjkScannedOnce_ || millis() - lastCjkScanEndMs_ >= CJK_SCAN_SPACING_MS) {
+    for (uint8_t si = 0; si < MAX_STYLES; si++) {
+      if (!(styleMask & (1 << si)) || !styles_[si].present || !advanceTable_[si]) continue;
+      const uint32_t trigger = si == resolveStyle(EpdFontFamily::REGULAR) ? CJK_SCAN_TRIGGER_BODY : CJK_SCAN_TRIGGER;
+      if (cjk_[si].state != CJK_SCAN_NONE || cjk_[si].oldPathCjk < trigger) continue;
+      if (!scanWindow || (abortFn && abortFn(abortCtx))) {
+        ++advanceScanDeferred_;  // 不在允許的時機，或已經有按鍵／畫面在等
+        break;
+      }
+      scanCjkAdvances(si, reinterpret_cast<uint8_t*>(codepoints), CJK_SCAN_IO_RECORDS, abortFn, abortCtx);
+      break;
+    }
   }
 
-  if (includeSpace && std::none_of(codepoints, codepoints + cpCount, [](uint32_t c) { return c == ' '; }))
-    codepoints[cpCount++] = ' ';
-  if (includeHyphen && std::none_of(codepoints, codepoints + cpCount, [](uint32_t c) { return c == '-'; }))
-    codepoints[cpCount++] = '-';
+  // v254：有逐字字重（wordStyles）時，每個實際字面只收【自己那些字】的碼位 —— 一段裡幾個粗體字，
+  //   不再讓整段每個字都去讀一次粗體字寬（直排原本更是一律四個字重全要）。
+  //   空白、連字號、extraText 照舊給每個字面：空白用前一個字的字重量、連字號用該字的字重量。
+  //   表裡少放哪些字只影響速度：所有讀字寬的地方查不到都會退回讀字形紀錄（v254 起空白寬度也是）。
+  int totalMissed = 0;
+  for (uint8_t si = 0; si < MAX_STYLES; si++) {
+    uint8_t fetchMask;
+    if (wordStyles) {
+      if (!(styleMask & (1u << si))) continue;
+      fetchMask = static_cast<uint8_t>(1u << si);
+    } else {
+      if (si > 0) break;  // 沒有逐字字重：一次收全部、照遮罩讀（原本的行為）
+      fetchMask = styleMask;
+    }
+    uint32_t cpCount = 0;
+    bool hitCap = false;
+    size_t idx = 0;
+    for (auto it = begin; it != end && !hitCap; ++it, ++idx) {
+      if (wordStyles && resolveStyle(static_cast<uint8_t>((*wordStyles)[idx]) & 0x03) != si) continue;
+      hitCap = collectUniqueCodepoints(asCStr(*it), codepoints, cpCount, MAX_UNIQUE_CODEPOINTS, cpFilter);
+    }
+    if (extraText && !hitCap) {
+      hitCap = collectUniqueCodepoints(extraText, codepoints, cpCount, MAX_UNIQUE_CODEPOINTS, cpFilter);
+    }
 
-  if (hitCap) {
-    LOG_ERR("SDCF", "buildAdvanceTable: unique codepoint cap (%u) hit, layout may be approximate",
-            MAX_UNIQUE_CODEPOINTS);
+    if (includeSpace && std::none_of(codepoints, codepoints + cpCount, [](uint32_t c) { return c == ' '; }))
+      codepoints[cpCount++] = ' ';
+    if (includeHyphen && std::none_of(codepoints, codepoints + cpCount, [](uint32_t c) { return c == '-'; }))
+      codepoints[cpCount++] = '-';
+
+    if (hitCap) {
+      LOG_ERR("SDCF", "buildAdvanceTable: unique codepoint cap (%u) hit, layout may be approximate",
+              MAX_UNIQUE_CODEPOINTS);
+    }
+    std::sort(codepoints, codepoints + cpCount);
+    totalMissed += fetchAdvancesForCodepoints(codepoints, cpCount, fetchMask);
   }
-  std::sort(codepoints, codepoints + cpCount);
-  int totalMissed = fetchAdvancesForCodepoints(codepoints, cpCount, styleMask);
   stats_.prewarmTotalMs = millis() - startMs;
   return totalMissed;
 }
 
 int SdCardFont::buildAdvanceTable(const char* utf8Text, uint8_t styleMask, const char* extraText) {
-  return buildAdvanceTableRange(&utf8Text, &utf8Text + 1, false, false, styleMask, extraText);
+  return buildAdvanceTableRange(&utf8Text, &utf8Text + 1, nullptr, false, false, styleMask, extraText);
 }
 
 int SdCardFont::buildAdvanceTable(const std::deque<std::string>& words, bool includeHyphen, uint8_t styleMask,
                                   const char* extraText) {
-  return buildAdvanceTableRange(words.begin(), words.end(), words.size() > 1, includeHyphen, styleMask, extraText);
+  return buildAdvanceTableRange(words.begin(), words.end(), nullptr, words.size() > 1, includeHyphen, styleMask,
+                                extraText);
+}
+
+int SdCardFont::buildAdvanceTable(const std::deque<std::string>& words,
+                                  const std::vector<EpdFontFamily::Style>& wordStyles, bool includeHyphen,
+                                  const char* extraText, bool (*cpFilter)(uint32_t)) {
+  if (wordStyles.size() != words.size()) {
+    // 平行陣列對不上（不該發生）：退回不分字重、全部字重都準備（最保守，只是慢）。
+    // v262（codex）：過濾要一起帶下去，否則直排在這條退路又會替每個漢字讀一次。
+    return buildAdvanceTableRange(words.begin(), words.end(), nullptr, words.size() > 1, includeHyphen, 0x0F, extraText,
+                                  cpFilter);
+  }
+  // 內文字面一律在內：首行縮排固定用內文的空白量（ParsedText::resolveFirstLineIndent），全粗體段落也一樣
+  // （codex 複查：只準備粗體的話，每個全粗體段落都要為內文空白讀一次 SD）。
+  uint8_t styleMask = static_cast<uint8_t>(1u << EpdFontFamily::REGULAR);
+  for (const auto s : wordStyles) styleMask |= static_cast<uint8_t>(1u << (static_cast<uint8_t>(s) & 0x03));
+  // 空白一律準備（不看字數）：單字段落也會量縮排。表裡有沒有它只影響速度（查不到會讀字形）。
+  return buildAdvanceTableRange(words.begin(), words.end(), &wordStyles, true, includeHyphen, styleMask, extraText,
+                                cpFilter);
 }
 
 // --- Stats ---
@@ -1778,10 +2403,19 @@ const EpdGlyph* SdCardFont::onGlyphMiss(void* ctx, uint32_t codepoint) {
   // Read glyph metadata into temporary
   // v154：共用檔柄 —— miss 路徑原本每個字開一次檔（12–18ms），
   // 降級階梯丟出來的字全走這裡，這是 27 秒頁的第二半。
+  struct AsdProf {  // v252：只在建置探測（asd 有計數）時計時；所有出口都計
+    int64_t t0;
+    bool on;
+    explicit AsdProf(bool active) : t0(active ? esp_timer_get_time() : 0), on(active) {}
+    ~AsdProf() {
+      if (on) SdCardFont::advanceSdReadUs_ += static_cast<uint64_t>(esp_timer_get_time() - t0);
+    }
+  } asdProf(advanceSdProbeDepth_ > 0);
   if (advanceSdProbeDepth_ > 0) {
     ++advanceSdReadCount_;  // v192：計嘗試次數，讀失敗也算；繪製 miss／overflow 命中不算
   }
 
+  const SharedFileLock fileLock(*self);  // v255
   if (!self->ensureFileOpen()) {
     LOG_ERR("SDCF", "Overflow: failed to open .cpfont");
     return nullptr;
@@ -1791,11 +2425,13 @@ const EpdGlyph* SdCardFont::onGlyphMiss(void* ctx, uint32_t codepoint) {
   uint32_t glyphFileOff = s.glyphsFileOffset + static_cast<uint32_t>(globalIdx) * sizeof(EpdGlyph);
   if (!self->sharedFile_.seekSet(glyphFileOff)) {
     LOG_ERR("SDCF", "Overflow: failed to seek to glyph for U+%04X style %u", codepoint, styleIdx);
+    self->dropSharedFile();  // v255
     
     return nullptr;
   }
   if (self->sharedFile_.read(reinterpret_cast<uint8_t*>(&tempGlyph), sizeof(EpdGlyph)) != sizeof(EpdGlyph)) {
     LOG_ERR("SDCF", "Overflow: failed to read glyph metadata for U+%04X style %u", codepoint, styleIdx);
+    self->dropSharedFile();  // v255
     return nullptr;
   }
 
@@ -1818,12 +2454,14 @@ const EpdGlyph* SdCardFont::onGlyphMiss(void* ctx, uint32_t codepoint) {
     }
     if (!self->sharedFile_.seekSet(s.bitmapFileOffset + tempGlyph.dataOffset)) {
       LOG_ERR("SDCF", "Overflow: failed to seek to bitmap for U+%04X", codepoint);
+      self->dropSharedFile();  // v255
       delete[] tempBitmap;
       
       return nullptr;
     }
     if (self->sharedFile_.read(tempBitmap, tempGlyph.dataLength) != static_cast<int>(tempGlyph.dataLength)) {
       LOG_ERR("SDCF", "Overflow: failed to read bitmap for U+%04X", codepoint);
+      self->dropSharedFile();  // v255
       delete[] tempBitmap;
       return nullptr;
     }

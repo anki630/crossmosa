@@ -253,7 +253,8 @@ bool GifToFramebufferConverter::decodeToFramebuffer(const std::string& imagePath
   std::unique_ptr<AnimatedGIF> gif(new (std::nothrow) AnimatedGIF());
   if (!gif) {
     LOG_ERR("GIF", "Failed to allocate GIF decoder");
-    setLastError(true, "gif-alloc-decoder");
+    setLastError(true, "gif-alloc-decoder %u", static_cast<unsigned>(sizeof(AnimatedGIF)));
+    lastErrorNeedBytes = static_cast<uint32_t>(sizeof(AnimatedGIF));  // v255
     return false;
   }
   gif->begin(GIF_PALETTE_RGB888);
@@ -298,6 +299,9 @@ bool GifToFramebufferConverter::decodeToFramebuffer(const std::string& imagePath
   ctx.grayLineBuffer = static_cast<uint8_t*>(malloc(ctx.srcWidth));
   if (!ctx.grayLineBuffer) {
     LOG_ERR("GIF", "Failed to allocate gray line buffer (%d bytes)", ctx.srcWidth);
+    // v255：原本沒寫 lastError → ImageBlock 當成永久失敗、整個 session 方框（codex 複查）。
+    setLastError(true, "gif-alloc-gray %d", ctx.srcWidth);
+    lastErrorNeedBytes = static_cast<uint32_t>(ctx.srcWidth);
     return false;
   }
   const ScopedCleanup lineCleanup{[&ctx]() {

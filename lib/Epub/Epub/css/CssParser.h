@@ -81,6 +81,7 @@ class CssParser {
    * Clear all loaded rules
    */
   void clear() {
+    ++mutationSeq_;  // v258：loadFromCache 也先呼叫這裡 —— 任何清除／重載都會讓序號前進（預排接手的比對用）
     rulesBySelector_.clear();
     heapFloorHit_ = false;
     heapFloorBytes_ = 56 * 1024;  // v177：回到未過濾的地板（解析新 CSS 時用）
@@ -121,6 +122,8 @@ class CssParser {
   // 5=單一 class 超過 64 字元、6=值裡有字元實體、7=檔案在屬性中間結束）與每次載入的序號。
   uint8_t lastScanFail_ = 0;
   uint16_t lastLoadSeq_ = 0;
+  // v258：規則內容變動的序號（clear 與每次 loadFromCache 都會前進）。預排開始時記下，接手時必須沒變。
+  uint32_t mutationSeq_ = 0;
   // v187：這次載入是否在記憶體地板前被截斷（規則集不完整）。Section 把它寫進檔頭，
   // 之後記憶體寬裕時重排——不然打折的版面會被當成永久正確（v163 複查）。
   bool lastLoadTruncated_ = false;

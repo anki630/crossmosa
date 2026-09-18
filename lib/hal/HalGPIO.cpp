@@ -141,21 +141,44 @@ void HalGPIO::begin() {
 void HalGPIO::update() {
   inputMgr.update();
   const bool connected = isUsbConnected();
-  usbStateChanged = (connected != lastUsbConnected);
+  usbStateChanged = (connected != lastUsbConnected) || pendingUsbChanged_;
   lastUsbConnected = connected;
+  // v252：上一圈忙碌期間接到的事件在這一圈出現（只這一圈）。
+  mergedPressed_ = pendingPressed_;
+  mergedReleased_ = pendingReleased_;
+  pendingPressed_ = 0;
+  pendingReleased_ = 0;
+  pendingUsbChanged_ = false;
+}
+
+void HalGPIO::pollDuringBusyWork() {
+  inputMgr.update();
+  for (uint8_t i = 0; i <= BTN_POWER; i++) {
+    if (inputMgr.wasPressed(i)) pendingPressed_ |= static_cast<uint8_t>(1u << i);
+    if (inputMgr.wasReleased(i)) pendingReleased_ |= static_cast<uint8_t>(1u << i);
+  }
+  const bool connected = isUsbConnected();
+  if (connected != lastUsbConnected) {
+    pendingUsbChanged_ = true;
+    lastUsbConnected = connected;
+  }
 }
 
 bool HalGPIO::wasUsbStateChanged() const { return usbStateChanged; }
 
 bool HalGPIO::isPressed(uint8_t buttonIndex) const { return inputMgr.isPressed(buttonIndex); }
 
-bool HalGPIO::wasPressed(uint8_t buttonIndex) const { return inputMgr.wasPressed(buttonIndex); }
+bool HalGPIO::wasPressed(uint8_t buttonIndex) const {
+  return inputMgr.wasPressed(buttonIndex) || (mergedPressed_ & (1u << buttonIndex)) != 0;
+}
 
-bool HalGPIO::wasAnyPressed() const { return inputMgr.wasAnyPressed(); }
+bool HalGPIO::wasAnyPressed() const { return inputMgr.wasAnyPressed() || mergedPressed_ != 0; }
 
-bool HalGPIO::wasReleased(uint8_t buttonIndex) const { return inputMgr.wasReleased(buttonIndex); }
+bool HalGPIO::wasReleased(uint8_t buttonIndex) const {
+  return inputMgr.wasReleased(buttonIndex) || (mergedReleased_ & (1u << buttonIndex)) != 0;
+}
 
-bool HalGPIO::wasAnyReleased() const { return inputMgr.wasAnyReleased(); }
+bool HalGPIO::wasAnyReleased() const { return inputMgr.wasAnyReleased() || mergedReleased_ != 0; }
 
 bool HalGPIO::anyButtonDownRaw() { return inputMgr.getState() != 0; }
 

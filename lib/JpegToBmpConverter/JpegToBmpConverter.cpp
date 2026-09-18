@@ -19,6 +19,9 @@
 // v174：失敗原因鏡像（見 .h）。
 static char sJpgLastErr[64] = "";
 const char* JpegToBmpConverter::lastError() { return sJpgLastErr; }
+// v258：最近一次轉檔的幾何與解碼時間（主畫面 THUMBGEN 證人用）。
+static JpegToBmpConverter::Info sJpgLastInfo;
+const JpegToBmpConverter::Info& JpegToBmpConverter::lastInfo() { return sJpgLastInfo; }
 
 constexpr bool USE_8BIT_OUTPUT = false;  // true: 8-bit grayscale (no quantization), false: 2-bit (4 levels)
 // Dithering method selection (only one should be true, or all false for simple quantization):
@@ -170,11 +173,14 @@ namespace {
 constexpr int MAX_MCU_HEIGHT = 16;
 constexpr size_t JPEG_DECODER_SIZE = 20 * 1024;
 constexpr size_t MIN_FREE_HEAP = JPEG_DECODER_SIZE + 32 * 1024;
+// v259：縮圖路徑配完所有緩衝之後，至少還要留給其他 task 的總量。
+constexpr size_t THUMB_RESERVE_BYTES = 16 * 1024;
 constexpr uint32_t FP_ONE = 1UL << 16;
 
-// Static file pointer for JPEGDEC open callback.
+// Static source pointer for JPEGDEC open callback.
 // Safe in single-threaded embedded context; never accessed concurrently.
-static HalFile* s_jpegFile = nullptr;
+// v258：來源改成抽象（HalFile 或書裡的項目串流），見 JpegToBmpConverter::Source。
+static const JpegToBmpConverter::Source* s_jpegSource = nullptr;
 static uint8_t s_jpegIoSinceYield = 0;
 
 static void yieldToIdle() { vTaskDelay(1); }
@@ -186,22 +192,23 @@ static void yieldDuringJpegIo() {
 }
 
 void* bmpJpegOpen(const char* /*filename*/, int32_t* size) {
-  if (!s_jpegFile || !*s_jpegFile) return nullptr;
+  if (!s_jpegSource || !s_jpegSource->read || !s_jpegSource->seek) return nullptr;
   s_jpegIoSinceYield = 0;
-  s_jpegFile->seek(0);
-  *size = static_cast<int32_t>(s_jpegFile->size());
+  if (!s_jpegSource->seek(s_jpegSource->ctx, 0)) return nullptr;
+  *size = s_jpegSource->size;
   yieldDuringJpegIo();
-  return s_jpegFile;
+  // JPEGDEC 把回傳值當不透明把手存著，只拿去比 NULL 與傳回 read/seek。
+  return const_cast<void*>(static_cast<const void*>(s_jpegSource));
 }
 
 void bmpJpegClose(void* /*handle*/) {
-  // Caller owns the file — do not close it here
+  // Caller owns the source — do not close it here
 }
 
 int32_t bmpJpegRead(JPEGFILE* pFile, uint8_t* pBuf, int32_t len) {
-  auto* f = reinterpret_cast<HalFile*>(pFile->fHandle);
-  if (!f) return 0;
-  int32_t n = f->read(pBuf, len);
+  const auto* src = static_cast<const JpegToBmpConverter::Source*>(pFile->fHandle);
+  if (!src) return 0;
+  int32_t n = src->read(src->ctx, pBuf, len);
   if (n < 0) n = 0;
   pFile->iPos += n;
   yieldDuringJpegIo();
@@ -209,11 +216,28 @@ int32_t bmpJpegRead(JPEGFILE* pFile, uint8_t* pBuf, int32_t len) {
 }
 
 int32_t bmpJpegSeek(JPEGFILE* pFile, int32_t pos) {
-  auto* f = reinterpret_cast<HalFile*>(pFile->fHandle);
-  if (!f || !f->seek(pos)) return -1;
+  const auto* src = static_cast<const JpegToBmpConverter::Source*>(pFile->fHandle);
+  if (!src || pos < 0 || !src->seek(src->ctx, pos)) return -1;
   pFile->iPos = pos;
   yieldDuringJpegIo();
   return pos;
+}
+
+int32_t halFileSourceRead(void* ctx, uint8_t* buf, int32_t len) {
+  return static_cast<HalFile*>(ctx)->read(buf, static_cast<size_t>(len));
+}
+
+bool halFileSourceSeek(void* ctx, int32_t pos) { return static_cast<HalFile*>(ctx)->seek(static_cast<size_t>(pos)); }
+
+JpegToBmpConverter::Source halFileSource(HalFile& file) {
+  JpegToBmpConverter::Source src;
+  src.ctx = &file;
+  src.read = &halFileSourceRead;
+  src.seek = &halFileSourceSeek;
+  // v258（codex）：Source::size 是 int32。超過的檔當成 0（JPEGDEC 開檔即失敗），不讓它變成負數。
+  const size_t sz = file ? file.size() : 0;
+  src.size = sz > 0x7FFFFFFFu ? 0 : static_cast<int32_t>(sz);
+  return src;
 }
 
 // Context passed to the JPEGDEC draw callback via setUserPointer()
@@ -515,22 +539,34 @@ int bmpDrawCallback(JPEGDRAW* pDraw) {
 }  // namespace
 
 // Internal implementation with configurable target size and bit depth
-bool JpegToBmpConverter::jpegFileToBmpStreamInternal(HalFile& jpegFile, Print& bmpOut, int targetWidth,
-                                                     int targetHeight, bool oneBit, bool crop) {
+bool JpegToBmpConverter::jpegFileToBmpStreamInternal(const Source& source, Print& bmpOut, int targetWidth,
+                                                     int targetHeight, bool oneBit, bool crop, bool allowDctScale) {
   sJpgLastErr[0] = '\0';
+  sJpgLastInfo = Info{};
   LOG_DBG("JPG", "Converting JPEG to %s BMP (target: %dx%d)", oneBit ? "1-bit" : "2-bit", targetWidth, targetHeight);
 
-  if (ESP.getFreeHeap() < MIN_FREE_HEAP) {
-    LOG_ERR("JPG", "Not enough heap for JPEG decoder (%u free, need %u)", ESP.getFreeHeap(), MIN_FREE_HEAP);
-    snprintf(sJpgLastErr, sizeof(sJpgLastErr), "heap %u<%u", static_cast<unsigned>(ESP.getFreeHeap()), static_cast<unsigned>(MIN_FREE_HEAP));
+  // v259：總量門檻。MIN_FREE_HEAP＝解碼器 20KB＋32KB，那 32KB 是給【全解析度】的 MCU 列緩衝（16 列 × 2048 寬）。
+  //   允許 DCT 縮放的呼叫端（主畫面縮圖）改成兩段：這裡只要求「解碼器＋16KB 保留」；讀完檔頭、知道實際格子大小之後，
+  //   再依【實際】要配的緩衝＋16KB 保留量一次（下面 THUMB_RESERVE_BYTES）。
+  //   codex（v259）：原本想直接降到 36KB，但那等於在門檻邊緣配完緩衝就剩 0 —— 解碼中途 vTaskDelay 讓出時別的 task
+  //   若做會 abort 的配置就出事。舊的全解析度路徑其實也會掉到 0，那不是「安全」的證據。
+  //   diag258：一本書的縮圖因為串流前的總量檢查（109KB）沒過而退回舊路（6.7 秒）。
+  const size_t minFreeHeap = allowDctScale ? (JPEG_DECODER_SIZE + THUMB_RESERVE_BYTES) : MIN_FREE_HEAP;
+  if (ESP.getFreeHeap() < minFreeHeap) {
+    LOG_ERR("JPG", "Not enough heap for JPEG decoder (%u free, need %u)", ESP.getFreeHeap(), minFreeHeap);
+    sJpgLastInfo.memFail = true;
+    snprintf(sJpgLastErr, sizeof(sJpgLastErr), "heap %u<%u", static_cast<unsigned>(ESP.getFreeHeap()), static_cast<unsigned>(minFreeHeap));
     return false;
   }
 
-  s_jpegFile = &jpegFile;
+  s_jpegSource = &source;
+  // 回傳前清掉：s_jpegSource 指向呼叫端堆疊上的物件，不能留著。
+  const ScopedCleanup clearSource{[]() { s_jpegSource = nullptr; }};
 
   const auto jpeg = makeUniqueNoThrow<JPEGDEC>();
   if (!jpeg) {
     LOG_ERR("JPG", "OOM: JPEG decoder");
+    sJpgLastInfo.memFail = true;
     snprintf(sJpgLastErr, sizeof(sJpgLastErr), "oom:%s", "JPEG decoder");
     return false;
   }
@@ -549,8 +585,10 @@ bool JpegToBmpConverter::jpegFileToBmpStreamInternal(HalFile& jpegFile, Print& b
   const bool progressiveDecode = (jpeg->getJPEGType() == JPEG_MODE_PROGRESSIVE);
   // JPEGDEC forces progressive streams to JPEG_SCALE_EIGHTH in DecodeJPEG,
   // so callback coordinates and MCU buffering must use the reduced decode grid.
-  const int decodedSrcWidth = progressiveDecode ? ((srcWidth + 7) >> 3) : srcWidth;
-  const int decodedSrcHeight = progressiveDecode ? ((srcHeight + 7) >> 3) : srcHeight;
+  // v258：scaleShift 之後可能被下面的 DCT 縮放改大（只有 allowDctScale 的呼叫端）。
+  int scaleShift = progressiveDecode ? 3 : 0;
+  int decodedSrcWidth = progressiveDecode ? ((srcWidth + 7) >> 3) : srcWidth;
+  int decodedSrcHeight = progressiveDecode ? ((srcHeight + 7) >> 3) : srcHeight;
 
   LOG_DBG("JPG", "JPEG dimensions: %dx%d", srcWidth, srcHeight);
   if (progressiveDecode) {
@@ -575,9 +613,6 @@ bool JpegToBmpConverter::jpegFileToBmpStreamInternal(HalFile& jpegFile, Print& b
     outHeight = decodedSrcHeight;
   }
 
-  const int scaleSrcWidth = decodedSrcWidth;
-  const int scaleSrcHeight = decodedSrcHeight;
-
   uint32_t scaleX_fp = 65536;  // 1.0 in 16.16 fixed point
   uint32_t scaleY_fp = 65536;
   bool needsScaling = false;
@@ -598,8 +633,45 @@ bool JpegToBmpConverter::jpegFileToBmpStreamInternal(HalFile& jpegFile, Print& b
     if (outHeight < 1) outHeight = 1;
 
     LOG_DBG("JPG", "Scaling source %dx%d (decode grid %dx%d) -> %dx%d (target %dx%d)", srcWidth, srcHeight,
-            scaleSrcWidth, scaleSrcHeight, outWidth, outHeight, targetWidth, targetHeight);
+            decodedSrcWidth, decodedSrcHeight, outWidth, outHeight, targetWidth, targetHeight);
   }
+
+  // v258（主畫面縮圖，diag257：1443×2048 封面 → 159×226 花 8 秒）：原本一律全解析度解碼（2048 列全部 IDCT、
+  //   逐像素面積平均），再縮到 1/9。JPEGDEC 可以在 DCT 域直接出 1/2、1/4、1/8 的格子
+  //   （1/8＝只取 DC＝每個 8×8 區塊的平均值，1/2＝2×2 平均），再從那個格子面積平均到輸出——
+  //   挑【解出來的格子仍 ≥ 輸出的 2 倍】的最大縮放（永遠不從小格子放大）。
+  //   為什麼是 2 倍（v258 桌機 48 張封面，1-bit 抖色後 4×4 區塊平均對 PIL BOX 參考圖的平均絕對差）：
+  //   全解析度 15.0；格子 ≥1 倍（多半 1/8）16.2、最差 +4.7 —— 格子只比輸出大 1.1 倍時每個輸出像素只平均 1–2 格，
+  //   權重不均；≥2 倍（多半 1/4）15.2、最差 +1.6，桌機時間 580→361ms。取後者。
+  //   只給 allowDctScale 的呼叫端（主畫面 1-bit 縮圖）；待機封面等其他路徑不變。
+  //   ⚠️ 必須在上面算出 outWidth／outHeight【之後】（v258 桌機 harness 抓到：第一版放在前面，比到的是原圖尺寸＝永遠不縮放）。
+  //   格子大小與 JPEGDEC 自己算的一致：(w + 2^s − 1) >> s（jpeg.inl DecodeJPEG 的 iCurW／iCurH）。
+  int jpegScaleOption = 0;
+  if (allowDctScale && !progressiveDecode && targetWidth > 0 && targetHeight > 0) {
+    for (int shift = 3; shift >= 1; --shift) {
+      const int adj = (1 << shift) - 1;
+      const int w = (srcWidth + adj) >> shift;
+      const int h = (srcHeight + adj) >> shift;
+      if (w >= 2 * outWidth && h >= 2 * outHeight) {
+        scaleShift = shift;
+        decodedSrcWidth = w;
+        decodedSrcHeight = h;
+        jpegScaleOption = shift == 3 ? JPEG_SCALE_EIGHTH : shift == 2 ? JPEG_SCALE_QUARTER : JPEG_SCALE_HALF;
+        break;
+      }
+    }
+  }
+
+  const int scaleSrcWidth = decodedSrcWidth;
+  const int scaleSrcHeight = decodedSrcHeight;
+  sJpgLastInfo.srcW = static_cast<uint16_t>(srcWidth);
+  sJpgLastInfo.srcH = static_cast<uint16_t>(srcHeight);
+  sJpgLastInfo.decW = static_cast<uint16_t>(decodedSrcWidth);
+  sJpgLastInfo.decH = static_cast<uint16_t>(decodedSrcHeight);
+  sJpgLastInfo.outW = static_cast<uint16_t>(outWidth);
+  sJpgLastInfo.outH = static_cast<uint16_t>(outHeight);
+  sJpgLastInfo.scale = static_cast<uint8_t>(1 << scaleShift);
+  sJpgLastInfo.progressive = progressiveDecode;
 
   if (scaleSrcWidth != outWidth || scaleSrcHeight != outHeight) {
     scaleX_fp = (static_cast<uint32_t>(scaleSrcWidth) << 16) / outWidth;
@@ -610,16 +682,31 @@ bool JpegToBmpConverter::jpegFileToBmpStreamInternal(HalFile& jpegFile, Print& b
   const bool smoothUpscale =
       progressiveDecode && needsScaling && scaleSrcWidth <= outWidth && scaleSrcHeight <= outHeight;
 
-  // Write BMP header with output dimensions
+  // v259（codex）：縮圖路徑的第二段門檻 —— 用【實際】格子與輸出尺寸算出下面要配的緩衝，加上保留量，寫 BMP 檔頭之前檢查。
+  //   不靠「縮放後格子一定小」的推論（奇怪長寬比、不縮放的小圖、之後別的呼叫端都可能不成立）。
+  if (allowDctScale) {
+    const size_t w = static_cast<size_t>(outWidth);
+    const size_t need = static_cast<size_t>(MAX_MCU_HEIGHT) * static_cast<size_t>(scaleSrcWidth)  // mcuBuf
+                        + (w + 3) / 4 * 4                                                         // bmpRow（取 8-bit 的最大者）
+                        + (smoothUpscale ? w * 3 : (needsScaling ? w * 2 * sizeof(uint32_t) : 0))  // 縮放緩衝
+                        + (w + 4) * sizeof(int16_t) * 3 + 64                                      // 抖色誤差列＋物件
+                        + THUMB_RESERVE_BYTES;
+    sJpgLastInfo.needBytes = static_cast<uint32_t>(need);
+    if (ESP.getFreeHeap() < need) {
+      sJpgLastInfo.memFail = true;
+      snprintf(sJpgLastErr, sizeof(sJpgLastErr), "heap-post %u<%u", static_cast<unsigned>(ESP.getFreeHeap()),
+               static_cast<unsigned>(need));
+      return false;
+    }
+  }
+
+  // v259：BMP 檔頭改在所有緩衝配完、縮圖路徑的保留量檢查過之後才寫（失敗時輸出檔是空的，不是半個檔頭）。
   int bytesPerRow;
   if (USE_8BIT_OUTPUT && !oneBit) {
-    writeBmpHeader8bit(bmpOut, outWidth, outHeight);
     bytesPerRow = (outWidth + 3) / 4 * 4;
   } else if (oneBit) {
-    writeBmpHeader1bit(bmpOut, outWidth, outHeight);
     bytesPerRow = (outWidth + 31) / 32 * 4;
   } else {
-    writeBmpHeader2bit(bmpOut, outWidth, outHeight);
     bytesPerRow = (outWidth * 2 + 31) / 32 * 4;
   }
 
@@ -647,6 +734,9 @@ bool JpegToBmpConverter::jpegFileToBmpStreamInternal(HalFile& jpegFile, Print& b
   ctx.mcuBuf = makeUniqueNoThrow<uint8_t[]>(MAX_MCU_HEIGHT * ctx.srcWidth);
   if (!ctx.mcuBuf) {
     LOG_ERR("JPG", "OOM: MCU buffer (%d bytes)", MAX_MCU_HEIGHT * ctx.srcWidth);
+    // v258（codex）：這個出口原本沒寫原因 —— 縮圖端靠 memFail 決定要不要退回 SD 路徑，漏標會被當成壞圖。
+    sJpgLastInfo.memFail = true;
+    snprintf(sJpgLastErr, sizeof(sJpgLastErr), "oom:%s", "MCU buffer");
     return false;
   }
   memset(ctx.mcuBuf.get(), 0, MAX_MCU_HEIGHT * ctx.srcWidth);
@@ -654,6 +744,7 @@ bool JpegToBmpConverter::jpegFileToBmpStreamInternal(HalFile& jpegFile, Print& b
   ctx.bmpRow = makeUniqueNoThrow<uint8_t[]>(bytesPerRow);
   if (!ctx.bmpRow) {
     LOG_ERR("JPG", "OOM: BMP row buffer");
+    sJpgLastInfo.memFail = true;
     snprintf(sJpgLastErr, sizeof(sJpgLastErr), "oom:%s", "BMP row buffer");
     return false;
   }
@@ -664,6 +755,7 @@ bool JpegToBmpConverter::jpegFileToBmpStreamInternal(HalFile& jpegFile, Print& b
     ctx.smoothRows = makeUniqueNoThrow<uint8_t[]>(smoothRowsBytes);
     if (!ctx.smoothRows) {
       LOG_ERR("JPG", "OOM: progressive smoothing buffers");
+    sJpgLastInfo.memFail = true;
     snprintf(sJpgLastErr, sizeof(sJpgLastErr), "oom:%s", "progressive smoothing buffers");
       return false;
     }
@@ -677,6 +769,7 @@ bool JpegToBmpConverter::jpegFileToBmpStreamInternal(HalFile& jpegFile, Print& b
     ctx.rowCount = makeUniqueNoThrow<uint32_t[]>(outWidth);
     if (!ctx.rowAccum || !ctx.rowCount) {
       LOG_ERR("JPG", "OOM: scaling buffers");
+    sJpgLastInfo.memFail = true;
     snprintf(sJpgLastErr, sizeof(sJpgLastErr), "oom:%s", "scaling buffers");
       return false;
     }
@@ -712,10 +805,36 @@ bool JpegToBmpConverter::jpegFileToBmpStreamInternal(HalFile& jpegFile, Print& b
     }
   }
 
+  // v259（codex 第二輪）：上面那段是【算出來的】需求；這裡量【配完之後實際剩多少】—— 配置器的標頭與對齊、池不合併，
+  //   算的不會剛好等於實際。縮圖路徑要求配完仍有 16KB 總量與 8KB 最大塊；不夠就放掉（unique_ptr 在 return 時釋放）、
+  //   標 memFail 讓呼叫端退回。抖色誤差列配不到在這條路也當記憶體失敗：不要把「沒抖色的縮圖」寫成長期快取。
+  if (allowDctScale) {
+    const size_t freeAfter = ESP.getFreeHeap();
+    const size_t largestAfter = ESP.getMaxAllocHeap();
+    const bool ditherMissing = oneBit ? !ctx.atkinson1BitDitherer : false;
+    if (freeAfter < THUMB_RESERVE_BYTES || largestAfter < 8 * 1024 || ditherMissing) {
+      sJpgLastInfo.memFail = true;
+      snprintf(sJpgLastErr, sizeof(sJpgLastErr), "heap-alloc free=%u max=%u dith=%u", static_cast<unsigned>(freeAfter),
+               static_cast<unsigned>(largestAfter), ditherMissing ? 0u : 1u);
+      return false;
+    }
+  }
+
+  // Write BMP header with output dimensions
+  if (USE_8BIT_OUTPUT && !oneBit) {
+    writeBmpHeader8bit(bmpOut, outWidth, outHeight);
+  } else if (oneBit) {
+    writeBmpHeader1bit(bmpOut, outWidth, outHeight);
+  } else {
+    writeBmpHeader2bit(bmpOut, outWidth, outHeight);
+  }
+
   jpeg->setPixelType(EIGHT_BIT_GRAYSCALE);
   jpeg->setUserPointer(&ctx);
 
-  rc = jpeg->decode(0, 0, 0);
+  const uint32_t decodeT0 = millis();
+  rc = jpeg->decode(0, 0, jpegScaleOption);
+  sJpgLastInfo.decodeMs = millis() - decodeT0;
 
   if (rc == 1 && ctx.smoothUpscale && !ctx.error) {
     finishSmoothUpscale(&ctx);
@@ -736,17 +855,23 @@ bool JpegToBmpConverter::jpegFileToBmpStream(HalFile& jpegFile, Print& bmpOut, b
   // Use runtime display dimensions (swapped for portrait cover sizing)
   const int targetWidth = display.getDisplayHeight();
   const int targetHeight = display.getDisplayWidth();
-  return jpegFileToBmpStreamInternal(jpegFile, bmpOut, targetWidth, targetHeight, false, crop);
+  return jpegFileToBmpStreamInternal(halFileSource(jpegFile), bmpOut, targetWidth, targetHeight, false, crop, false);
 }
 
 // Convert with custom target size (for thumbnails, 2-bit)
 bool JpegToBmpConverter::jpegFileToBmpStreamWithSize(HalFile& jpegFile, Print& bmpOut, int targetMaxWidth,
                                                      int targetMaxHeight) {
-  return jpegFileToBmpStreamInternal(jpegFile, bmpOut, targetMaxWidth, targetMaxHeight, false);
+  return jpegFileToBmpStreamInternal(halFileSource(jpegFile), bmpOut, targetMaxWidth, targetMaxHeight, false, true, false);
 }
 
 // Convert to 1-bit BMP (black and white only, no grays) for fast home screen rendering
 bool JpegToBmpConverter::jpegFileTo1BitBmpStreamWithSize(HalFile& jpegFile, Print& bmpOut, int targetMaxWidth,
                                                          int targetMaxHeight) {
-  return jpegFileToBmpStreamInternal(jpegFile, bmpOut, targetMaxWidth, targetMaxHeight, true, true);
+  return jpegFileToBmpStreamInternal(halFileSource(jpegFile), bmpOut, targetMaxWidth, targetMaxHeight, true, true, true);
+}
+
+// v258：同上，但來源是抽象的（主畫面縮圖直接從書裡的項目串流，不先抽到 SD）。
+bool JpegToBmpConverter::jpegSourceTo1BitBmpStreamWithSize(const Source& source, Print& bmpOut, int targetMaxWidth,
+                                                           int targetMaxHeight) {
+  return jpegFileToBmpStreamInternal(source, bmpOut, targetMaxWidth, targetMaxHeight, true, true, true);
 }

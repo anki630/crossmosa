@@ -10,21 +10,31 @@
 namespace {
 // tinfl's window must be a power of two; TINFL_LZ_DICT_SIZE is 32768.
 constexpr size_t WINDOW_SIZE = TINFL_LZ_DICT_SIZE;
+// v251: smallest ring handed out for size-known streams (a match copy is at
+// most 258 bytes; 4KB keeps tiny entries far from any edge case).
+constexpr size_t MIN_WINDOW = 4096;
 // tinfl_decompressor holds mz_uint32 arrays; 8 keeps the window aligned too.
 constexpr size_t STATE_ALIGNED = (sizeof(tinfl_decompressor) + 7) & ~size_t{7};
 }  // namespace
 
 InflateStream::~InflateStream() { deinit(); }
 
-bool InflateStream::init(const bool streaming) {
+size_t InflateStream::ringBytesFor(const size_t totalOutputBytes) {
+  size_t ring = MIN_WINDOW;
+  while (ring < totalOutputBytes && ring < WINDOW_SIZE) ring <<= 1;
+  return ring;
+}
+
+bool InflateStream::init(const bool streaming, const size_t windowBytes) {
   // Every consumer constructs a fresh stream per operation, so acquire storage
   // from scratch each init (releasing any prior backing first).
   deinit();
+  windowSize = streaming ? ringBytesFor(windowBytes) : 0;
 
   // During a framebuffer loan the lent 48KB is up for grabs: state (~11KB) +
   // window (32KB) fit inside it, so a chapter-build inflate costs the heap
   // nothing. Absent (or already claimed): plain heap, freed in deinit().
-  const size_t needed = STATE_ALIGNED + (streaming ? WINDOW_SIZE : 0);
+  const size_t needed = STATE_ALIGNED + windowSize;
   arenaBase = buildscratch::claim(needed);
   if (arenaBase) {
     state = reinterpret_cast<tinfl_decompressor*>(arenaBase);
@@ -33,13 +43,32 @@ bool InflateStream::init(const bool streaming) {
     // Raw malloc (not makeUniqueNoThrow): the header keeps tinfl_decompressor
     // an incomplete type so consumers never include miniz; both blocks are
     // freed in deinit()/the destructor.
-    state = static_cast<tinfl_decompressor*>(malloc(sizeof(tinfl_decompressor)));
-    if (!state) return false;
-    if (streaming) {
-      window = static_cast<uint8_t*>(malloc(WINDOW_SIZE));
-      if (!window) return false;  // state kept; deinit()/next init reclaims it
+    // v251: the larger of window/state first -- TLSF places the big one while
+    // the heap still has its best hole; allocating the ~8KB state before a 16KB
+    // ring can split the only hole the ring fits in (host replay with the real
+    // tlsf.c on a device heap layout: tools/tlsf-stream-open-sim/build_sim.c).
+    // For 4K/8K rings the state is the larger block, so it goes first.
+    const bool windowFirst = windowSize >= sizeof(tinfl_decompressor);
+    for (int step = 0; step < 2; step++) {
+      const bool doWindow = (step == 0) == windowFirst;
+      if (doWindow) {
+        if (!streaming) continue;
+        window = static_cast<uint8_t*>(malloc(windowSize));
+      } else {
+        state = static_cast<tinfl_decompressor*>(malloc(sizeof(tinfl_decompressor)));
+      }
+      if ((doWindow && !window) || (!doWindow && !state)) {
+        deinit();  // release whatever the other step got, right away
+        return false;
+      }
     }
   }
+  // v251: a ring smaller than 32KB is only sufficient for VALID streams (total
+  // output <= ring). tinfl's wrapping mode does not reject a back-reference
+  // farther than the bytes produced so far -- it masks into unwritten ring
+  // bytes (true for the 32KB ring too). Zero the ring so such invalid input
+  // decodes deterministically instead of exposing stale heap contents.
+  if (window) memset(window, 0, windowSize);
 
   tinfl_init(state);
   windowPos = 0;
@@ -118,13 +147,13 @@ InflateStream::Status InflateStream::readAtMost(uint8_t* dest, const size_t maxL
     if (streaming) {
       // Ring mode invariant: tinfl derives its wrap mask from
       // (cursor offset + avail_out), so avail_out MUST always reach the end of
-      // the 32KB window -- never cap it to the caller's remaining space.
-      outBytes = WINDOW_SIZE - windowPos;
+      // the ring -- never cap it to the caller's remaining space.
+      outBytes = windowSize - windowPos;
       status = tinfl_decompress(state, inPtr, &inBytes, window, window + windowPos, &outBytes, flags);
       pendingStart = windowPos;
       pendingLen = outBytes;
       windowPos += outBytes;
-      if (windowPos == WINDOW_SIZE) windowPos = 0;
+      if (windowPos == windowSize) windowPos = 0;
     } else {
       // One-shot: back-references resolve directly inside the destination buffer.
       outBytes = maxLen - *produced;

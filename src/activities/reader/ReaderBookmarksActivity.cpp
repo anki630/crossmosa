@@ -1,4 +1,4 @@
-#include "EpubReaderBookmarksActivity.h"
+#include "ReaderBookmarksActivity.h"
 
 #include <GfxRenderer.h>
 #include <I18n.h>
@@ -17,36 +17,37 @@ constexpr int ENTER_DELETE_MODE_MS = 700;
 constexpr int LINE_HEIGHT = 60;
 }  // namespace
 
-void EpubReaderBookmarksActivity::onEnter() {
+void ReaderBookmarksActivity::onEnter() {
   Activity::onEnter();
 
-  if (!epub) {
+  // v290：**不再要求 epub** —— txt 傳 nullptr。書籤檔是用書的路徑定位的，跟格式無關。
+  if (epubPath.empty()) {
     return;
   }
 
   if (!BookmarkFile::load(epubPath, bookmarks)) {
     bookmarks.shrink_to_fit();
   }
-  LOG_DBG("EPB", "Loaded %d bookmarks for book: %s", static_cast<int>(bookmarks.size()), epubPath.c_str());
+  LOG_DBG("BKM", "Loaded %d bookmarks for book: %s", static_cast<int>(bookmarks.size()), epubPath.c_str());
 
   // Trigger first update
   requestUpdate();
 }
 
-void EpubReaderBookmarksActivity::onExit() { Activity::onExit(); }
+void ReaderBookmarksActivity::onExit() { Activity::onExit(); }
 
-int EpubReaderBookmarksActivity::getGutterBottom(const GfxRenderer& renderer) {
+int ReaderBookmarksActivity::getGutterBottom(const GfxRenderer& renderer) {
   const auto orientation = renderer.getOrientation();
   const bool isPortrait = orientation == GfxRenderer::Orientation::Portrait;
   return isPortrait ? 75 : 40;  // Reserve vertical space for button hints at the bottom
 }
 
-int EpubReaderBookmarksActivity::getListHeight(const GfxRenderer& renderer) {
+int ReaderBookmarksActivity::getListHeight(const GfxRenderer& renderer) {
   const auto pageHeight = renderer.getScreenHeight();
   return pageHeight - getGutterBottom(renderer) - LINE_HEIGHT;  // Reserve vertical space for title and button hints
 }
 
-void EpubReaderBookmarksActivity::loop() {
+void ReaderBookmarksActivity::loop() {
   auto openBookmark = [this] {
     if (bookmarks.empty()) {
       return;
@@ -61,7 +62,11 @@ void EpubReaderBookmarksActivity::loop() {
     // The offset is spine-relative, so carry its spine even when the legacy page hints below
     // are stale. The reader validates the index.
     result.spineIndex = bookmark.computedSpineIndex;
-    if (bookmark.computedChapterPageCount > 0 && bookmark.computedChapterProgress < bookmark.computedChapterPageCount &&
+    // v290：txt 的錨點。EPUB 不寫這個欄位，所以兩邊互不干擾。
+    result.hasByteOffset = bookmark.hasByteOffset;
+    result.byteOffset = bookmark.byteOffset;
+    if (epub && bookmark.computedChapterPageCount > 0 &&
+        bookmark.computedChapterProgress < bookmark.computedChapterPageCount &&
         bookmark.computedSpineIndex < epub->getSpineItemsCount()) {
       result.page = bookmark.computedChapterProgress;
       result.totalPages = bookmark.computedChapterPageCount;
@@ -175,10 +180,10 @@ void EpubReaderBookmarksActivity::loop() {
   });
 }
 
-void EpubReaderBookmarksActivity::deleteSelectedBookmark() {
+void ReaderBookmarksActivity::deleteSelectedBookmark() {
   bookmarks.erase(bookmarks.begin() + selectorIndex);
   if (!BookmarkFile::save(epubPath, bookmarks)) {
-    LOG_ERR("EPB", "Failed to save bookmarks after delete");
+    LOG_ERR("BKM", "Failed to save bookmarks after delete");
   }
 
   // Move selector up if we deleted the last item
@@ -194,7 +199,7 @@ void EpubReaderBookmarksActivity::deleteSelectedBookmark() {
   }
 }
 
-void EpubReaderBookmarksActivity::render(RenderLock&&) {
+void ReaderBookmarksActivity::render(RenderLock&&) {
   renderer.clearScreen();
 
   const auto pageWidth = renderer.getScreenWidth();
@@ -227,9 +232,12 @@ void EpubReaderBookmarksActivity::render(RenderLock&&) {
   };
   const auto getBookmarkSubtitle = [this](int index) {
     auto bookmark = bookmarks.at(confirmingDelete ? selectorIndex : index);
+    std::string subtitle = std::to_string((int)(std::clamp(bookmark.percentage, 0.0f, 1.0f) * 100.0f + 0.5f)) + "%";
+    // v290：txt 沒有章節也沒有章內頁碼 —— 只有百分比。EPUB 照舊補上章節與頁碼。
+    if (!epub) return subtitle;
+    subtitle += " - ";
     auto tocIndex = epub->getTocIndexForSpineIndex(bookmark.computedSpineIndex);
     auto tocTitle = (tocIndex >= 0) ? (epub->getTocItem(tocIndex)).title : tr(STR_UNNAMED);
-    std::string subtitle = std::to_string((int)(std::clamp(bookmark.percentage, 0.0f, 1.0f) * 100.0f + 0.5f)) + "% - ";
     if (bookmark.computedChapterPageCount > 0) {
       subtitle += std::to_string(bookmark.computedChapterProgress + 1) + "/" +
                   std::to_string(bookmark.computedChapterPageCount) + " - ";

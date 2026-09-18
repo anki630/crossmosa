@@ -68,7 +68,17 @@ void renderPreview(const GfxRenderer& renderer, PreviewLayout& layout, int previ
   if (width <= 0 || height <= 0) return;
 
   const int labelH = renderer.getTextHeight(UI_10_FONT_ID);
-  const int labelReserved = labelH + labelGap + previewPadding;
+  // v286：正文與標籤之間的留白【不再】沿用通用的 verticalSpacing（16px）。
+  // ⚠️ 實機回報：22pt 選「寬」時預覽只畫得出**一行**，下面一大片空白 —— 而預覽的
+  //    全部意義就是讓你看見行距，一行看不出任何東西。逐列量測後差距是 **3px**：
+  //    第二行的基線落在 251，而限制線是 248。那 3px 是被這 16px 的通用留白吃掉的，
+  //    但第二行的**墨水**下緣其實只到 254，離標籤還有 10px —— 留白開得比需要的大。
+  //    改成 previewPadding/2；漢字的降部只有約 3px，拉丁最多約 14px，仍不會壓到標籤。
+  // ℹ️ 更大的字級（28pt 的「寬」行距 102px）仍然只放得下一行 —— 那是**預覽框本身不夠高**，
+  //    而加高預覽框會讓下面的設定清單少一列（CLAUDE.md 硬限制第 7 條），是另一個決定。
+  const int textLabelGap = previewPadding / 2;
+  (void)labelGap;
+  const int labelReserved = labelH + textLabelGap + previewPadding;
 
   char labelBuf[128];
   snprintf(labelBuf, sizeof(labelBuf), "%s \"%s, %s\"", tr(STR_PREVIEW), familyName, sizeName);
@@ -85,8 +95,8 @@ void renderPreview(const GfxRenderer& renderer, PreviewLayout& layout, int previ
   const int textWidth = width - 2 * SETTINGS.screenMargin;
   if (textWidth <= 0) return;
 
-  const float compression = SETTINGS.getReaderLineCompression();
-  const int lineAdvance = std::max(1, renderer.getLineHeight(fontId, compression));
+  const float pitchEm = SETTINGS.getReaderLinePitchEm();
+  const int lineAdvance = std::max(1, renderer.getReaderLineHeight(fontId, pitchEm));
   const int paragraphGap = SETTINGS.extraParagraphSpacing ? lineAdvance / 2 : 0;
 
   // Re-lay-out (and re-prewarm glyphs) only when a layout-affecting setting or the
@@ -99,7 +109,7 @@ void renderPreview(const GfxRenderer& renderer, PreviewLayout& layout, int previ
                        .fontPointSize = SETTINGS.fontPointSize,
                        .screenMargin = SETTINGS.screenMargin,
                        .textWidth = textWidth,
-                       .lineCompression = compression,
+                       .lineHeightEm = static_cast<float>(lineAdvance),
                        .alignment = SETTINGS.paragraphAlignment,
                        .extraParagraphSpacing = SETTINGS.extraParagraphSpacing != 0,
                        .focusReading = SETTINGS.focusReadingEnabled != 0,

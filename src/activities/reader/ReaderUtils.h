@@ -50,18 +50,31 @@ struct PageTurnResult {
   bool fromTilt;
 };
 
+struct FrontPageButtons {
+  MappedInputManager::Button prev;
+  MappedInputManager::Button next;
+};
+
+// ⭐ 前排左右鍵必須與側鍵**同一個方向**。兩個獨立的原因會讓左右反過來，要疊起來：
+//    ① 螢幕轉了（`isNavDirectionSwapped`，只在 frontButtonFollowOrientation 開著時）
+//    ② 書是右翻的（`bookTurnsRightToLeft`）
+//    互斥或：兩個都成立就抵銷回正常。
+//    ⚠️ v222 之前只有①，於是直排時側鍵換了、前排沒換 ＝ 同一頁上兩組鍵指向相反。
+// v264：抽成函式 —— 閱讀器 loop 開頭「按鍵中止補圖解碼」也要分得出哪一顆是【上一頁】，
+//    兩處各算一次遲早會對不上（側鍵 PageBack／PageForward 已經由 MappedInputManager 換好方向）。
+inline FrontPageButtons frontPageButtons(const MappedInputManager& input) {
+  const bool swapFront = input.isNavDirectionSwapped() != MappedInputManager::bookTurnsRightToLeft();
+  return swapFront ? FrontPageButtons{MappedInputManager::Button::Right, MappedInputManager::Button::Left}
+                   : FrontPageButtons{MappedInputManager::Button::Left, MappedInputManager::Button::Right};
+}
+
 inline PageTurnResult detectPageTurn(const MappedInputManager& input) {
   const bool usePress = SETTINGS.longPressButtonBehavior == SETTINGS.OFF;
   const bool tiltNext = SETTINGS.tiltPageTurn && halTiltSensor.wasTiltedForward();
   const bool tiltPrev = SETTINGS.tiltPageTurn && halTiltSensor.wasTiltedBack();
-  // ⭐ 前排左右鍵必須與側鍵**同一個方向**。兩個獨立的原因會讓左右反過來，要疊起來：
-  //    ① 螢幕轉了（`isNavDirectionSwapped`，只在 frontButtonFollowOrientation 開著時）
-  //    ② 書是右翻的（`bookTurnsRightToLeft`）
-  //    互斥或：兩個都成立就抵銷回正常。
-  //    ⚠️ v222 之前只有①，於是直排時側鍵換了、前排沒換 ＝ 同一頁上兩組鍵指向相反。
-  const bool swapFront = input.isNavDirectionSwapped() != MappedInputManager::bookTurnsRightToLeft();
-  const auto prevButton = swapFront ? MappedInputManager::Button::Right : MappedInputManager::Button::Left;
-  const auto nextButton = swapFront ? MappedInputManager::Button::Left : MappedInputManager::Button::Right;
+  const auto front = frontPageButtons(input);
+  const auto prevButton = front.prev;
+  const auto nextButton = front.next;
   const bool prev =
       tiltPrev ||
       (usePress ? (input.wasPressed(MappedInputManager::Button::PageBack) || input.wasPressed(prevButton))

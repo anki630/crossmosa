@@ -2,6 +2,7 @@
 
 #include <FS.h>  // need to be included before SdFat.h for compatibility with FS.h's File class
 #include <Arduino.h>
+#include <Breadcrumb.h>
 #include <Logging.h>
 #include <Memory.h>
 #include <SDCardManager.h>
@@ -18,9 +19,11 @@ void HalStorage::noteAllocFail(const char* where, size_t bytes) {
   // v194：HAL 不能碰 DiagLog；先到先得，src 讀走寫成 ALLOCFAIL。
   LOG_ERR("HAL", "ALLOCFAIL where=%s bytes=%u max=%u", where, static_cast<unsigned>(bytes),
           static_cast<unsigned>(ESP.getMaxAllocHeap()));
-  if (lastAllocFail[0] != '\0') return;
-  snprintf(lastAllocFail, sizeof(lastAllocFail), "where=%s bytes=%u max=%u", where, static_cast<unsigned>(bytes),
+  if (breadcrumbPending(lastAllocFail)) return;
+  char line[sizeof(lastAllocFail)];
+  snprintf(line, sizeof(line), "where=%s bytes=%u max=%u", where, static_cast<unsigned>(bytes),
            static_cast<unsigned>(ESP.getMaxAllocHeap()));
+  breadcrumbPublish(lastAllocFail, sizeof(lastAllocFail), line);  // v249：跨 task 交接（見 Breadcrumb.h）
 }
 
 HalStorage::HalStorage() {

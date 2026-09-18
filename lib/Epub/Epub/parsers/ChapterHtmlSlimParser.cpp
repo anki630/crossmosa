@@ -19,6 +19,22 @@
 #include <new>
 
 #include "../../../../src/fontIds.h"
+
+namespace {
+// v252 BUILDPROF：RAII 累計計時器（ParsedText::buildProf 的欄位）。
+struct ProfScope {
+  uint64_t& acc;
+  int64_t t0;
+  explicit ProfScope(uint64_t& a) : acc(a), t0(ParsedText::profNowUs()) {}
+  ~ProfScope() { acc += static_cast<uint64_t>(ParsedText::profNowUs() - t0); }
+};
+// 文字回呼裡發生的排版另計（ParsedText::buildProfInCd），巢狀時還原外層值。
+struct InCdScope {
+  bool prev;
+  InCdScope() : prev(ParsedText::buildProfInCd) { ParsedText::buildProfInCd = true; }
+  ~InCdScope() { ParsedText::buildProfInCd = prev; }
+};
+}  // namespace
 #include "Epub.h"
 #include "Epub/Page.h"
 #include "Epub/VisibleTextUtils.h"
@@ -48,6 +64,9 @@ constexpr size_t TEXT_BLOCK_SOFT_FLUSH_WORDS_WITH_CSS = 320;
 // every text fragment (e.g. Kobo KePub spans). The cap prevents unbounded heap growth
 // on resource-constrained devices (~380KB heap). TOC anchors bypass this cap.
 constexpr size_t MAX_ANCHORS_PER_CHAPTER = 1024;
+// v275：一行最少要放得下幾個字（見 maxTotalHorizontalInset）。8 是取捨：
+//   再高就會把正常的引文縮排（左右各 2em）也削掉，再低就救不了「一行 4 個字」那種書。
+constexpr int MIN_CHARS_PER_LINE = 8;
 
 constexpr const char* HEADER_TAGS[] = {"h1", "h2", "h3", "h4", "h5", "h6"};
 constexpr const char* BLOCK_TAGS[] = {"p", "li", "div", "br", "blockquote"};
@@ -343,7 +362,7 @@ bool ChapterHtmlSlimParser::startNewTextBlock(const BlockStyle& blockStyle) {
         // The empty block was created by a <br> section separator. Inject a full line of
         // blank space before the following paragraph so the scene/section break is visible.
         // This only fires when the <br> block stayed empty (i.e. no inline text was added).
-        const int16_t lineHeight = static_cast<int16_t>(renderer.getLineHeight(fontId, lineCompression));
+        const int16_t lineHeight = static_cast<int16_t>(lineHeightPx);
         incoming.marginTop = static_cast<int16_t>(incoming.marginTop + lineHeight);
       }
 
@@ -400,7 +419,7 @@ void ChapterHtmlSlimParser::emitHorizontalRule(const BlockStyle& blockStyle) {
 
   if (!ensureCurrentPage("Page:hr:first")) return;
 
-  const int16_t lineHeight = static_cast<int16_t>(renderer.getLineHeight(fontId, lineCompression));
+  const int16_t lineHeight = static_cast<int16_t>(lineHeightPx);
   const int16_t defaultVerticalSpacing = static_cast<int16_t>(lineHeight / 2);
   const int16_t topSpacing =
       static_cast<int16_t>((blockStyle.marginTop > 0 ? blockStyle.marginTop : defaultVerticalSpacing) +
@@ -450,6 +469,7 @@ void ChapterHtmlSlimParser::emitHorizontalRule(const BlockStyle& blockStyle) {
 }
 
 void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char* name, const XML_Char** atts) {
+  const ProfScope profEl(ParsedText::buildProf.elUs);  // v252
   // v150：latch 之後整個 callback 直接跳過 —— XML_StopParser 只擋【下一個】callback，
   // 目前佇列中的照樣進來，而這裡面還有 push style stack / pendingFootnotes 等 throwing 配置。
   if (static_cast<ChapterHtmlSlimParser*>(userData)->buildAborted_) return;
@@ -702,6 +722,7 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
               //     （現行程式碼無此路徑，防未來），init 落回 malloc 而 32KB 可能仍配不到
               //     → 該張圖照樣被丟。ZipFile 會留下 "Failed to init inflate stream" 一行。
               GfxRenderer::FrameBufferLoan imageProbeLoan(self->renderer);
+              const ProfScope profImg(ParsedText::buildProf.imgUs);  // v252
 
               // Probe the dimensions from the entry's first bytes (early-aborted
               // inflate, a few KB) instead of extracting the whole image now —
@@ -853,7 +874,7 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                 //    ⚠️ 有留證人（VERTIMGDROP），因為「排版階段丟掉的圖會固化進 section 快取」
                 //       是本專案踩過兩次的坑（教訓 A-10）——要看得到它丟了什麼。
                 if (self->renderer.isVerticalLayout()) {
-                  const int32_t emFP = vtext::probeEmFP(self->renderer, self->fontId);
+                  const int32_t emFP = self->frozenEmFP_;  // v284：用建置凍結值，不再現量
                   const int emPx = emFP > 0 ? (emFP + 8) / 16 : 0;
                   if (emPx > 0 && displayWidth <= emPx * 2 && displayHeight <= emPx * 2) {
                     if (self->vertImgDropLogged < 3) {
@@ -909,6 +930,7 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                 // 而上面的換頁條件只在非空頁觸發，新頁上的圖會被邊界推出頁底 marginTop 像素；
                 // 大的底部保留區會默默吸收，薄的就越過實體邊緣、被 ImageBlock::render 的範圍
                 // 檢查整張丟掉。（下面 v123 的縮圖段在這條夾限之後理論上不再觸發，留作防線。）
+                const int16_t rawMarginTop = imageMarginTop;  // v255：IMGPLACE 證人要看夾限前後
                 if (self->currentPageNextY + imageMarginTop + displayHeight > self->viewportHeight) {
                   const int room = self->viewportHeight - displayHeight - self->currentPageNextY;
                   imageMarginTop = static_cast<int16_t>(room > 0 ? room : 0);
@@ -962,6 +984,18 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                   return;
                 }
                 int xPos = (self->viewportWidth - displayWidth) / 2;
+                // v255：圖片落點證人（實機回報「章首小圖以前在頁頂、現在在頁底」，而 log 原本不記位置）。
+                //   每章前 6 張：頁序、y 與高、上邊界（CSS 原值>夾到放得下之後）、下邊界、版心高、是否直排、檔名。
+                if (self->imgPlaceLogged < 6) {
+                  ++self->imgPlaceLogged;
+                  const size_t slash = resolvedPath.rfind('/');
+                  ParsedText::vertDiag("IMGPLACE page=%d y=%d h=%d w=%d x=%d mtop=%d>%d mbot=%d vh=%d vert=%d %s",
+                                       self->completedPageCount, self->currentPageNextY, displayHeight, displayWidth,
+                                       xPos, static_cast<int>(rawMarginTop), static_cast<int>(imageMarginTop),
+                                       static_cast<int>(imageMarginBottom), static_cast<int>(self->viewportHeight),
+                                       self->renderer.isVerticalLayout() ? 1 : 0,
+                                       slash == std::string::npos ? resolvedPath.c_str() : resolvedPath.c_str() + slash + 1);
+                }
                 auto pageImage =
                     std::shared_ptr<PageImage>(new (std::nothrow) PageImage(imageBlock, xPos, self->currentPageNextY));
                 if (!pageImage) {
@@ -1169,8 +1203,9 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
     if (self->embeddedStyle && cssStyle.hasTextAlign()) {
       headerBlockStyle.alignment = cssStyle.textAlign;
     }
-    const auto accumulated =
+    auto accumulated =
         self->blockStyleStack.back().getCombinedBlockStyle(headerBlockStyle, BlockStyle::CombineAxis::Horizontal);
+    self->clampHorizontalInsets(accumulated);  // v275：累加後的總內縮上限（見標頭）
     self->blockStyleStack.push_back(accumulated);
     if (!self->startNewTextBlock(accumulated.withoutBottom())) return;
     self->boldUntilDepth = std::min(self->boldUntilDepth, self->depth);
@@ -1201,8 +1236,9 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
       if (!self->startNewTextBlock(brStyle)) return;
     } else {
       self->currentCssStyle = cssStyle;
-      const auto accumulated = self->blockStyleStack.back().getCombinedBlockStyle(userAlignmentBlockStyle,
-                                                                                  BlockStyle::CombineAxis::Horizontal);
+      auto accumulated = self->blockStyleStack.back().getCombinedBlockStyle(userAlignmentBlockStyle,
+                                                                            BlockStyle::CombineAxis::Horizontal);
+      self->clampHorizontalInsets(accumulated);  // v275：同上 —— 兩個 push 點都要夾，只守一處等於沒守
       self->blockStyleStack.push_back(accumulated);
       if (!self->startNewTextBlock(accumulated.withoutBottom())) return;
       self->updateEffectiveInlineStyle();
@@ -1321,6 +1357,9 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
 }
 
 void XMLCALL ChapterHtmlSlimParser::characterData(void* userData, const XML_Char* s, const int len) {
+  const ProfScope profCd(ParsedText::buildProf.cdUs);  // v252
+  const InCdScope inCd;
+  ParsedText::buildProf.cdCalls++;
   // v149：latch 之後（或 addWord 剛拒絕過）就別再進 token 了 —— XML_StopParser 不會中斷
   // 【目前】的 callback 堆疊，而 soft-flush 尾端的檢查要等 block 結束才輪到。這一行讓
   // 拒絕與停止之間的空轉縮到最短。成本：每個 callback 一次 bool 比較。
@@ -1579,6 +1618,7 @@ void XMLCALL ChapterHtmlSlimParser::defaultHandlerExpand(void* userData, const X
 }
 
 void XMLCALL ChapterHtmlSlimParser::endElement(void* userData, const XML_Char* name) {
+  const ProfScope profEl(ParsedText::buildProf.elUs);  // v252
   // v150：latch 之後整個 callback 直接跳過 —— XML_StopParser 只擋【下一個】callback，
   // 目前佇列中的照樣進來，而這裡面還有 push style stack / pendingFootnotes 等 throwing 配置。
   if (static_cast<ChapterHtmlSlimParser*>(userData)->buildAborted_) return;
@@ -1779,7 +1819,17 @@ void XMLCALL ChapterHtmlSlimParser::endElement(void* userData, const XML_Char* n
       self->blockStyleStack.pop_back();
       // Start a new text block with the parent style to prevent subsequent bare text
       // from inheriting the closed block style (e.g. alignment or margins).
-      if (!self->startNewTextBlock(self->blockStyleStack.back())) return;
+      // ⚠️ v277：**垂直間距要剝掉**，否則容器的上下邊距會被【每一個子區塊各付一次】。
+      //   v276 的 `VSPACE` 儀器實測（某本中文書的第 1 章，CSS 用 `div{margin:1em;padding:1em}` 包住每個 <p>）：
+      //   每個區塊 `mt=53 pt=53 mb=53 pb=53` ＝ **上 106 ＋ 下 139（含段落間距）＝ 245px ＝ 3.7 行**，
+      //   而那本書的 CSS 上 `p{margin:0}`。一章 6 頁裡有 4 頁是空的。
+      //   機制：這裡建的空區塊帶著容器**完整**的垂直間距，下一個子元素開啟時
+      //   `startNewTextBlock` 的「空區塊 Vertical 合併」就把它吃進去（`max` 上緣、相加下緣）。
+      //   容器**自己**開啟時用的是 `accumulated.withoutBottom()`，這條收尾路徑少了對應的剝除。
+      //   → 容器的上間距在它自己開啟時已經給過第 1 個子區塊（實測 `n=1` 正是 `mb=0 pb=0`），
+      //     下間距則由上面那行 `addBottom(...)` 在**容器真正收尾時**給最後一個子區塊。兩邊都還在，
+      //     只是不再重複收費。**水平方向不動**（縮排本來就該每個子區塊都有）。
+      if (!self->startNewTextBlock(self->blockStyleStack.back().withoutTop().withoutBottom())) return;
     }
 
     // </li> closes: if the bullet never got inline text (empty <li> or <li> with only
@@ -1796,7 +1846,12 @@ void XMLCALL ChapterHtmlSlimParser::endElement(void* userData, const XML_Char* n
 
 ChapterHtmlSlimParser::~ChapterHtmlSlimParser() { abortParse(); }
 
+// v276：每次開機的總額度（見標頭）。重開機自然歸零，不必額外重設。
+uint16_t ChapterHtmlSlimParser::vspaceBudget_ = 120;
+
 bool ChapterHtmlSlimParser::beginParse() {
+  vspaceBlockSeq_ = 0;  // v276：每章重新數
+  vspaceLines_ = 0;
   // Initialize block style stack with a root entry representing "no ancestor block elements".
   // The user's paragraph alignment is set as the default so child elements without explicit
   // text-align inherit it correctly through getCombinedBlockStyle.
@@ -1851,7 +1906,9 @@ ChapterHtmlSlimParser::ParseStatus ChapterHtmlSlimParser::parseStep() {
     return ParseStatus::Error;
   }
 
+  const int64_t rdT0 = ParsedText::profNowUs();  // v252
   const size_t len = parseFile_.read(buf, PARSE_BUFFER_SIZE);
+  ParsedText::buildProf.rdUs += static_cast<uint64_t>(ParsedText::profNowUs() - rdT0);
 
   if (len == 0 && parseFile_.available() > 0) {
     LOG_ERR("EHP", "File read error");
@@ -1860,7 +1917,9 @@ ChapterHtmlSlimParser::ParseStatus ChapterHtmlSlimParser::parseStep() {
 
   const int done = parseFile_.available() == 0;
 
+  const int64_t xmlT0 = ParsedText::profNowUs();  // v252
   const int parseStatus = XML_ParseBuffer(xmlParser_, static_cast<int>(len), done);
+  ParsedText::buildProf.xmlUs += static_cast<uint64_t>(ParsedText::profNowUs() - xmlT0);
   ParsedText::noteBuildProbe(5);  // v190：步尾；內層沒走到時這就是整步盲區
 
   // ⚠️ 順序不可對調：latchBuildAborted() 的 XML_StopParser 也會讓上面回 XML_STATUS_ERROR。
@@ -1952,8 +2011,9 @@ bool ChapterHtmlSlimParser::parseAndBuildPages() {
 
 void ChapterHtmlSlimParser::addLineToPage(std::shared_ptr<TextBlock> line, const uint32_t visibleOffset) {
   if (buildAborted_) return;
+  const ProfScope profProc(ParsedText::buildProf.procUs);  // v252
   const int lineHeight =
-      renderer.getLineHeight(fontId, lineCompression) + line->getRubyShift(renderer.getFontAscenderSize(fontId));
+      lineHeightPx + line->getRubyShift(renderer.getFontAscenderSize(fontId));
 
   if (!ensureCurrentPage("Page:addLine:first")) return;
 
@@ -1978,15 +2038,81 @@ void ChapterHtmlSlimParser::addLineToPage(std::shared_ptr<TextBlock> line, const
   const int16_t xOffset = line->getBlockStyle().leftInset();
   currentPage->elements.push_back(std::make_shared<PageLine>(line, xOffset, currentPageNextY));
   currentPageNextY += lineHeight;
+  ++vspaceLines_;  // v276：這個區塊吐了幾行（儀器用；makePages 那行會印出來）
 }
 
 int ChapterHtmlSlimParser::columnPitchPx() const {
   // ⚠️ 走共用的 `probeEmFP`，不要自己叫 `getCodepointAdvanceFP` —— 那個對內建字型回 -1，
   //    這裡會把欄距夾成 1 px（同一個缺陷類別的第二個實例，複查抓到）。
-  const int32_t emFP = vtext::probeEmFP(renderer, fontId);
-  const float em = static_cast<float>(emFP) / 16.0f;
-  const int pitch = static_cast<int>(em * columnPitchFactor + 0.5f);
-  return pitch > 0 ? pitch : 1;
+  // ⚠️ v284：**量一次就記住。** 原本每次呼叫都重量，而 `probeEmFP` 的兩條路精度不同
+  //    （advance 表建好前走整數 px、建好後走 12.4 定點）→ 同一章前後可能差 1px，欄界不一致。
+  //    橫排那條路是在 Section 解析一次；直排這條沒有那個接縫，就在這裡記住。
+  //    （修缺陷類別不是修實例：橫排會犯的，直排早就在犯了。）
+  if (columnPitchCache_ > 0) return columnPitchCache_;
+  if (frozenEmFP_ > 16) {
+    const float em = static_cast<float>(frozenEmFP_) / 16.0f;
+    const int pitch = static_cast<int>(em * columnPitchFactor + 0.5f);
+    if (pitch > 0) {
+      columnPitchCache_ = pitch;
+      return columnPitchCache_;
+    }
+  }
+  // ⚠️ 量不到字身框時**不要夾成 1 px**（codex 第二輪：那會把整章排成一欄寬 1px，
+  //    而且以前那份版面還會被當成有效快取永久留著）。退回字型宣告的行高當安全欄距；
+  //    而 emFP 已經寫進 section 檔頭，下次量得到就會自動失效重排。
+  const int declared = renderer.getLineHeight(fontId);
+  columnPitchCache_ = declared > 0 ? declared : 1;
+  return columnPitchCache_;
+}
+
+// v275：累加後的左右總內縮上限（見標頭的說明）。取兩條的較嚴者：
+//   ① **每行至少放得下 8 個字**（用真正的字身寬 `probeEmFP`，不是 CSS 的 em＝行高）
+//   ② **總內縮不超過版心的 40%**（小字級時 ① 太鬆，這條兜底）
+// ⚠️ `probeEmFP` 對內建字型會回 -1（columnPitchPx 的註解記過這個坑）→ 取不到就只用 ②。
+int16_t ChapterHtmlSlimParser::maxTotalHorizontalInset() const {
+  if (maxTotalInsetCache_ >= 0) return maxTotalInsetCache_;
+  const int vw = viewportWidth;
+  int cap = (vw * 2) / 5;  // ② 40%
+  const int32_t emFP = frozenEmFP_;  // v284：用建置凍結值，不再現量
+  if (emFP > 0) {
+    // ⚠️ **在定點數裡算完再取整，而且往【上】取**（複查抓到）：先把 emFP/16 截成整數，
+    //    45.94px 的字身會被當成 45px，8 個字就少算 7.5px —— 「至少 8 個字」這句話就變成假的。
+    const int needFP = static_cast<int>(emFP) * MIN_CHARS_PER_LINE;
+    const int needPx = (needFP + 15) / 16;
+    const int byChars = vw - needPx;  // ①
+    if (byChars < cap) cap = byChars;
+  }
+  if (cap < 0) cap = 0;
+  maxTotalInsetCache_ = static_cast<int16_t>(cap);
+  return maxTotalInsetCache_;
+}
+
+void ChapterHtmlSlimParser::clampHorizontalInsets(BlockStyle& style) const {
+  // ⚠️ 直排不做：它的欄幾何另有一套，而且目前表現是好的。
+  if (renderer.isVerticalLayout()) return;
+  // ⚠️ **不可以只縮「正的那幾個分量」**（複查抓到）：CSS 的負邊距是合法的，
+  //    父層 +300 配子層 −250 會讓總和只有 50 → 夾限直接放行，但**畫的位置仍然從 +300 起算**，
+  //    於是斷行以為版心很寬、實際卻從 300px 開始畫 → 整行衝出面板。
+  //    而且「正負相消」還會讓累加無限長大（每層 +108/−108，總和恆為 0），約 300 層之後 int16 溢位。
+  //    → 直接對**累加後的兩個內縮值**下手，夾進 [0, cap]，然後正規化寫回。
+  // ℹ️ 正規化成「只有 margin、padding 歸零」是安全的：橫向的 padding **沒有任何獨立消費者**，
+  //    全樹只透過 `leftInset()／rightInset()／totalHorizontalInset()` 讀它（已 grep 確認）。
+  int left = style.leftInset();
+  int right = style.rightInset();
+  if (left < 0) left = 0;    // 負的累加值 ＝ 區塊已經在版心外，救回來
+  if (right < 0) right = 0;
+  const int cap = maxTotalHorizontalInset();
+  const int total = left + right;
+  if (total > cap) {
+    // 等比例縮：左右的比例不變（縮排的視覺線索還在），而且和**正好**是 cap。
+    const int newLeft = total > 0 ? static_cast<int>((static_cast<int32_t>(left) * cap) / total) : 0;
+    left = newLeft;
+    right = cap - newLeft;
+  }
+  style.marginLeft = static_cast<int16_t>(left);
+  style.paddingLeft = 0;
+  style.marginRight = static_cast<int16_t>(right);
+  style.paddingRight = 0;
 }
 
 // 直排：讓圖片／<hr> 獨占一頁。
@@ -2024,6 +2150,7 @@ void ChapterHtmlSlimParser::verticalEndIsolated() {
 void ChapterHtmlSlimParser::addColumnToPage(std::shared_ptr<TextBlock> column, const uint32_t visibleOffset,
                                            const int tokensInColumn) {
   if (buildAborted_) return;
+  const ProfScope profProc(ParsedText::buildProf.procUs);  // v252
   const int pitch = columnPitchPx();
 
   if (!ensureCurrentPage("Page:addCol:first")) return;
@@ -2107,7 +2234,7 @@ void ChapterHtmlSlimParser::layoutCurrentBlock(const bool includeLast) {
     const uint16_t colLen = viewportHeight;
     verticalColTop = 0;
     {
-      const int lh = renderer.getLineHeight(fontId, lineCompression);
+      const int lh = lineHeightPx;
       const int pitch = columnPitchPx();
       verticalLeadGap = (lh > 0) ? static_cast<int16_t>(static_cast<long>(bs.topInset()) * pitch / lh) : 0;
       verticalTrailGap = (lh > 0) ? static_cast<int16_t>(static_cast<long>(bs.bottomInset()) * pitch / lh) : 0;
@@ -2150,18 +2277,26 @@ void ChapterHtmlSlimParser::makePages() {
 
   if (!ensureCurrentPage("Page:makePages")) return;
 
-  const int lineHeight = renderer.getLineHeight(fontId, lineCompression);
+  const int lineHeight = lineHeightPx;
 
   // Apply top spacing before the paragraph (stored in pixels)
   const BlockStyle& blockStyle = currentTextBlock->getBlockStyle();
+  // v276：垂直空間儀器（純觀測）。y0＝套上下間距之前的游標。
+  const bool vspaceLog = vspaceBlockSeq_ < 24 && vspaceBudget_ > 0;
+  const int vspaceY0 = currentPageNextY;
+  const int vspacePg0 = completedPageCount;
+  vspaceLines_ = 0;
+  ++vspaceBlockSeq_;
   if (blockStyle.marginTop > 0) {
     currentPageNextY += blockStyle.marginTop;
   }
   if (blockStyle.paddingTop > 0) {
     currentPageNextY += blockStyle.paddingTop;
   }
+  const int vspaceY1 = currentPageNextY;
 
   layoutCurrentBlock(true);
+  const int vspaceY2 = currentPageNextY;
 
   // v149：同上 —— 兩個排版呼叫點都要檢查，只守一處等於沒守。
   if (currentTextBlock->hasOom()) {
@@ -2190,5 +2325,18 @@ void ChapterHtmlSlimParser::makePages() {
   // Extra paragraph spacing if enabled (default behavior)
   if (extraParagraphSpacing) {
     currentPageNextY += lineHeight / 2;
+  }
+
+  // v276：一個區塊一行。y0→y1 是上間距、y1→y2 是內容（含換頁）、y2→y3 是下間距。
+  //   `pg` 變了就代表這個區塊中間換過頁（換頁會把游標歸零，所以 y1→y2 就**不是**內容高度）。
+  //   ⚠️ `endoff` 是這個區塊**排完之後**的解析位置，不是區塊起點（複查提醒，別把標籤讀反）。
+  if (vspaceLog) {
+    --vspaceBudget_;
+    ParsedText::vertDiag("VSPACE n=%u pg=%d>%d y=%d>%d>%d>%d mt=%d pt=%d mb=%d pb=%d xp=%d lines=%u lh=%d endoff=%lu",
+                         static_cast<unsigned>(vspaceBlockSeq_), vspacePg0, completedPageCount, vspaceY0, vspaceY1,
+                         vspaceY2, static_cast<int>(currentPageNextY), blockStyle.marginTop, blockStyle.paddingTop,
+                         blockStyle.marginBottom, blockStyle.paddingBottom,
+                         extraParagraphSpacing ? lineHeight / 2 : 0, static_cast<unsigned>(vspaceLines_), lineHeight,
+                         static_cast<unsigned long>(visibleTextOffset));
   }
 }

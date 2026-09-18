@@ -93,6 +93,10 @@ class Page {
   // v194：nothrow 配不到 Page／PageImage 時的證人（先到先得）。src 讀走寫成 ALLOCFAIL。
   static char lastAllocFail[96];
   static void noteAllocFail(const char* where, size_t bytes);
+  // v249（codex 複查）：noteAllocFail 被呼叫的累計次數。Section 用「deserialize 前後有沒有變」判斷這次失敗是不是記憶體不足
+  // —— 原本看 lastAllocFail[0]，但那是給主迴圈讀走清掉的診斷緩衝，讀走的時機剛好卡在中間就會誤判成壞檔、
+  // 在記憶體最緊的時候刪章節快取重排（v152 要避免的正是這個）。別的 task 同時失敗只會讓它多判一次「記憶體不足」（重試），無害。
+  static uint32_t allocFailCount();
 
   void render(GfxRenderer& renderer, int fontId, int xOffset, int yOffset) const;
   void renderImages(GfxRenderer& renderer, int fontId, int xOffset, int yOffset) const;
@@ -104,6 +108,15 @@ class Page {
   bool hasImages() const {
     return std::any_of(elements.begin(), elements.end(),
                        [](const std::shared_ptr<PageElement>& el) { return el->getTag() == TAG_PageImage; });
+  }
+
+  // v267：這一頁有幾張圖。灰階帶高的預配只給【單圖頁】—— 多圖頁只有第一張能進像素快取的 RAM slot，
+  //   用外框估會高估它，反而可能把尾段製造出來（見 EpubReaderActivity 的 planGrayStrip）。
+  size_t imageCount() const {
+    return static_cast<size_t>(std::count_if(elements.begin(), elements.end(),
+                                             [](const std::shared_ptr<PageElement>& el) {
+                                               return el->getTag() == TAG_PageImage;
+                                             }));
   }
 
   bool hasImagesNeedingDecode() const {

@@ -4,10 +4,14 @@
 
 #include <WarmIdentity.h>
 
+#include <atomic>
+#include <memory>
+#include <string>
 #include <vector>
 
 #include "CrossPointSettings.h"
 #include "activities/Activity.h"
+#include "BookmarkEntry.h"  // v290：txt 書籤
 
 // v118:純文字閱讀器改為【串流】—— 不再預先排版整本書。
 //
@@ -22,13 +26,41 @@
 //                而不是與書的長度成正比
 // 閱讀位置因此改存【位元組位移】而非頁碼:位移不是字型的函數,所以改字級、改邊界、
 // 轉螢幕方向都不會讓進度失效,也不需要重建任何東西。
+class TextBlock;
+
 class TxtReaderActivity final : public Activity {
   std::unique_ptr<Txt> txt;
 
   int pagesUntilFullRefresh = 0;
 
-  std::vector<std::string> currentPageLines;
+  // v239：一頁的內容改成排版引擎產出的 TextBlock（`nullptr` ＝ 空白行）。
+  std::vector<std::shared_ptr<TextBlock>> currentPageLines;
   int linesPerPage = 0;
+  // v241 直排
+  bool vertical_ = false;      // 開書時解析的軸向（SETTINGS.documentIsVertical()）
+  int unitsPerPage_ = 1;       // 橫排＝行數、直排＝欄數
+  int columnPitch_ = 0;        // 直排欄距（px）
+  int cachedLineHeight_ = 1;   // v284：橫排行距（px），由 updateViewport 解析一次
+  bool pendingScreenshot_ = false;  // v289：選單觸發的截圖，等這一頁完整畫完才拍
+  // v290：書籤。錨點是【位元組位移】（txt 的頁游標本來就是它），不是頁碼 ——
+  //   改字級／行距／方向都不會讓書籤跑掉，這是 v118 位移制買到的東西。
+  std::vector<BookmarkEntry> bookmarks_;
+  void toggleBookmark();
+  // v291：長按確認鍵加書籤時，這次「放開」不該再去開選單。
+  // ⚠️ 同時也是【閂鎖】：沒有它，按著不放會每一圈 loop 都切換一次書籤（加→刪→加…）。
+  bool confirmHoldConsumed_ = false;
+  // ⚠️ **確認鍵自己的按下時刻。** `getHeldTime()` 是【全域】計時不是單鍵計時
+  //    （memory: x3-opds-nav-gotchas，正解就是「記該鍵 wasPressed 的時間戳」）——
+  //    用它會讓「按著翻頁鍵不放、再按一下確認鍵」被誤判成長按確認鍵，**直接偷偷改掉書籤**。
+  //    0 = 目前沒有按著。
+  unsigned long confirmPressedAtMs_ = 0;
+  // ⚠️ **沒有 `currentPageBookmarked_` 成員，這是刻意的。** 這一頁有沒有書籤是
+  //    `offset` 的純函式，而 `pageStartOffset_` 會被主任務在繪製進行中改掉
+  //    （教訓 A-24：render 迴圈裡的易變成員只讀一次，要靠參數傳）。
+  //    狀態列本來就收得到 offset，直接算就不可能拿到過期的旗標。
+  // 判準是【這一頁的範圍】而不是「位移剛好相等」——見 .cpp 的說明（複查抓到的）。
+  bool isBookmarked(size_t from, size_t to) const;
+  int viewportHeight_ = 0;     // 版心高＝直排欄長
   int viewportWidth = 0;
   bool initialized = false;
 
@@ -65,6 +97,20 @@ class TxtReaderActivity final : public Activity {
   uint8_t diagWarmHit_ = 0;
   uint32_t diagAllocFail_ = 0;
   uint32_t diagDropped_ = 0;  // 繪製期間被按下、待消化的翻頁
+  // v239 新引擎的證人（每次 loadPageAtOffset 覆寫，TXTPAGE 印的是【這一頁】的值）
+  uint16_t diagRemapMiss_ = 0;
+  uint16_t diagVerifyMiss_ = 0;
+  uint16_t diagFlushes_ = 0;
+  uint16_t diagWords_ = 0;
+  uint8_t diagEngOom_ = 0;
+  uint8_t diagChunkCut_ = 0;
+  uint16_t diagGlue_ = 0;  // 整組移頁次數；百位數以上是「整頁一組只能推一碼位」的次數
+  // v243 證人
+  uint32_t diagRescue_ = 0;  // mini-bitmap 取整成長配不到、但仍不必降級的次數（SdCardFont::Stats::bitmapExactRescues）
+  uint32_t prefetchRescue_ = 0;
+  std::atomic<uint32_t> pressMs_{0};  // 主任務記下按鍵時刻（CAS，只記最早一次），render 取走（exchange）
+  uint32_t dispDoneMs_ = 0;           // 黑白那一趟上面板的時刻；0 ＝ 這次 render 沒上面板
+  void markPress();
 
   // Cached settings (幾何改變時要重算,但【不再】讓閱讀位置失效)
   int cachedFontId = 0;
@@ -75,10 +121,10 @@ class TxtReaderActivity final : public Activity {
   int cachedOrientedMarginBottom = 0;
   int cachedOrientedMarginLeft = 0;
 
-  void renderPage(size_t pageOffset);
+  void renderPage(size_t pageOffset, size_t pageEndOffset);
   // v119:offset 由呼叫端傳入而不是讀成員 —— 主任務會在 render 進行中改 pageStartOffset_
   // (v118 的 log 有 38/54 筆因此印出 next==off),狀態列必須畫「這一頁」的進度。
-  void renderStatusBar(size_t offset) const;
+  void renderStatusBar(size_t offset, size_t endOffset) const;
 
   void initializeReader();
   void recomputeGeometry();  // 幾何(視窗寬、每頁行數、字型 ID);改字級或方向後重跑
@@ -92,13 +138,31 @@ class TxtReaderActivity final : public Activity {
 
   void openReaderMenu();
   void jumpToPercent(int percent);
-  bool loadPageAtOffset(size_t offset, std::vector<std::string>& outLines, size_t& nextOffset);
+  void jumpToOffset(size_t offset);  // v290：跳到書籤記下的位元組位移
+  // v239：走 EPUB 排版引擎（TxtEngineLayout）。頁游標仍是單一位元組位移。
+  bool loadPageAtOffset(size_t offset, std::vector<std::shared_ptr<TextBlock>>& outUnits, size_t& nextOffset);
 
   void pushBackOffset(size_t offset);
   bool popBackOffset(size_t& outOffset);
-  // 環空了才用:從 offset 之前一段距離找一個安全起點,往前推到剛好接上 offset。
-  // 推得剛好 = 精確;越過了 = 使用者跳過位置,退回最後一個沒越過的頁首。
-  size_t findPreviousPageOffset(size_t offset);
+  // 環空了才用（v240）：一次排到 offset 為止、取最後 N 個單位的起點。見 .cpp 的說明。
+  struct BackStats {
+    size_t units = 0;   // 最後一次收集排出的單位數
+    size_t span = 0;    // 最後一次的視窗大小（位元組）
+    uint8_t passes = 0; // 讀檔＋排版的次數（最多 3）
+    bool canonical = true;  // 視窗起點是段落起點（分頁唯一性成立）
+    bool oom = false;
+  };
+  size_t findPreviousPageOffset(size_t offset, BackStats& st);
+  // v240：往前翻頁延後到 render() 在鎖內做；以及它的唯一性證人。
+  // 主任務累加、render 在鎖內逐步消化（上限約 8）。兩個 task 都會改 → atomic（同 ActivityManager::requestedUpdate）。
+  std::atomic<uint8_t> pendingBackSteps_{0};
+  size_t backCheckTarget_ = 0;
+  size_t backCheckPrev_ = 0;
+  // v240：預取替哪一頁記下的字型配置統計（暖頁消費一次）。
+  bool prefetchStatValid_ = false;
+  size_t prefetchStatOffset_ = 0;
+  uint32_t prefetchAllocFail_ = 0;
+  uint32_t prefetchDropped_ = 0;
 
   void updatePageSizeEstimate(size_t pageBytes);
   int estimatedTotalPages() const;

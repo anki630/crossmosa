@@ -8,6 +8,8 @@
 #include <cstring>
 #include <string>
 
+#include "DecodeStats.h"
+
 // Streaming cache writer for 2-bit pixels (4 levels). Packs 4 pixels per byte,
 // MSB first.
 //
@@ -39,6 +41,11 @@ struct PixelCache {
   HalFile file;
   std::string cachePathStr;
   bool ok;
+  // v248：寫入累積緩衝。v247 實機批次後每次約 726B（一個 MCU 列）仍小於 sector，封面 128 次寫 441ms；
+  // 湊滿 4KB 才寫，讓 SdFat 走多 sector。配不到（nullptr）就照 v247 直接寫。
+  uint8_t* wbuf = nullptr;
+  size_t wlen = 0;
+  static constexpr size_t WBUF_BYTES = 4096;
 
   PixelCache()
       : buffer(nullptr),
@@ -95,6 +102,8 @@ struct PixelCache {
     }
     memset(buffer, 0, bufSize);
     zeroRow = buffer + (size_t)bandRows * bytesPerRow;
+    wlen = 0;
+    if (!wbuf) wbuf = (uint8_t*)malloc(WBUF_BYTES);  // 失敗＝直接寫，不是錯誤
 
     if (!Storage.openFileForWrite("IMG", cachePath, file)) {
       LOG_ERR("IMG", "Failed to open cache file for writing: %s", cachePath.c_str());
@@ -125,11 +134,18 @@ struct PixelCache {
     if (newTopRow <= bandStart) return true;
     if (newTopRow > height) newTopRow = height;
 
-    for (int r = bandStart; r < newTopRow; ++r) {
-      const int idx = r - bandStart;
-      const uint8_t* rowPtr = (idx < bandRows) ? (buffer + (size_t)idx * bytesPerRow) : zeroRow;
-      if (file.write(rowPtr, (size_t)bytesPerRow) != (size_t)bytesPerRow) {
-        LOG_ERR("IMG", "Cache write error at row %d", r);
+    // v247：帶狀緩衝裡的列在記憶體中本來就連續 → 一次寫出（v246 實機：每列一次 128B 寫入，0.6ms／次）。
+    //   帶子之外（idx ≥ bandRows）的列才逐列寫零列，那只在影像被裁切時出現。
+    const int total = newTopRow - bandStart;
+    const int fromBand = total < bandRows ? total : bandRows;
+    if (fromBand > 0 && !writeRows(buffer, fromBand)) {
+      LOG_ERR("IMG", "Cache write error at rows %d..%d", bandStart, bandStart + fromBand - 1);
+      ok = false;
+      return false;
+    }
+    for (int i = fromBand; i < total; ++i) {
+      if (!writeRows(zeroRow, 1)) {
+        LOG_ERR("IMG", "Cache write error at row %d", bandStart + i);
         ok = false;
         return false;
       }
@@ -147,14 +163,25 @@ struct PixelCache {
       abort();
       return false;
     }
-    for (int r = flushedRows; r < height; ++r) {
-      const int idx = r - bandStart;
-      const uint8_t* rowPtr = (idx >= 0 && idx < bandRows) ? (buffer + (size_t)idx * bytesPerRow) : zeroRow;
-      if (file.write(rowPtr, (size_t)bytesPerRow) != (size_t)bytesPerRow) {
-        LOG_ERR("IMG", "Cache write error at row %d", r);
+    // v247：同 advanceTo —— flushedRows == bandStart 恆成立（兩者一起更新），所以帶子裡的列從 buffer[0] 起連續。
+    const int total = height - flushedRows;
+    const int fromBand = total < bandRows ? total : bandRows;
+    if (fromBand > 0 && !writeRows(buffer, fromBand)) {
+      LOG_ERR("IMG", "Cache write error at rows %d..%d", flushedRows, flushedRows + fromBand - 1);
+      abort();
+      return false;
+    }
+    for (int i = fromBand; i < total; ++i) {
+      if (!writeRows(zeroRow, 1)) {
+        LOG_ERR("IMG", "Cache write error at row %d", flushedRows + i);
         abort();
         return false;
       }
+    }
+    if (!flushPending()) {
+      LOG_ERR("IMG", "Cache write error at final flush");
+      abort();
+      return false;
     }
     file.close();
     LOG_DBG("IMG", "Cache written: %s (%dx%d, %d bytes)", cachePathStr.c_str(), width, height,
@@ -163,8 +190,43 @@ struct PixelCache {
     return true;
   }
 
+  // v247：一次寫 n 列（連續記憶體）。v248：先進累積緩衝，滿 4KB 才真的寫。v246 的儀器只算真的寫。
+  bool writeRows(const uint8_t* rows, const int n) {
+    const size_t bytes = static_cast<size_t>(n) * static_cast<size_t>(bytesPerRow);
+    if (!wbuf) return writeRaw(rows, bytes);
+    if (wlen + bytes <= WBUF_BYTES) {
+      memcpy(wbuf + wlen, rows, bytes);
+      wlen += bytes;
+      return wlen < WBUF_BYTES || flushPending();
+    }
+    if (!flushPending()) return false;
+    if (bytes >= WBUF_BYTES) return writeRaw(rows, bytes);
+    memcpy(wbuf, rows, bytes);
+    wlen = bytes;
+    return true;
+  }
+
+  bool flushPending() {
+    if (!wbuf || wlen == 0) return true;
+    const size_t n = wlen;
+    wlen = 0;
+    return writeRaw(wbuf, n);
+  }
+
+  bool writeRaw(const uint8_t* data, const size_t bytes) {
+    size_t wrote;
+    {
+      DecodeStatTimer t(g_decodeStats.writeUs);
+      wrote = file.write(data, bytes);
+    }
+    g_decodeStats.writeCalls++;
+    g_decodeStats.writeBytes += static_cast<uint32_t>(bytes);
+    return wrote == bytes;
+  }
+
   // Drop a partial/failed cache so a later decode re-creates it cleanly.
   void abort() {
+    wlen = 0;  // v248：累積中的列一起丟掉
     if (file.isOpen()) file.close();
     if (!cachePathStr.empty()) {
       Storage.remove(cachePathStr.c_str());
@@ -182,6 +244,10 @@ struct PixelCache {
     if (buffer) {
       free(buffer);
       buffer = nullptr;
+    }
+    if (wbuf) {
+      free(wbuf);
+      wbuf = nullptr;
     }
   }
 };

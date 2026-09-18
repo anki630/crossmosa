@@ -404,6 +404,9 @@ void setup() {
   DataDir::resolve();
 
   DiagLog::begin();
+  // v283：JSON 存檔的分段計時；lib/Serialization 看不到 DiagLog（同 vertDiagHook 的理由）。
+  //   裝在 DiagLog::begin() 之後、任何 loadFromFile() 之前 —— 載入時若觸發改版重存也要量到。
+  PersistableStoreBase::diagHook = [](const char* line) { DiagLog::line("%s", line); };
   DiagLog::mem("boot");
   BenchFlags::load();  // v185 bench 哨兵（同樣只在這裡讀一次 SD）
 
@@ -609,6 +612,9 @@ void setup() {
     DiagLog::line("WAKE toreader path-len=%u", static_cast<unsigned>(path.size()));
     APP_STATE.openEpubPath = "";
     APP_STATE.readerActivityLoadCount++;
+    // 防呆的存檔：讓下一次開機知道「上次有試著開書」。v282 量到它在喚醒路徑上要 ~1.15 秒
+    //   （不是 v280 報的 350ms —— 那是另一本書的幸運視窗），而內容只有一百多個位元組。
+    //   v283 起這條路上的分段成本由 PERSISTW 那行 log 給出。
     APP_STATE.saveToFile();
     activityManager.goToReader(path, allowFastInitialReaderRefresh);
   }

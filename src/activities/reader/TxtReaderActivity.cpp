@@ -1,5 +1,12 @@
 #include "TxtReaderActivity.h"
 
+#include "TxtEngineLayout.h"
+
+#include "Epub/ParsedText.h"
+#include "Epub/blocks/TextBlock.h"
+#include "Epub/VerticalEm.h"
+#include "Epub/VerticalText.h"
+
 #include "ReaderFontSizes.h"
 
 #include <BidiUtils.h>
@@ -19,16 +26,22 @@
 #include "MappedInputManager.h"
 #include "ProgressFile.h"
 #include "EpubReaderPercentSelectionActivity.h"
+#include "QrDisplayActivity.h"  // v289：顯示 QR（與 EPUB 共用）
+#include "ReaderBookmarksActivity.h"  // v290：與 EPUB 共用的書籤清單
 #include <SdCardFont.h>
 
 #include "SdCardFontSystem.h"
 
 #include "ReaderUtils.h"
 #include "TxtReaderMenuActivity.h"
+#include "activities/settings/TextSettingsActivity.h"  // v286：txt 也要有文字設定入口
 #include "RecentBooksStore.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "util/DiagLog.h"
+#include "util/BookmarkFile.h"
+#include "util/BookmarkUtil.h"
+#include "util/ScreenshotUtil.h"  // v289：選單觸發的截圖
 
 namespace {
 constexpr size_t CHUNK_SIZE = 8 * 1024;  // 8KB chunk for reading
@@ -49,14 +62,39 @@ constexpr uint32_t LEGACY_INDEX_MAGIC = 0x54585449;  // "TXTI"
 // 讓步改成「以時間為準」而非以頁數為準:舊條件是 pageOffsets.size() % 20,而整章不換行的
 // 中文 txt 整份只產生三四頁 → 全程一次都沒讓出。
 constexpr uint32_t INDEX_YIELD_INTERVAL_MS = 40;
+
+// v290：把一段【任意切出來的】位元組修成合法 UTF-8。
+// 頁界是排版切的、不是字元切的，所以頭尾都可能落在一個字的中間。
+// ⚠️ 複查抓過一次：**只有不完整的那一個序列該砍，完整的字必須留著**
+//    （第一版寫成先剝續接位元組再剝起始位元組 →「abc中」變「abc」）。
+void trimToUtf8Boundaries(std::string& text) {
+  size_t start = 0;
+  while (start < text.size() && (static_cast<unsigned char>(text[start]) & 0xC0) == 0x80) ++start;
+  if (start > 0) text.erase(0, start);
+
+  size_t i = text.size();  // 退到最後一個起始位元組
+  while (i > 0 && (static_cast<unsigned char>(text[i - 1]) & 0xC0) == 0x80) --i;
+  if (i > 0) {
+    const unsigned char lead = static_cast<unsigned char>(text[i - 1]);
+    size_t need = 1;
+    if ((lead & 0xF8) == 0xF0) need = 4;
+    else if ((lead & 0xF0) == 0xE0) need = 3;
+    else if ((lead & 0xE0) == 0xC0) need = 2;
+    if (text.size() - (i - 1) < need) text.resize(i - 1);  // 續接位元組在下一頁
+  }
+}
 }  // namespace
 
 void TxtReaderActivity::onEnter() {
-  // ⭐ 這個閱讀器【永遠是橫排】——把當前文件的軸向明確歸零。
-  //    ⚠️ 不歸零的後果（複查抓到）：EPUB 那邊設的值是 settings 單例上的執行期欄位，
-  //      而 onExit 不會清它。讀完一本直排 EPUB 再開 .txt，內文照樣橫排排版，
-  //      但前排左右鍵與側鍵**全部反過來** —— 正是這次要修的病，換一個 activity 重演。
-  SETTINGS.activeDocumentVertical = 0;
+  // ⭐ 軸向照 CrossPointSettings.h 的紀律「開文件的人解析、寫進唯一權威欄位」。
+  //    v242：txt 沒有出版社訊號，**視為直排出版** → 傳 true。全域「依出版社」（預設）與「直排」時 txt 直排，
+  //    只有全域「橫排」時 txt 橫排（維護者 2026-09-14 拍板：CrossMosa 是繁中韌體，txt 大宗是中文小說）。
+  //    ⚠️ 代價：英文 txt／程式碼／log 預設也直排；想看橫排只能把全域改成橫排（EPUB 會一起變）。
+  //       真正的解法是「每本書各自覆寫方向」，**延後、而且要一次推廣到所有格式**（帳本記著），不做 txt 專用版。
+  //    （v241 曾經傳 false ＝「依出版社」時 txt 橫排。）
+  //    ⚠️ 仍然【必須每次寫】，不可以只在直排時寫：EPUB 設的值是 settings 單例上的執行期欄位、onExit 不清，
+  //      讀完一本直排 EPUB 再開 .txt 若不覆寫，按鍵方向會整組反過來（複查抓到過）。
+  SETTINGS.activeDocumentVertical = SETTINGS.resolveVerticalFor(/*publisherRtl=*/true) ? 1 : 0;
 
   Activity::onEnter();
 
@@ -67,6 +105,12 @@ void TxtReaderActivity::onEnter() {
   ReaderUtils::applyOrientation(renderer, SETTINGS.orientation);
 
   txt->setupCacheDir();
+
+  // v290：載入這本書的書籤。⚠️ 必須在 setupCacheDir 之後 —— 書籤檔不在快取目錄下
+  //   （它在 /.crossmosa/bookmarks/），但載入失敗時我們要的是「空清單」而不是舊的殘留。
+  if (!BookmarkFile::load(txt->getPath(), bookmarks_)) {
+    bookmarks_.clear();
+  }
 
   // Save current txt as last opened file and add to recent books
   auto filePath = txt->getPath();
@@ -103,275 +147,106 @@ void TxtReaderActivity::onExit() {
 
 
 
-bool TxtReaderActivity::loadPageAtOffset(size_t offset, std::vector<std::string>& outLines, size_t& nextOffset) {
-  outLines.clear();
+// ---------------------------------------------------------------------------
+// v239：txt 走 EPUB 排版引擎
+// ---------------------------------------------------------------------------
+//
+// 頁游標仍是單一位元組位移（理由見 TxtEngineLayout.h）。多讀【前一個位元組】：
+// 它決定這一頁是不是從段落中間開始 —— 是的話續排，不縮排。
+bool TxtReaderActivity::loadPageAtOffset(const size_t offset, std::vector<std::shared_ptr<TextBlock>>& outUnits,
+                                         size_t& nextOffset) {
+  outUnits.clear();
   const size_t fileSize = txt->getFileSize();
-
   if (offset >= fileSize) {
     return false;
   }
 
-  // Read a chunk from file
-  size_t chunkSize = std::min(CHUNK_SIZE, fileSize - offset);
-  auto* buffer = static_cast<uint8_t*>(malloc(chunkSize + 1));
+  const size_t readFrom = offset > 0 ? offset - 1 : 0;
+  const size_t lead = offset - readFrom;  // 0 或 1
+  const size_t want = std::min(CHUNK_SIZE + lead, fileSize - readFrom);
+  auto* buffer = static_cast<char*>(malloc(want));
   if (!buffer) {
-    LOG_ERR("TRS", "Failed to allocate %zu bytes", chunkSize);
+    LOG_ERR("TRS", "Failed to allocate %zu bytes", want);
     return false;
   }
 
   const uint32_t readStartMs = millis();
-  if (!txt->readContent(buffer, offset, chunkSize)) {
+  if (!txt->readContent(reinterpret_cast<uint8_t*>(buffer), readFrom, want)) {
     free(buffer);
     return false;
   }
-  buffer[chunkSize] = '\0';
-
-  // Prime the SD card font's advance table with this chunk's codepoints.
-  // Without this, every getTextAdvanceX() call in the wrap loop below triggers
-  // on-demand glyph loads through the 8-slot overflow ring buffer, which
-  // thrashes for any text with more than 8 unique chars (i.e. all English),
-  // floods the heap with short-lived bitmap allocations, and eventually
-  // corrupts FreeRTOS state. The advance table persists across calls per
-  // font, so the cost amortizes to ~ASCII-size after the first chunk.
   segReadMs_ = millis() - readStartMs;
+  // advance 表的預熱改由 `ParsedText::layoutAndExtractLines` 自己做（ensureSdCardFontReady，
+  // 只灌這一段實際用到的碼位），所以 `wrp=` 在新引擎下【包含】預熱，`fnt=` 固定為 0。
+  segFontMs_ = 0;
 
-  // v120:只餵「這一頁大概會用到」的位元組,不是整個 8KB 分塊。
-  // 舊行為把 2,730 個碼位灌進 advance 表,而一頁只用到約 112 個 —— 約 24 倍的浪費,
-  // 而那正是 v119 量到 layout=232ms 的頭號嫌疑。
-  // 取三倍的平均頁長當上限(實測平均約 334 位元組,所以約 1KB),留足餘裕;
-  // 萬一這一頁真的更長,超出的字會落到 getGlyph 的 SD 路徑,結果【逐位元組相同】,
-  // 只是那幾個字慢一點 —— 所以這個裁切不可能改變任何斷點。
-  const uint32_t fontStartMs = millis();
-  if (renderer.isSdCardFont(cachedFontId)) {
-    const size_t budget = avgBytesPerPage_ != 0 ? static_cast<size_t>(avgBytesPerPage_) * 3 : 1024;
-    const size_t warmLen = std::min(chunkSize, std::max<size_t>(budget, 512));
-    const uint8_t saved = buffer[warmLen];
-    buffer[warmLen] = '\0';  // 暫時截斷(buffer 有 chunkSize+1 的空間)
-    renderer.ensureSdCardFontReady(cachedFontId, reinterpret_cast<const char*>(buffer), /*styleMask=*/0x01);
-    buffer[warmLen] = saved;
+  const bool midParagraph = lead == 1 && buffer[0] != '\n';
+  size_t skip = lead;
+  // UTF-8 BOM 只可能出現在檔頭。舊引擎會把它當成一個字畫出來。
+  if (offset == 0 && want >= 3 && static_cast<unsigned char>(buffer[0]) == 0xEF &&
+      static_cast<unsigned char>(buffer[1]) == 0xBB && static_cast<unsigned char>(buffer[2]) == 0xBF) {
+    skip = 3;
   }
-  segFontMs_ = millis() - fontStartMs;
+
+  txtengine::Params tp;
+  tp.fontId = cachedFontId;
+  tp.extent = static_cast<uint16_t>(vertical_ ? viewportHeight_ : viewportWidth);
+  tp.maxUnits = unitsPerPage_;
+  tp.vertical = vertical_;
+  tp.alignment = cachedParagraphAlignment;
+
+  // ⚠️ `g_boldBodyText` 是全域，EPUB 閱讀器與文字設定頁會留下它的值。v239 的橫排要與舊引擎
+  //    【同行為】才能逐頁對照，而舊引擎從不加粗 —— 每次排版前明確關掉，不賭它剛好是乾淨的。
+  //    （txt 要不要吃「粗體內文」設定是之後的產品決定，帳本記著。）
+  ParsedText::setBoldBodyText(false);
+
   const uint32_t wrapStartMs = millis();
-
-  // Parse lines from buffer
-  size_t pos = 0;
-
-  // v116 修正(實機回報「取消沒有作用」):這個計數器【必須】活在整頁的範圍,
-  // 不能宣告在下面每一條可視行的迴圈裡 —— 一般中文段落的回溯迴圈只跑一百多次,
-  // 每行歸零的計數器永遠到不了門檻,於是讓步與取消的檢查一次都不會執行。
-  // 門檻取 16:回溯的每一次迭代都含一次 substr(配置+複製)加一次走訪整條候選行的量寬,
-  // 是微秒等級,對照之下每 16 次問一次 millis() 可以忽略。
-  uint32_t abortTick = 0;
-
-  while (pos < chunkSize && static_cast<int>(outLines.size()) < linesPerPage) {
-    // Find end of line
-    size_t lineEnd = pos;
-    while (lineEnd < chunkSize && buffer[lineEnd] != '\n') {
-      lineEnd++;
-    }
-
-    // Check if we have a complete line
-    bool lineComplete = (lineEnd < chunkSize) || (offset + lineEnd >= fileSize);
-
-    if (!lineComplete && static_cast<int>(outLines.size()) > 0) {
-      // Incomplete line and we already have some lines, stop here
-      break;
-    }
-
-    // Calculate the actual length of line content in the buffer (excluding newline)
-    size_t lineContentLen = lineEnd - pos;
-
-    // Check for carriage return
-    bool hasCR = (lineContentLen > 0 && buffer[pos + lineContentLen - 1] == '\r');
-    size_t displayLen = hasCR ? lineContentLen - 1 : lineContentLen;
-
-    // v118:單趟前向斷行,取代原本的回溯搜尋。
-    //
-    // 舊做法每退一個候選斷點就 substr 一份前綴、再把整條從頭量一次;中文沒有空格,
-    // rfind(' ') 永遠找不到,所以每次只退一個字 —— 對來源行長度是平方級。
-    // 用使用者的真實檔案(745,717 位元組、2,225 頁)模擬:每頁 406,342 次字寬查詢、
-    // 1,475 次子字串配置、1.19 MB 記憶體複製。本版每頁約 103 次查詢、0 次子字串配置。
-    //
-    // 關鍵在 cand*:同時記住「最後一個合法斷點在哪」與「累加到那裡的定點寬度」,
-    // 所以超寬時跳回斷點是【相減】而不是【重量】,每個碼位一輩子只查一次寬度。
-    // 寬度語意與 getTextAdvanceX 完全一致:整條累加成定點,最後才 toPixel 一次
-    // (逐字捨入再相加會與繪製不符,見 GfxRenderer::getCodepointAdvanceFP 的說明)。
-    const uint8_t* const lineBuf = buffer + pos;
-
-    size_t scan = 0;       // 已走訪的位元組(相對 lineBuf),永不後退
-    size_t lineStart = 0;  // 目前尚未輸出的可視行起點,恆為碼位邊界
-    int32_t lineFP = 0;    // [lineStart, scan) 的 12.4 定點寬度總和
-    uint32_t prevCp = 0;
-    bool hasPrev = false;
-    bool candValid = false;
-    size_t candEnd = 0;   // 可視行輸出到這裡(不含)
-    size_t candNext = 0;  // 下一條可視行從這裡開始(空格斷點會跨過那個空格)
-    int32_t candFP = 0;   // 從 lineStart 累加到 candNext 的寬度
-
-    auto emitLine = [&](const size_t from, const size_t to) {
-      outLines.emplace_back(reinterpret_cast<const char*>(lineBuf + from), to - from);
-    };
-
-    if (displayLen == 0) {
-      outLines.emplace_back();  // 空的來源行仍要產生一條空的可視行(原行為)
-    }
-
-    while (scan < displayLen && static_cast<int>(outLines.size()) < linesPerPage) {
-      const size_t cpStart = scan;
-      const unsigned char* p = lineBuf + scan;
-      const uint32_t cp = utf8NextCodepoint(&p);
-      const size_t cpEnd = static_cast<size_t>(p - lineBuf);
-      if (cp == 0 || cpEnd <= cpStart || cpEnd > displayLen) {
-        break;  // 壞的 UTF-8 或內嵌 NUL:停在這裡,已輸出的行仍然有效
-      }
-
-      // 讓步:v118 之後排一頁只有約 101 次字寬查詢,這裡實務上不會觸發,但留著讓
-      // 病態輸入(單一超長來源行)不會獨佔 render task。
-      if ((++abortTick & 0x0F) == 0) {
-        const uint32_t now = millis();
-        if (now - lastYieldMs_ >= INDEX_YIELD_INTERVAL_MS) {
-          vTaskDelay(1);
-          lastYieldMs_ = now;
-        }
-      }
-
-      // 逐碼位取寬。內建備援字型有字距對,沒有正確的逐碼位答案,所以退回整字量寬並
-      // 轉成定點 —— 只在「SD 字型不可用」這個已經降級的狀態才會走到,行距誤差有界。
-      int32_t advFP = renderer.getCodepointAdvanceFP(cachedFontId, cp, EpdFontFamily::REGULAR);
-      if (advFP == GfxRenderer::kAdvanceUnavailable) {
-        char one[8] = {0};
-        memcpy(one, lineBuf + cpStart, cpEnd - cpStart);
-        advFP = static_cast<int32_t>(renderer.getTextAdvanceX(cachedFontId, one, EpdFontFamily::REGULAR)) << 4;
-      }
-      const int32_t fpBefore = lineFP;
-      lineFP += advFP;
-
-      // 候選斷點。禁則走既有的 hasCjkBreakOpportunityBetween(v118 搬進 lib/Utf8),
-      // 與 EPUB 同一份規則:左字元禁下、右字元禁上都會讓該處不成立。
-      if (hasPrev && hasCjkBreakOpportunityBetween(prevCp, cp)) {
-        candValid = true;
-        candEnd = cpStart;
-        candNext = cpStart;
-        candFP = fpBefore;
-      }
-      if (cp == static_cast<uint32_t>(' ') && cpStart > lineStart) {
-        candValid = true;
-        candEnd = cpStart;
-        candNext = cpEnd;
-        candFP = lineFP;  // 含被略過的空格寬度,否則下一行會永久多算一個空格
-      }
-
-      scan = cpEnd;
-      prevCp = cp;
-      hasPrev = true;
-
-      if (fp4::toPixel(lineFP) <= viewportWidth) {
-        continue;
-      }
-
-      if (candValid) {
-        emitLine(lineStart, candEnd);
-        lineFP -= candFP;
-        lineStart = candNext;
-        candValid = false;
-        if (lineStart == scan) {  // 斷點略過的正是剛掃到的空格,下一行目前是空的
-          lineFP = 0;
-          hasPrev = false;
-          prevCp = 0;
-        }
-      } else if (cpStart > lineStart) {
-        // 沒有任何合法斷點(超長英文單字、整行不可斷標點):在造成超寬的碼位【之前】強制斷。
-        emitLine(lineStart, cpStart);
-        lineStart = cpStart;
-        lineFP = advFP;
-      } else {
-        // 單一碼位本身就超寬:仍要輸出完整碼位,絕不切在 UTF-8 續接位元組中間,
-        // 也絕不產生零長度的可視行(舊版的 `breakPos = 1` 是位元組不是字元,會切出豆腐)。
-        emitLine(cpStart, cpEnd);
-        lineStart = cpEnd;
-        lineFP = 0;
-        hasPrev = false;
-        prevCp = 0;
-      }
-    }
-
-    // 掃完了但還有尾巴沒輸出
-    if (lineStart < displayLen && static_cast<int>(outLines.size()) < linesPerPage) {
-      emitLine(lineStart, displayLen);
-      lineStart = displayLen;
-    }
-
-    // Determine how much of the source buffer we consumed
-    if (lineStart >= displayLen) {
-      // Fully consumed this source line, move past the newline
-      pos = lineEnd + 1;
-    } else {
-      // Partially consumed - page is full mid-line
-      pos = pos + lineStart;
-      break;
-    }
-  }
-
-  // Ensure we make progress even if calculations go wrong
-  if (pos == 0 && !outLines.empty()) {
-    // Fallback: at minimum, consume something to avoid infinite loop
-    pos = 1;
-  }
-
+  txtengine::Result r = txtengine::layoutPage(buffer + skip, want - skip, readFrom + want >= fileSize, midParagraph,
+                                              renderer, tp);
   segWrapMs_ = millis() - wrapStartMs;
-
-  nextOffset = offset + pos;
-
-  // Make sure we don't go past the file
-  if (nextOffset > fileSize) {
-    nextOffset = fileSize;
-  }
-
   free(buffer);
 
-  return !outLines.empty();
+  diagRemapMiss_ = r.remapMiss;
+  diagVerifyMiss_ = r.verifyMiss;
+  diagFlushes_ = r.flushes;
+  diagWords_ = r.words;
+  diagEngOom_ = r.oom ? 1 : 0;
+  diagChunkCut_ = r.chunkCut ? 1 : 0;
+  diagGlue_ = static_cast<uint16_t>(r.glueMoved + r.glueForced * 100);
+
+  outUnits = std::move(r.units);
+  nextOffset = readFrom + skip + r.nextOffset;
+  return !outUnits.empty();
 }
 
-
-void TxtReaderActivity::renderPage(const size_t pageOffset) {
-  const int lineHeight = renderer.getLineHeight(cachedFontId);
+void TxtReaderActivity::renderPage(const size_t pageOffset, const size_t pageEndOffset) {
+  const int lineHeight = cachedLineHeight_;
   const int contentWidth = viewportWidth;
 
-  // Render text lines with alignment
+  // v239：對齊、兩端對齊、RTL 都由排版引擎算進 TextBlock 的字位置裡（extent＝viewportWidth），
+  // 這裡只負責逐行往下畫。`TextBlock::render` 的 y 與舊的 `drawText` 同語意（行頂）。
+  (void)contentWidth;
   auto renderLines = [&]() {
+    // ⚠️ `TextBlock::render` 會看 `renderer.isVerticalLayout()` 分流到直排繪製，所以每一趟（掃描／BW／AA）
+    //    都要【明確宣告】這本書的軸向（v241 起 txt 可能是直排），不賭上一個閱讀器留下的值。
+    const GfxRenderer::VerticalScope axis(renderer, vertical_);
+    if (vertical_) {
+      // v241 直排：欄由右往左，照 ChapterHtmlSlimParser 的放欄規則 —— 第一欄左緣＝視窗右緣減欄距，
+      // 之後每欄再減一個欄距，餘數留在左邊；欄頂＝版心頂。TextBlock::render 在直排範圍內分流到
+      // renderVertical，x 是欄的左緣、y 是欄頂。空白單位（nullptr）照樣佔一欄。
+      int x = cachedOrientedMarginLeft + viewportWidth;
+      for (const auto& unit : currentPageLines) {
+        x -= columnPitch_;
+        if (unit) {
+          unit->render(renderer, cachedFontId, x, cachedOrientedMarginTop);
+        }
+      }
+      return;
+    }
     int y = cachedOrientedMarginTop;
-    for (const auto& line : currentPageLines) {
-      if (!line.empty()) {
-        int x = cachedOrientedMarginLeft;
-        const bool lineIsRtl = BidiUtils::startsWithRtl(line.c_str(), BidiUtils::RTL_PARAGRAPH_PROBE_DEPTH);
-        uint8_t effectiveAlignment = cachedParagraphAlignment;
-        if (lineIsRtl && (effectiveAlignment == CrossPointSettings::LEFT_ALIGN ||
-                          effectiveAlignment == CrossPointSettings::JUSTIFIED)) {
-          effectiveAlignment = CrossPointSettings::RIGHT_ALIGN;
-        }
-        const int textWidth = renderer.getTextAdvanceX(cachedFontId, line.c_str(), EpdFontFamily::REGULAR);
-
-        // Apply text alignment
-        switch (effectiveAlignment) {
-          case CrossPointSettings::LEFT_ALIGN:
-          default:
-            // x already set to left margin
-            break;
-          case CrossPointSettings::CENTER_ALIGN: {
-            x = cachedOrientedMarginLeft + (contentWidth - textWidth) / 2;
-            break;
-          }
-          case CrossPointSettings::RIGHT_ALIGN: {
-            x = cachedOrientedMarginLeft + contentWidth - textWidth;
-            break;
-          }
-          case CrossPointSettings::JUSTIFIED:
-            // For plain text, justified is treated as left-aligned
-            // (true justification would require word spacing adjustments)
-            break;
-        }
-
-        renderer.drawText(cachedFontId, x, y, line.c_str());
+    for (const auto& unit : currentPageLines) {
+      if (unit) {
+        unit->render(renderer, cachedFontId, cachedOrientedMarginLeft, y);
       }
       y += lineHeight;
     }
@@ -397,12 +272,13 @@ void TxtReaderActivity::renderPage(const size_t pageOffset) {
   // BW rendering
   const uint32_t bwStartMs = millis();
   renderLines();
-  renderStatusBar(pageOffset);
+  renderStatusBar(pageOffset, pageEndOffset);
   segBwMs_ = millis() - bwStartMs;
 
   const uint32_t dispStartMs = millis();
   ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh);
   segDispMs_ = millis() - dispStartMs;
+  dispDoneMs_ = std::max<uint32_t>(1, millis());  // v243：黑白這一趟上了面板 ＝ 使用者看到換頁的時刻（0 ＝ 這次沒上面板）
 
   segAaMs_ = 0;
   if (SETTINGS.textAntiAliasing) {
@@ -411,6 +287,13 @@ void TxtReaderActivity::renderPage(const size_t pageOffset) {
     segAaMs_ = millis() - aaStartMs;
   }
   // scope destructor clears font cache via FontCacheManager
+
+  // v289：選單觸發的截圖。⭐ **放在最後一趟繪製之後** —— 這時 framebuffer 才是面板上
+  //   真正會看到的畫面（抗鋸齒開著時前面幾趟是中間狀態）。同 EpubReaderActivity 的紀律。
+  if (pendingScreenshot_) {
+    pendingScreenshot_ = false;
+    ScreenshotUtil::takeScreenshot(renderer);
+  }
 }
 
 
@@ -422,6 +305,14 @@ void TxtReaderActivity::renderPage(const size_t pageOffset) {
 // ---------------------------------------------------------------------------
 // v118:串流導覽
 // ---------------------------------------------------------------------------
+
+void TxtReaderActivity::markPress() {
+  // 只記最早那一次：連按時要量的是「第一次按下到真的換頁」。
+  // CAS 而不是 load＋store：兩步之間 render 可能剛好把舊值取走，新的這次就會被吃掉（codex 複查）。
+  // ⚠️ 盡力而為的證人：連按時後面幾次併進同一筆、兩筆同時在途時後一筆會漏記 —— 只少樣本，不會錯記。
+  uint32_t expected = 0;
+  pressMs_.compare_exchange_strong(expected, std::max<uint32_t>(1, millis()));
+}
 
 void TxtReaderActivity::pushBackOffset(const size_t offset) {
   backRing_[backHead_] = static_cast<uint32_t>(offset);
@@ -441,9 +332,6 @@ bool TxtReaderActivity::popBackOffset(size_t& outOffset) {
   return true;
 }
 
-// 環空了(關機後重開、或往回超過 256 頁)才走這裡:從 offset 之前一段距離找一個
-// 對齊到行首的起點,往前逐頁推進到剛好接上 offset。推得【剛好】才是精確答案;
-// 越過了代表這個起點不在同一條分頁鏈上,換更遠的起點再試一次。
 // 往回找上一個換行的下一個位元組。每次只讀 128 bytes(專案的堆疊預算是 256)。
 size_t TxtReaderActivity::alignToLineStart(size_t p) {
   constexpr size_t kWin = 128;
@@ -464,40 +352,99 @@ size_t TxtReaderActivity::alignToLineStart(size_t p) {
   return 0;
 }
 
-size_t TxtReaderActivity::findPreviousPageOffset(const size_t offset) {
+// v240：一次排到目標為止、取最後 N 個單位（排版引擎的收集模式）。
+//
+// v239 以前：從較早的行首往前逐頁推，希望「剛好接上」目標。DP 斷行不具前綴穩定性，幾乎接不上；
+// 實機 9 次裡 4 次要推到 k=64（往回試排約 85 頁、估約 3 秒），3 次沒接上而重疊 1–3 行。
+// v240：橫排改 greedy。greedy 對「非段落首行、零縮排」具後綴穩定性（codex 複查把原本的主張縮小到這裡）：
+// 從段落起點排到目標，目標之前第 N 個單位的起點，往後排 N 個單位會剛好停在目標 ——
+// 【前提是目標本身是 greedy 的行首】。不成立的情況：升級後第一次（進度是 v239 的 DP 頁首）、
+// NFC 會變的文字裡的 glue 群組、段落超過 8KB（canon=0）。這些情況 TXTBACKCHK 會記 exact=0。
+// ⭐ 但任何情況都【不會跳字】：算出的上一頁起點一定在目標之前，往後翻看到的是從那裡開始的連續分頁，
+//    最壞只是與原頁重疊幾行。
+//
+// 段落長到目標與段落起點相距超過一塊（8KB，整章一行的檔）時，只能從段落中間開始（canon=0），
+// 那時的上一頁可能與這一頁差一行，不會跳字。
+size_t TxtReaderActivity::findPreviousPageOffset(const size_t offset, BackStats& st) {
   if (offset == 0) {
     return 0;
   }
-  const uint32_t avg = avgBytesPerPage_ != 0 ? avgBytesPerPage_ : 512;
+  const size_t avg = avgBytesPerPage_ != 0 ? avgBytesPerPage_ : 512;
+  size_t span = std::min<size_t>(CHUNK_SIZE, std::max<size_t>(1024, avg * 3));
+  // ⚠️ 初值是 offset（＝原地不動），不是 0：第一次配置或讀檔就失敗時回傳 0 會把讀者直接丟回書首
+  //    （codex 複查抓到）。失敗時寧可這一次按鍵沒有作用。
+  size_t best = offset;
 
-  size_t fallback = 0;
-  for (int k = 4; k <= 64; k *= 4) {
-    const size_t span = static_cast<size_t>(avg) * static_cast<size_t>(k);
-    size_t start = offset > span ? offset - span : 0;
-    start = alignToLineStart(start);
+  for (int attempt = 0; attempt < 3; ++attempt) {
+    st.span = span;
+    const size_t from = offset > span ? offset - span : 0;
+    size_t start = alignToLineStart(from);
+    bool canonical = true;
+    if (offset - start > CHUNK_SIZE) {
+      start = offset - CHUNK_SIZE;
+      canonical = false;
+    }
 
-    size_t cur = start;
-    size_t prev = start;
-    std::vector<std::string> scratch;
-    int guard = 0;
-    while (cur < offset && guard++ < 512) {
-      scratch.clear();
-      size_t next = cur;
-      if (!loadPageAtOffset(cur, scratch, next) || next <= cur) {
-        break;
-      }
-      prev = cur;
-      cur = next;
+    const size_t readFrom = start > 0 ? start - 1 : 0;
+    const size_t lead = start - readFrom;
+    const size_t want = offset - readFrom;
+    auto* buffer = static_cast<char*>(malloc(want));
+    if (!buffer) {
+      LOG_ERR("TRS", "back: failed to allocate %zu bytes", want);
+      st.oom = true;
+      return best;
     }
-    if (cur == offset) {
-      return prev;  // 剛好接上 = 這條分頁鏈是對的
+    if (!txt->readContent(reinterpret_cast<uint8_t*>(buffer), readFrom, want)) {
+      free(buffer);
+      return best;
     }
-    fallback = prev;
-    if (start == 0) {
-      break;  // 已經從檔頭推過來了,不會有更好的答案
+    size_t skip = lead;
+    if (start == 0 && want > 3 && static_cast<unsigned char>(buffer[0]) == 0xEF &&
+        static_cast<unsigned char>(buffer[1]) == 0xBB && static_cast<unsigned char>(buffer[2]) == 0xBF) {
+      skip = 3;
     }
+    if (!canonical) {
+      while (skip < want && (static_cast<unsigned char>(buffer[skip]) & 0xC0) == 0x80) ++skip;  // 對齊碼位
+    }
+    const bool midParagraph = lead == 1 && buffer[0] != '\n';
+
+    txtengine::Params tp;
+    tp.fontId = cachedFontId;
+    tp.extent = static_cast<uint16_t>(vertical_ ? viewportHeight_ : viewportWidth);
+    tp.maxUnits = unitsPerPage_;
+    tp.vertical = vertical_;
+    tp.alignment = cachedParagraphAlignment;
+    tp.collectOnly = true;
+    tp.collectKeep = static_cast<size_t>(unitsPerPage_ > 0 ? unitsPerPage_ : 1);
+    ParsedText::setBoldBodyText(false);  // 與 loadPageAtOffset 同一個理由
+
+    txtengine::Result r;
+    if (skip < want) {
+      r = txtengine::layoutPage(buffer + skip, want - skip, /*atEof=*/true, midParagraph, renderer, tp);
+    }
+    free(buffer);
+    ++st.passes;
+    st.units = r.unitCount;
+    st.canonical = canonical;
+    if (r.oom) {
+      st.oom = true;  // 收集不完整：退回視窗起點（寧可重疊，不跳字）
+      return start;
+    }
+
+    const size_t base = readFrom + skip;
+    best = base + (r.lastStarts.empty() ? 0 : r.lastStarts.front());
+    // 書首有 BOM 時第一個單位的起點是 3。回傳 3 的話，再按上一頁會從 [0,3) 收集到零個單位、
+    // 算出的還是 3 → 永遠卡在「不是書首、也退不回去」（codex 複查抓到）。正規化成 0。
+    if (start == 0 && skip == 3 && best == 3) best = 0;
+    if (r.unitCount >= static_cast<size_t>(unitsPerPage_)) {
+      return best;  // lastStarts 恰好是最後 N 個單位，front ＝ 目標之前第 N 個
+    }
+    if (start == 0 || !canonical || span >= CHUNK_SIZE) {
+      return best;  // 書首，或視窗已經最大：不滿一頁就從最前面那個單位開始
+    }
+    span = std::min<size_t>(CHUNK_SIZE, span * 3);
   }
-  return fallback;
+  return best;
 }
 
 void TxtReaderActivity::updatePageSizeEstimate(const size_t pageBytes) {
@@ -534,9 +481,41 @@ void TxtReaderActivity::loop() {
     return;
   }
 
+  // v291：**長按確認鍵 → 設定→操作→「長按選單功能」**（目前唯一的選項是「書籤」）。
+  //   EPUB 一直都有，txt 沒有 —— 實機回報。照 EpubReaderActivity 的同一段搬過來。
+  //   ⚠️ `confirmHoldConsumed_` 同時扮演兩個角色，兩個都不能少：
+  //     ① **閂鎖**：loop 每圈都會跑，沒有它按著不放會一路「加→刪→加…」切換下去。
+  //     ② **吃掉這次放開**：否則手放開時下面那段又會開選單（EPUB 用 ignoreNextConfirmRelease
+  //        做同一件事）。
+  //   ℹ️ `getHeldTime()` 是全域計時、不是單鍵計時（memory: x3-opds-nav-gotchas）。這裡沿用
+  //      EPUB 已在真機跑過很多版的同一種用法，不另外發明。
+  if (mappedInput.wasPressed(MappedInputManager::Button::Confirm)) {
+    confirmPressedAtMs_ = millis();  // 這一鍵自己的按下時刻（見標頭的說明）
+    confirmHoldConsumed_ = false;    // 新的一次按壓 → 閂鎖重新開始
+  }
+  if (!mappedInput.isPressed(MappedInputManager::Button::Confirm) &&
+      !mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+    // ⚠️ 自癒：放開的邊緣有可能沒被這個活動收到（例如按著確認鍵時用觸控開了選單，
+    //    在選單裡才放開）。沒有這一段，旗標會卡在 true，下一次短按會被白吃掉。
+    confirmHoldConsumed_ = false;
+    confirmPressedAtMs_ = 0;
+  }
+  if (mappedInput.isPressed(MappedInputManager::Button::Confirm) && !confirmHoldConsumed_ &&
+      confirmPressedAtMs_ != 0 && SETTINGS.longPressMenuFunction == CrossPointSettings::LP_MENU_BOOKMARK &&
+      (millis() - confirmPressedAtMs_) >= ReaderUtils::BOOKMARK_HOLD_MS) {
+    confirmHoldConsumed_ = true;
+    toggleBookmark();  // 回饋就是狀態列的書籤圖示亮／滅（同 v290 的設計）
+  }
+
   // v119:短按確認鍵開閱讀選單。這正是公開 repo 的 issue #1 —— 在此之前 txt 閱讀器
   // 從頭到尾沒有查詢過 Button::Confirm,使用者按下去不是「選單壞了」,是根本沒人在聽。
-  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm) || ReaderUtils::isTouchMenuGesture(mappedInput)) {
+  const bool confirmReleased = mappedInput.wasReleased(MappedInputManager::Button::Confirm);
+  if (confirmReleased) confirmPressedAtMs_ = 0;
+  if (confirmReleased && confirmHoldConsumed_) {
+    confirmHoldConsumed_ = false;  // 這次放開是長按加書籤的尾巴，不開選單
+    return;
+  }
+  if (confirmReleased || ReaderUtils::isTouchMenuGesture(mappedInput)) {
     openReaderMenu();
     return;
   }
@@ -550,15 +529,53 @@ void TxtReaderActivity::loop() {
     return;
   }
 
+  // v291：**長按翻頁鍵 → 設定→操作→「長按按鍵行為」**。EPUB 有兩種：跳章與換方向。
+  //   ⛔ **跳章對 txt 不適用**（沒有章節）—— 不硬湊一個「跳 10%」之類的替代品，
+  //      那是發明新語意，不是補一致性。選了跳章的人在 txt 上就是長按沒作用，與現況相同。
+  //   ⚠️ 傾斜翻頁不算長按（`fromTilt`），與 EPUB 同判準。
+  //   ⚠️ **已知缺口，照實記著**：這裡的按鍵長按用的是**全域** `getHeldTime()`，所以
+  //      「按著確認鍵不放、再按翻頁鍵」有機會被誤判成長按。**EPUB 同一段有一模一樣的洞**，
+  //      這裡刻意維持同行為（要修就該兩邊一起改成單鍵計時，那是另一版的事）。
+  //      確認鍵那條已經改成單鍵計時了 —— 因為它會**直接改掉書籤**，誤觸的代價高得多。
+  {
+    const unsigned long heldMs = (touch.prev || touch.next) ? touch.heldMs : mappedInput.getHeldTime();
+    if (!fromTilt && heldMs > ReaderUtils::SKIP_HOLD_MS &&
+        SETTINGS.longPressButtonBehavior == SETTINGS.ORIENTATION_CHANGE) {
+      const uint8_t newOrientation =
+          nextTriggered ? (SETTINGS.orientation - 1 + SETTINGS.ORIENTATION_COUNT) % SETTINGS.ORIENTATION_COUNT
+                        : (SETTINGS.orientation + 1) % SETTINGS.ORIENTATION_COUNT;
+      SETTINGS.orientation = newOrientation;
+      SETTINGS.saveToFile();
+      {
+        // 同「選單改方向」那條已驗證的路：改 renderer 方向與重算幾何必須持 RenderLock。
+        RenderLock lock(*this);
+        ReaderUtils::applyOrientation(renderer, SETTINGS.orientation);
+        recomputeGeometry();
+        backCount_ = 0;  // 幾何變了，回溯環的舊頁首不在同一條分頁鏈上
+        backHead_ = 0;
+      }
+      requestUpdate();
+      return;
+    }
+  }
+
   if (prevTriggered) {
     if (pageStartOffset_ == 0) {
       return;  // 已在書首
     }
     size_t prev = 0;
-    if (!popBackOffset(prev)) {
-      prev = findPreviousPageOffset(pageStartOffset_);
+    if (popBackOffset(prev)) {
+      markPress();
+      pageStartOffset_ = prev;
+      requestUpdate();
+      return;
     }
-    pageStartOffset_ = prev;
+    // v240：ring 空了 → 要用排版引擎往回排。那會碰字型系統與常駐的 SD 檔柄，而繪製任務此刻可能
+    // 正在預取下一頁（同一套快取、同一個檔柄）—— v239 以前直接在主任務算，是沒拿鎖的競態。
+    // 交給 render()：requestUpdate 讓預取中止（它看 isRenderPending），render 在鎖內算完再畫。
+    // 計次而不是旗標：ring 空時連按兩次上一頁要退兩頁（grok 複查指出旗標會吃掉第二次）。
+    if (pendingBackSteps_.load() < 8) pendingBackSteps_.fetch_add(1);
+    markPress();
     requestUpdate();
     return;
   }
@@ -572,9 +589,11 @@ void TxtReaderActivity::loop() {
   // 結果同一頁又重畫一遍 —— 畫面閃一下、還在原地,也就是使用者說的「按了沒反應」。
   // v119 的 log 裡 11/48 是這種浪費。現在把那次按鍵【排隊】,等這一頁畫完自動前進。
   if (nextPageOffset_ <= pageStartOffset_) {
+    markPress();  // 排隊的翻頁：等待時間算進延遲，那正是使用者感受到的
     pendingForward_ = true;
     return;
   }
+  markPress();
   pushBackOffset(pageStartOffset_);
   pageStartOffset_ = nextPageOffset_;
   pendingForward_ = false;
@@ -596,15 +615,38 @@ void TxtReaderActivity::recomputeGeometry() {
 
   viewportWidth = renderer.getScreenWidth() - cachedOrientedMarginLeft - cachedOrientedMarginRight;
   const int viewportHeight = renderer.getScreenHeight() - cachedOrientedMarginTop - cachedOrientedMarginBottom;
-  const int lineHeight = renderer.getLineHeight(cachedFontId);
+  // v284：**解析一次就存起來**（同 EPUB 走 Section::resolvedLineHeightPx 的理由）——
+  //   probeEmFP 有兩條精度不同的路，每次現算可能讓同一份文字前後差 1px。
+  cachedLineHeight_ = renderer.getReaderLineHeight(cachedFontId, SETTINGS.getReaderLinePitchEm());
+  if (cachedLineHeight_ < 1) cachedLineHeight_ = 1;  // 這裡是 linesPerPage 的除數
+  const int lineHeight = cachedLineHeight_;
 
+  // v284：橫排的行距與直排的欄距現在是同一把尺（em × 檔位係數，見下方 vertical_ 分支）。
+  //   在此之前這裡用的是字型宣告的 advanceY，所以 txt 的行距**完全不受「行距」設定影響**，
+  //   而且換字型就換行距（原俠正楷／RoundTC 是零行距）。
   linesPerPage = viewportHeight / lineHeight;
   if (linesPerPage < 1) linesPerPage = 1;
+
+  // v241：直排的每頁單位數是欄數。欄距公式與 EPUB 相同（ChapterHtmlSlimParser::columnPitchPx）：
+  // round(em × 欄距檔位係數)，em 用 probeEmFP 實際量。欄長＝版心高。
+  viewportHeight_ = viewportHeight;
+  vertical_ = SETTINGS.documentIsVertical();
+  if (vertical_) {
+    const float em = static_cast<float>(vtext::probeEmFP(renderer, cachedFontId)) / 16.0f;
+    const int pitch = static_cast<int>(em * vtext::columnPitchForTier(SETTINGS.readerColumnPitch) + 0.5f);
+    columnPitch_ = pitch > 0 ? pitch : 1;
+    unitsPerPage_ = viewportWidth / columnPitch_;
+    if (unitsPerPage_ < 1) unitsPerPage_ = 1;
+  } else {
+    columnPitch_ = 0;
+    unitsPerPage_ = linesPerPage;
+  }
 
   // 幾何變了,每頁的位元組數也會變 —— 估計值重新累積,免得沿用舊字級的平均值。
   avgBytesPerPage_ = 0;
 
-  LOG_DBG("TRS", "Viewport: %dx%d, lines per page: %d", viewportWidth, viewportHeight, linesPerPage);
+  LOG_DBG("TRS", "Viewport: %dx%d, units per page: %d (vertical=%d pitch=%d)", viewportWidth, viewportHeight,
+          unitsPerPage_, vertical_ ? 1 : 0, columnPitch_);
 }
 
 void TxtReaderActivity::initializeReader() {
@@ -618,6 +660,11 @@ void TxtReaderActivity::initializeReader() {
 }
 
 void TxtReaderActivity::render(RenderLock&&) {
+  // v243：按鍵到換頁的延遲證人。在 render() 最前面取，才能量到「等繪製任務／鎖」的時間
+  // （上一輪的存進度＋預取還沒做完時，這一頁要排隊）。
+  const uint32_t renderStartMs = millis();
+  const uint32_t pressMs = pressMs_.exchange(0);
+  dispDoneMs_ = 0;  // 這次 render 沒走到面板就不報 lat，不沿用上一頁的時刻
   if (!txt) {
     return;
   }
@@ -641,6 +688,24 @@ void TxtReaderActivity::render(RenderLock&&) {
   // 而本函式後面每一處重讀都會拿到下一頁的值 —— v118 的 log 有 38/54 筆印出
   // next==off 就是這樣來的,更嚴重的是 atLastPage_ 會被誤設成 true、下一次翻頁
   // 直接跳回主畫面。這是 CLAUDE.md v110「pageNo 捕捉一次」記過的同一類錯誤。
+  // v240：往前翻頁（ring 空了）在這裡、鎖內做。見 loop()。
+  while (pendingBackSteps_.load() > 0) {
+    pendingBackSteps_.fetch_sub(1);
+    const size_t target = pageStartOffset_;
+    if (target > 0) {
+      BackStats bs;
+      const uint32_t backStartMs = millis();
+      const size_t prev = findPreviousPageOffset(target, bs);
+      DiagLog::line("TXTBACK off=%u prev=%u units=%u passes=%u span=%u canon=%u oom=%u ms=%u",
+                    static_cast<unsigned>(target), static_cast<unsigned>(prev), static_cast<unsigned>(bs.units),
+                    bs.passes, static_cast<unsigned>(bs.span), bs.canonical ? 1 : 0, bs.oom ? 1 : 0,
+                    static_cast<unsigned>(millis() - backStartMs));
+      backCheckTarget_ = target;
+      backCheckPrev_ = prev;
+      pageStartOffset_ = prev;
+    }
+  }
+
   const size_t pageOffset = pageStartOffset_;
 
   const uint32_t layoutStartMs = millis();
@@ -649,6 +714,14 @@ void TxtReaderActivity::render(RenderLock&&) {
   loadPageAtOffset(pageOffset, currentPageLines, nextOffset);
   const uint32_t layoutMs = millis() - layoutStartMs;
 
+  // v240：往前翻頁的證人 —— 往回排出來的上一頁，往後排是不是剛好停在原頁（分頁唯一性的直接證據）。
+  if (backCheckTarget_ != 0 && pageOffset == backCheckPrev_) {
+    DiagLog::line("TXTBACKCHK prev=%u next=%u target=%u exact=%d", static_cast<unsigned>(pageOffset),
+                  static_cast<unsigned>(nextOffset), static_cast<unsigned>(backCheckTarget_),
+                  nextOffset == backCheckTarget_ ? 1 : 0);
+    backCheckTarget_ = 0;
+  }
+
   nextPageOffset_ = nextOffset;
   atLastPage_ = (nextOffset >= fileSize) || (nextOffset <= pageOffset);
   if (nextOffset > pageOffset) {
@@ -656,7 +729,28 @@ void TxtReaderActivity::render(RenderLock&&) {
   }
 
   renderer.clearScreen();
-  renderPage(pageOffset);
+  renderPage(pageOffset, nextOffset);
+  // v240：`afail`／`dropped` 改成【近似這一頁】的值。字型統計在 PrewarmScope 建構時歸零：
+  // 冷頁讀到的是它自己 prewarm 的結果；暖頁（renderPage 不建 scope、不歸零）讀到的是上一輪預取
+  // 替它準備時的結果，外加這一頁繪製期間可能的增量（grok 複查指出「一定是預取」太強）。
+  // 不是 EPUB 那種嚴格的逐次差分，但已經不是累計值。
+  // v239 以前是在預取裡 `+=` 而且從不歸零 ＝ 開書以來的累計，還漏掉冷頁自己的失敗（讀 log 時被它騙過一次）。
+  diagAllocFail_ = 0;
+  diagDropped_ = 0;
+  diagRescue_ = 0;
+  if (diagWarmHit_ && prefetchStatValid_ && prefetchStatOffset_ == pageOffset) {
+    // 暖頁：用預取當時替【這一頁】記下的數字（綁定位移，消費一次）。
+    diagAllocFail_ = prefetchAllocFail_;
+    diagDropped_ = prefetchDropped_;
+    diagRescue_ = prefetchRescue_;
+  } else if (const auto* font = sdFontSystem.currentReaderFont()) {
+    // 冷頁：renderPage 自己建了 PrewarmScope（建構時歸零），讀到的就是它的 prewarm。
+    const auto& st = font->getStats();
+    diagAllocFail_ = st.bitmapAllocFailures;
+    diagDropped_ = st.bitmapGlyphsDropped;
+    diagRescue_ = st.bitmapExactRescues;
+  }
+  prefetchStatValid_ = false;
 
   const uint32_t saveStartMs = millis();
   saveProgress(pageOffset);
@@ -664,11 +758,22 @@ void TxtReaderActivity::render(RenderLock&&) {
 
   // v119 分段儀器:v118 只量到 layout,其餘各段都還是從 EPUB 換算的估計值。
   // 只在 SD 根目錄有 /diag.on 時才會真的寫入。
-  DiagLog::line("TXTPAGE off=%u next=%u layout=%u rd=%u fnt=%u wrp=%u prewarm=%u bw=%u disp=%u aa=%u save=%u warm=%u afail=%u dropped=%u lines=%u est=%d/%d",
+  // 超過 10 秒的按鍵視為不是這一次繪製的（被吸收的按鍵留下的殘值），不報。
+  // 無號減法本身就跨得過 millis() 繞回，所以只比「經過多久」，不比大小（codex 複查）。
+  const bool pressValid = pressMs != 0 && static_cast<uint32_t>(renderStartMs - pressMs) < 10000;
+  const uint32_t latWait = pressValid ? renderStartMs - pressMs : 0;
+  const uint32_t latTotal = pressValid && dispDoneMs_ != 0 ? dispDoneMs_ - pressMs : 0;
+  DiagLog::line("TXTPAGE off=%u next=%u layout=%u rd=%u fnt=%u wrp=%u prewarm=%u bw=%u disp=%u aa=%u save=%u warm=%u afail=%u dropped=%u lines=%u est=%d/%d eng=2 remap=%u vmiss=%u flush=%u words=%u eoom=%u cut=%u glue=%u vert=%u pitch=%u rescue=%u wait=%u lat=%u",
                 static_cast<unsigned>(pageOffset), static_cast<unsigned>(nextOffset), layoutMs, segReadMs_, segFontMs_, segWrapMs_, segPrewarmMs_,
                 segBwMs_, segDispMs_, segAaMs_, saveMs, diagWarmHit_, diagAllocFail_, diagDropped_,
                 static_cast<unsigned>(currentPageLines.size()),
-                estimatedCurrentPage(), estimatedTotalPages());
+                estimatedCurrentPage(), estimatedTotalPages(), diagRemapMiss_, diagVerifyMiss_, diagFlushes_, diagWords_, diagEngOom_,
+                diagChunkCut_, diagGlue_, vertical_ ? 1u : 0u, static_cast<unsigned>(columnPitch_),
+                diagRescue_, static_cast<unsigned>(latWait), static_cast<unsigned>(latTotal));
+  // v240：txt 也寫 SDCFFAIL（EPUB 閱讀器一直有寫）。v239 看得到 afail 卻不知道差多少位元組，
+  // 分不出是新引擎把記憶體切碎、還是某頁剛好用到比較多字。預取的失敗會出現在【下一頁】的這一行之後。
+  DiagLog::crumb("SDCFFAIL", SdCardFont::lastAllocFail, sizeof(SdCardFont::lastAllocFail));
+  DiagLog::crumb("ADVSCAN", SdCardFont::lastAdvScan, sizeof(SdCardFont::lastAdvScan));  // v253：txt 也走同一條字寬路徑
 
   // v121:預取下一頁的字。面板刷新那 441ms CPU 是空的(waitBusy 走 vTaskDelay 會讓出),
   // 加上使用者停留時間 —— 把 SD 讀字圖那一段塞進去。中止條件是「有新的繪製在等」。
@@ -684,11 +789,80 @@ void TxtReaderActivity::render(RenderLock&&) {
     pageStartOffset_ = nextPageOffset_;
     requestUpdate();
   } else {
+    // 排隊的翻頁沒被消化（已到檔尾）→ 它記下的按鍵時刻也不該留給之後某一次繪製。
+    if (pendingForward_) pressMs_.store(0);
     pendingForward_ = false;
   }
 }
 
-void TxtReaderActivity::renderStatusBar(const size_t offset) const {
+// v290：把目前這一頁加入／移出書籤。錨點是**這一頁的起始位元組位移**。
+// ⚠️ 「同一頁」的判準刻意用【位移相等】而不是「落在這一頁的範圍內」——
+//    範圍會隨字級／行距／方向改變，而位移不會。代價是改了排版之後舊書籤可能不再
+//    「剛好等於某一頁的頁首」，但它仍然跳得到正確的位置（跳轉是用位移重排那一頁）。
+void TxtReaderActivity::toggleBookmark() {
+  if (!txt) return;
+  const uint32_t anchor = static_cast<uint32_t>(pageStartOffset_);
+  const uint32_t hi = static_cast<uint32_t>(nextPageOffset_ > pageStartOffset_ ? nextPageOffset_ : pageStartOffset_ + 1);
+  // ⚠️ 存檔失敗要能還原 —— 不可以「記憶體改了、SD 沒寫成功」卻讓使用者以為成功
+  //    （這個專案的老毛病：把 I/O 失敗當成 UI 成功）。
+  const std::vector<BookmarkEntry> snapshot = bookmarks_;
+  const size_t before = bookmarks_.size();
+  {
+    // ⚠️ `bookmarks_` 會被繪圖任務在畫狀態列時走訪 —— insert／erase 與它並行是
+    //    資料競爭＋迭代器失效（複查指出）。改動一律在鎖內。
+    RenderLock lock(*this);
+    bookmarks_.erase(std::remove_if(bookmarks_.begin(), bookmarks_.end(),
+                                    [anchor, hi](const BookmarkEntry& b) {
+                                      return b.hasByteOffset && b.byteOffset >= anchor && b.byteOffset < hi;
+                                    }),
+                     bookmarks_.end());
+  }
+  if (bookmarks_.size() == before) {
+    BookmarkEntry entry;
+    const size_t fileSize = txt->getFileSize();
+    entry.percentage = fileSize != 0 ? static_cast<float>(static_cast<double>(anchor) / fileSize) : 0.0f;
+    entry.hasByteOffset = true;
+    entry.byteOffset = anchor;
+    // 摘要：這一頁開頭的幾十個位元組。直接讀檔 —— TextBlock 沒有取回純文字的 API，
+    // 而位元組位移本來就是 txt 的頁游標，這是最短的路。
+    std::string head;
+    const size_t want = std::min<size_t>(96, fileSize > anchor ? fileSize - anchor : 0);
+    if (want > 0) {
+      head.resize(want);
+      if (txt->readContent(reinterpret_cast<uint8_t*>(&head[0]), anchor, want)) {
+        trimToUtf8Boundaries(head);
+      } else {
+        head.clear();
+      }
+    }
+    entry.summary = BookmarkUtil::sanitizeBookmarkSummary(head);
+    RenderLock lock(*this);
+    bookmarks_.insert(bookmarks_.begin(), entry);
+  }
+  // 使用者的回饋就是狀態列那個書籤圖示會亮／滅 —— 不另外做提示彈窗。
+  if (!BookmarkFile::save(txt->getPath(), bookmarks_)) {
+    LOG_ERR("TRS", "Failed to save bookmarks — reverting in-memory change");
+    RenderLock lock(*this);
+    bookmarks_ = snapshot;  // 記憶體與 SD 保持一致：寧可「按了沒變」，不要「畫面說成功、重開就沒了」
+  }
+  requestUpdate();
+}
+
+// ⚠️ **判準是「落在這一頁的範圍內」，不是「位移剛好相等」。**
+// 我第一版寫成相等並且在註解裡說那是刻意的 —— 複查證明那會壞掉：書籤存的是**當時**
+// 那一頁的頁首，換了字級／行距之後分頁鏈不同，那個位移可能**永遠不等於任何一頁的頁首**。
+// 後果不只是圖示不亮：從清單跳過去之後圖示仍然不亮，使用者再按「切換書籤」就會
+// **新增第二個幾乎同位置的書籤**，而不是移除原來那個。EPUB 用的本來就是範圍判準。
+bool TxtReaderActivity::isBookmarked(const size_t from, const size_t to) const {
+  const uint32_t lo = static_cast<uint32_t>(from);
+  const uint32_t hi = static_cast<uint32_t>(to > from ? to : from + 1);
+  for (const auto& b : bookmarks_) {
+    if (b.hasByteOffset && b.byteOffset >= lo && b.byteOffset < hi) return true;
+  }
+  return false;
+}
+
+void TxtReaderActivity::renderStatusBar(const size_t offset, const size_t endOffset) const {
   const size_t fileSize = txt->getFileSize();
   const float progress = fileSize != 0 ? static_cast<float>(static_cast<double>(offset) * 100.0 / fileSize) : 0.0f;
   std::string title;
@@ -698,7 +872,8 @@ void TxtReaderActivity::renderStatusBar(const size_t offset) const {
   // v122:txt 預設【不顯示頁數】—— 它是用平均頁長外推的估計值,對長文沒有意義;
   // 而位元組位移算出來的百分比是精確的。EPUB 維持頁數為預設(它的頁碼是真的排出來的)。
   // 百分比取兩位小數:長文的整數百分比幾乎不動(2,225 頁的書一頁只佔 0.045%)。
-  GUI.drawStatusBar(renderer, progress, estimatedCurrentPage(), estimatedTotalPages(), title, 0, 0, true, false,
+  GUI.drawStatusBar(renderer, progress, estimatedCurrentPage(), estimatedTotalPages(), title, 0, 0, true,
+                    isBookmarked(offset, endOffset),  // v290：從參數算，不讀易變成員（教訓 A-24）
                     /*pageCountEstimated=*/true, /*progressDecimals=*/2, /*hidePageCount=*/true);
 }
 
@@ -832,12 +1007,13 @@ void TxtReaderActivity::openReaderMenu() {
 
   startActivityForResult(
       std::make_unique<TxtReaderMenuActivity>(
-          renderer, mappedInput, txt->getTitle(), pct, SETTINGS.orientation,
-          readerFontPointSizes(&sdFontSystem.registry(), SETTINGS.sdFontFamilyName)),
+          renderer, mappedInput, txt->getTitle(), pct, SETTINGS.orientation, !bookmarks_.empty()),
       [this](const ActivityResult& result) {
         const auto& menu = std::get<MenuResult>(result.data);
 
-        // 方向與字級是 pending 語意:彈窗選定即生效,即使整個選單被取消(與 EPUB 同語意)。
+        // 方向是 pending 語意:彈窗選定即生效,即使整個選單被取消(與 EPUB 同語意)。
+        // v286：字級的 pending 管線已移除 —— 字級改由「文字設定」那一頁負責（它每改一項就自己
+        //   存檔並重載字型），選單裡不再有重複的入口。
         bool geometryChanged = false;
         if (menu.orientation != SETTINGS.orientation) {
           SETTINGS.orientation = menu.orientation;
@@ -845,20 +1021,10 @@ void TxtReaderActivity::openReaderMenu() {
           ReaderUtils::applyOrientation(renderer, SETTINGS.orientation);
           geometryChanged = true;
         }
-        bool fontChanged = false;
-        if (menu.fontSize != 0 && menu.fontSize != SETTINGS.fontPointSize) {
-          SETTINGS.fontPointSize = menu.fontSize;  // v161：點數制（upstream 1.5），非 enum 槽位
-          SETTINGS.saveToFile();
-          fontChanged = true;
-          geometryChanged = true;
-        }
         if (geometryChanged) {
           // v121:比照 EpubReaderActivity::applyOrientation —— 改 renderer 方向與重算幾何
           // 必須持 RenderLock,否則 render task 可能正拿著舊幾何在畫。
           RenderLock lock(*this);
-          // v161：字級變更要實際重載 .cpfont（釋放並替換 render task 可能正在讀的
-          // SdCardFont，所以必須在鎖內 —— TextSettingsActivity::applySize 同紀律）
-          if (fontChanged) sdFontSystem.ensureLoaded(renderer);
           // v118 買到的東西在這裡兌現:位元組位移不是字型的函數,所以改字級或轉方向
           // 只要重算幾何、用同一個位移重排當前頁 —— 不必重建索引(舊版是 73 分鐘),
           // 閱讀位置也不會漂掉(舊版存頁碼,總頁數一變就錯位)。
@@ -886,6 +1052,128 @@ void TxtReaderActivity::openReaderMenu() {
                                    });
             return;
           }
+          case TxtReaderMenuActivity::MenuAction::TEXT_SETTINGS: {
+            // v286：與 EPUB 同一個入口（EpubReaderActivity 的 TEXT_SETTINGS）。
+            //   回來之後走的重排路徑與「改字級」完全相同 —— 位元組位移不是字型的函數，
+            //   所以只要重算幾何、用同一個位移重排當前頁，閱讀位置不會漂掉（v118 的資產）。
+            startActivityForResult(
+                std::make_unique<TextSettingsActivity>(renderer, mappedInput, &sdFontSystem.registry(),
+                                                       TextSettingsActivity::Tab::Family),
+                [this](const ActivityResult&) {
+                  // TextSettingsActivity 每改一項就自己存檔，這裡不必再存。
+                  // ⚠️ 文字方向可以在這裡被改掉，而 txt 的軸向是 onEnter 算的快照 ——
+                  //    不重解的話會用舊軸向重排，看起來像「設定沒生效」（EPUB 踩過同一個坑）。
+                  //    txt 沒有出版社訊號，視為直排出版 → 傳 true（與 onEnter 同一個運算式）。
+                  //    ℹ️ 軸向的快照是 `vertical_`，由下面的 recomputeGeometry() 重讀，
+                  //       所以這一行之後不需要再另外同步一次（複查問過）。
+                  SETTINGS.activeDocumentVertical = SETTINGS.resolveVerticalFor(/*publisherRtl=*/true) ? 1 : 0;
+                  {
+                    // ⚠️ 鎖的範圍【只包】狀態與幾何的更新，不含 requestUpdate() ——
+                    //    與上面「改字級」那條已驗證的路徑同形狀（複查指出我原本把兩者都圈進來了，
+                    //    而 requestUpdate 的同步契約沒有證據支持它可以在鎖內呼叫）。
+                    //    ⛔ 也**不**在這裡呼叫 applyOrientation：螢幕方向是閱讀選單的
+                    //       ROTATE_SCREEN 在管，文字設定頁不會動它；EPUB 的對照組也沒有這一行。
+                    RenderLock lock(*this);
+                    // 換字型家族要真的重載 .cpfont（釋放 render task 可能正在讀的 SdCardFont，
+                    // 所以必須在鎖內 —— 與上面改字級那條同紀律）。
+                    // ⭐ 順序不可對調：`getReaderFontId()` 是惰性的，它反映【當下已載入的字面】，
+                    //    先重算幾何會拿到舊字型的度量（教訓 A-3）。
+                    sdFontSystem.ensureLoaded(renderer);
+                    recomputeGeometry();
+                    backCount_ = 0;  // 分頁鏈變了，回溯環裡的舊頁首不再落在同一條鏈上
+                    backHead_ = 0;
+                  }
+                  requestUpdate();
+                });
+            return;
+          }
+          case TxtReaderMenuActivity::MenuAction::TOGGLE_BOOKMARK: {
+            toggleBookmark();
+            return;
+          }
+          case TxtReaderMenuActivity::MenuAction::BOOKMARKS: {
+            // v290：與 EPUB 共用同一個清單活動（txt 傳 nullptr 當 epub）。
+            startActivityForResult(
+                std::make_unique<ReaderBookmarksActivity>(renderer, mappedInput, nullptr, txt->getPath()),
+                [this](const ActivityResult& r) {
+                  // 清單裡可能刪過書籤 —— 不論有沒有選取，都要重新載入，否則選單的
+                  // 「有沒有書籤」與狀態列的指示會停在舊狀態。
+                  {
+                    RenderLock lock(*this);  // 同 toggleBookmark：繪圖任務會走訪這個 vector
+                    if (!BookmarkFile::load(txt->getPath(), bookmarks_)) bookmarks_.clear();
+                  }
+                  if (!r.isCancelled && std::holds_alternative<ProgressChangeResult>(r.data)) {
+                    const auto& p = std::get<ProgressChangeResult>(r.data);
+                    if (p.hasByteOffset) {
+                      jumpToOffset(p.byteOffset);
+                      return;
+                    }
+                  }
+                  requestUpdate();
+                });
+            return;
+          }
+          case TxtReaderMenuActivity::MenuAction::SCREENSHOT: {
+            {
+              RenderLock lock(*this);
+              pendingScreenshot_ = true;
+            }
+            requestUpdate();
+            return;
+          }
+          case TxtReaderMenuActivity::MenuAction::DISPLAY_QR: {
+            // 當前頁的文字＝檔案上 [pageStartOffset_, nextPageOffset_) 這一段。
+            // ⭐ txt 這邊比 EPUB 單純：位元組位移本來就是它的頁游標，不必回去讀版面快取。
+            const size_t from = pageStartOffset_;
+            const size_t to = nextPageOffset_ > from ? nextPageOffset_ : from;
+            const size_t len = to - from;
+            if (len == 0) {
+              requestUpdate();
+              return;
+            }
+            std::string payload;
+            payload.resize(len);
+            if (!txt->readContent(reinterpret_cast<uint8_t*>(&payload[0]), from, len)) {
+              LOG_ERR("TRS", "QR: failed to read page bytes");
+              requestUpdate();
+              return;
+            }
+            trimToUtf8Boundaries(payload);
+            // ℹ️ 容量不必在這裡夾：`QrUtils::drawQrCode` 已經把 payload 夾到 version 20 的
+            //    真實容量（858 bytes）並在 UTF-8 邊界截斷（教訓 16 當初就是為此修的）。
+            if (payload.empty()) {
+              requestUpdate();
+              return;
+            }
+            startActivityForResult(std::make_unique<QrDisplayActivity>(renderer, mappedInput, payload),
+                                   [this](const ActivityResult&) { requestUpdate(); });
+            return;
+          }
+          case TxtReaderMenuActivity::MenuAction::DELETE_CACHE: {
+            // ⚠️⚠️ **刻意不呼叫 `Txt::clearCache()`。**
+            //   它是 `removeDir(cachePath)` 整包刪，而 **txt 的進度檔就住在那個資料夾裡**
+            //   （`ProgressFile` 寫 `<cachePath>/progress.bin`）。照 EPUB 那樣「先備份、清掉、
+            //   再寫回」會開出一個**真的會掉進度的視窗**：備份只在 RAM，而「刪目錄→重建→重寫」
+            //   不是一筆原子交易，中間斷電進度就沒了（codex 複查指出，成立）。
+            //   ⭐ 而且那個做法對 txt 根本沒必要：**txt 沒有版面快取**（v118 起是串流排版，
+            //      每頁現排），這個資料夾裡可重建的東西只有封面縮圖與早期的索引殘骸。
+            //   → 所以只刪那些，**進度檔完全不碰**。整個失敗模式就不存在了。
+            {
+              RenderLock lock(*this);
+              Storage.remove(txt->getCoverBmpPath().c_str());  // 封面縮圖（會自動重產）
+              // ⚠️ **不要刪 `index.bin`。** 它看起來是 v118 前的殘骸，但這棵樹還在用它做
+              //    一次性的進度遷移（把舊頁碼換算成位元組位移，見 migrateLegacyProgress）——
+              //    刪掉等於拿走還沒升級過的人的救援路徑，而留著只是一個不佔事的舊檔。
+              if (menu.resetProgress != 0) {
+                // 使用者明確選了「連進度一起重設」——這時才動進度，而且是【寫 0】不是刪檔，
+                // 兩邊（進度檔與最近閱讀）保持同一個值。
+                saveProgress(0);
+                RECENT_BOOKS.setProgress(txt->getPath(), 0);
+              }
+            }
+            onGoHome();
+            return;
+          }
           default:
             requestUpdate();
             return;
@@ -911,6 +1199,21 @@ void TxtReaderActivity::jumpToPercent(const int percent) {
   requestUpdate();
 }
 
+// v290：跳到書籤。與 jumpToPercent 同一條路，差別只在落點是【存下來的精確位移】
+// 而不是比例算出來的。
+// ⚠️ 仍然要 alignToLineStart：書籤存的是**當時那一頁的頁首**，而換了字級／行距之後
+//    分頁鏈不同，那個位移不見得還是某一頁的頁首。對齊到行首保證第一個字不是半個漢字。
+void TxtReaderActivity::jumpToOffset(const size_t offset) {
+  const size_t fileSize = txt->getFileSize();
+  if (fileSize == 0) return;
+  size_t target = offset;
+  if (target >= fileSize) target = fileSize - 1;
+  pageStartOffset_ = alignToLineStart(target);
+  backCount_ = 0;  // 同 jumpToPercent：回溯環的舊頁首不在同一條分頁鏈上
+  backHead_ = 0;
+  requestUpdate();
+}
+
 WarmIdentity TxtReaderActivity::buildWarmIdentity(const size_t offset) const {
   WarmIdentity id;
   id.bookHash = WarmIdentity::fnv1a(txt->getCachePath().c_str());
@@ -918,7 +1221,8 @@ WarmIdentity TxtReaderActivity::buildWarmIdentity(const size_t offset) const {
   id.pageNumber = static_cast<int32_t>(offset);       // 位元組位移就是 txt 的「頁身分」
   id.fontId = cachedFontId;
   id.viewportWidth = static_cast<uint16_t>(viewportWidth);
-  id.viewportHeight = static_cast<uint16_t>(linesPerPage);  // 每頁行數已折入方向/邊距/狀態列
+  // 每頁單位數已折入方向/邊距/狀態列；v241 起最高位標記軸向（直排與橫排同單位數時身分也必須不同）。
+  id.viewportHeight = static_cast<uint16_t>((unitsPerPage_ & 0x7FFF) | (vertical_ ? 0x8000 : 0));
   id.paragraphAlignment = cachedParagraphAlignment;
   id.valid = true;
   return id;
@@ -938,10 +1242,20 @@ void TxtReaderActivity::prefetchNextPage(const size_t nextOffset) {
     return;
   }
 
-  std::vector<std::string> lines;
+  std::vector<std::shared_ptr<TextBlock>> lines;
   size_t after = nextOffset;
-  if (!loadPageAtOffset(nextOffset, lines, after) || lines.empty()) {
-    return;
+  {
+    // v255：這是閱讀停留時間（上一頁已經送上面板），CJK 字寬掃描放在這裡做，不放在翻頁當下的排版裡。
+    //   掃描途中每批看一次有沒有畫面在等（使用者翻頁了），有就中止、下次再掃。
+    struct CjkScanAllowScope {
+      explicit CjkScanAllowScope(TxtReaderActivity* self) {
+        SdCardFont::openCjkScanWindow(&TxtReaderActivity::prefetchShouldAbort, self);
+      }
+      ~CjkScanAllowScope() { SdCardFont::closeCjkScanWindow(); }
+    } scanAllow(this);
+    if (!loadPageAtOffset(nextOffset, lines, after) || lines.empty()) {
+      return;
+    }
   }
 
   bool completed = false;
@@ -950,24 +1264,34 @@ void TxtReaderActivity::prefetchNextPage(const size_t nextOffset) {
     scope.setRetainCacheOnExit(true);
     // scan 模式:drawText 只 recordText 就返回,framebuffer 一個位元組都不會動 ——
     // 面板上仍是剛顯示出去的那一頁。座標傳真值只是為了誠實。
-    const int lineHeight = renderer.getLineHeight(cachedFontId);
+    const int lineHeight = cachedLineHeight_;
+    const GfxRenderer::VerticalScope axis(renderer, vertical_);
+    int x = cachedOrientedMarginLeft + viewportWidth;
     int y = cachedOrientedMarginTop;
-    for (const auto& line : lines) {
-      if (!line.empty()) {
-        renderer.drawText(cachedFontId, cachedOrientedMarginLeft, y, line.c_str());
+    for (const auto& unit : lines) {
+      if (vertical_) x -= columnPitch_;
+      if (unit) {
+        unit->render(renderer, cachedFontId, vertical_ ? x : cachedOrientedMarginLeft, y);
       }
-      y += lineHeight;
+      if (!vertical_) y += lineHeight;
     }
     completed = scope.endScanAndPrewarmAbortable(&TxtReaderActivity::prefetchShouldAbort, this);
   }
 
-  // v110 教訓:預取自己的 stats 必須折進累計 —— 下一次 render 的 PrewarmScope ctor 會
-  // resetStats(),而 TXTPAGE 那一行印在預取【之前】⇒ 不折的話,預取造成的
-  // alloc_fail / dropped 會完全隱形,而那兩個正是回退判準。
+  // v240：預取的 alloc_fail／dropped 綁定它準備的那一頁（下一次 render 若 warm 命中而且位移相符才用）。
+  // v239 以前是 `+=` 而且從不歸零 ＝ 開書以來的累計。中止的預取不會被採用，它的失敗當場寫一行，
+  // 否則下一次冷 render 的 scope 一歸零就消失了（codex 複查指出）。
   if (const auto* font = sdFontSystem.currentReaderFont()) {
     const auto& st = font->getStats();
-    diagAllocFail_ += st.bitmapAllocFailures;
-    diagDropped_ += st.bitmapGlyphsDropped;
+    prefetchStatOffset_ = nextOffset;
+    prefetchAllocFail_ = st.bitmapAllocFailures;
+    prefetchDropped_ = st.bitmapGlyphsDropped;
+    prefetchRescue_ = st.bitmapExactRescues;
+    prefetchStatValid_ = completed;
+    if (!completed && (st.bitmapAllocFailures != 0 || st.bitmapGlyphsDropped != 0)) {
+      DiagLog::line("TXTPREFETCH off=%u abort=1 afail=%u dropped=%u", static_cast<unsigned>(nextOffset),
+                    static_cast<unsigned>(st.bitmapAllocFailures), static_cast<unsigned>(st.bitmapGlyphsDropped));
+    }
   }
 
   if (completed) {

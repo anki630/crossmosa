@@ -53,6 +53,7 @@ class ParsedText {
   bool focusReadingEnabled;
   bool isNaturalAlign;
   bool hasRtlWord;
+  bool greedyLineBreaks_ = false;  // 見 setGreedyLineBreaks
   std::vector<std::string> reorderedWordsScratch;
   std::vector<EpdFontFamily::Style> reorderedStylesScratch;
   std::vector<uint16_t> reorderedWidthsScratch;
@@ -70,6 +71,9 @@ class ParsedText {
   int calculateRubyExtraEndOffset(size_t lineStartIdx, size_t lineBreakIdx, const GfxRenderer& renderer,
                                   int fontId) const;
   int resolveFirstLineIndent(bool isFirstLine, const GfxRenderer& renderer, int fontId) const;
+  // v272／v273：這一段可不可以做約物擠壓（兩條斷行路徑與定位共用同一個判準）。
+  //   v271 曾在這裡做行尾懸掛，v273 移除（橫排維持方格，見 .cpp 的說明）。
+  [[nodiscard]] bool punctFittingAllowed() const;
   // ⚠️ **兩軸共用。** `isNaturalAlign` 先前只在 `layoutAndExtractLines`（橫排）裡賦值，
   //    而它的建構子初始值是 false → 直排讀到的永遠是 false。
   //    v215 的縮排閘門因此恆不成立，把直排的段首縮排整個拿掉了（實機未上線前抓到）。
@@ -114,6 +118,11 @@ class ParsedText {
   BlockStyle& getBlockStyle() { return blockStyle; }
   // 建置期間是否曾因低記憶體拒絕過 token（sticky）。解析器據此中止本章。
   bool hasOom() const { return oom_; }
+  // v240：txt 閱讀器專用。開啟時橫排改走 greedy 斷行（computeHyphenatedLineBreaks 那條迴圈），
+  // 但【不斷字】。預設關閉 → EPUB 的兩條既有分支（DP／斷字 greedy）逐字不變。
+  // 為什麼 txt 需要 greedy：DP（最小參差）不具前綴穩定性 —— 同一段從不同行首開始排，斷點就不同，
+  // 所以分頁鏈依起點而定、往前翻頁永遠對不準。greedy 從任一行首重排，後面的斷點都與整段排相同。
+  void setGreedyLineBreaks(const bool v) { greedyLineBreaks_ = v; }
 
   // v151：最後一次守衛拒絕的描述（靜態、先到先得、由 src 端讀走寫進 diag.log ——
   // LOG_ERR 在這台沒有序列埠的機器上等於丟掉，v150 的「索引失敗」因此零證據）。
@@ -123,6 +132,36 @@ class ParsedText {
   static uint8_t buildGapSite;
   static uint32_t buildProbeCount;
   static void noteBuildProbe(uint8_t site);
+
+  // v252：EPUB 建置分項計時（累計 µs，閱讀器在 noteBuildStart 歸零、BUILD end 印 BUILDPROF）。
+  // txt 每頁排版中位 39ms（TXTPAGE），EPUB 約 190ms，而兩者用同一個 layoutAndExtractColumns ——
+  // 差距在引擎外面，這組數字回答「在哪」。全部是每段落／每頁／每次 SD 讀才計一次，不在每個字上計時。
+  // 巢狀關係：xml ⊃ {cd, el}；cd／el ⊃ lay（layCd＝發生在文字回呼裡的那份）；lay ⊃ {adv, proc}；proc ⊃ ser。
+  struct BuildProf {
+    uint64_t rdUs = 0;     // parseStep 讀章節 HTML（SD）
+    uint64_t xmlUs = 0;    // XML_ParseBuffer（含所有回呼）
+    uint64_t cdUs = 0;     // characterData 回呼
+    uint64_t elUs = 0;     // start／endElement 回呼
+    uint64_t layUs = 0;    // layoutAndExtractColumns／Lines 整段
+    uint64_t layCdUs = 0;  // 其中發生在 characterData 裡的
+    uint64_t advUs = 0;    // ensureSdCardFontReady（字寬預載）
+    uint64_t procUs = 0;   // 欄／行交給頁面（addColumnToPage／addLineToPage，含換頁序列化）
+    uint64_t serUs = 0;    // Section::onPageComplete（頁序列化寫 SD）
+    uint64_t imgUs = 0;    // 圖片檔頭探測
+    uint32_t words = 0;    // addWord 次數
+    uint32_t layCalls = 0;
+    uint32_t cdCalls = 0;
+  };
+  static BuildProf buildProf;
+  static bool buildProfInCd;
+  static int64_t profNowUs();
+
+  // v252：背景建置期間的按鍵輪詢。閱讀器只在【主任務的建置 tick 內、持 RenderLock】時設定，離開 tick 前清掉
+  // （render task 的同步建置也會走探針點，但那時 hook 一定是 nullptr —— 兩者被 RenderLock 串行）。
+  // 探針點每 ≥15ms 呼叫一次（有了事件也繼續，時間戳才準）；hook 回 true＝有待處理的輸入事件，
+  // buildInputPending() 讓 Section 在這一步結束時讓路。
+  static void setBuildInputPollHook(bool (*fn)());
+  static bool buildInputPending();
 
   // 直排的診斷輸出。
   // ⚠️ `lib/Epub` 看不到 `src/util/DiagLog.h`，而這台機器**沒有序列埠 → LOG_ERR 等於丟掉**

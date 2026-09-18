@@ -127,6 +127,23 @@ void GfxRenderer::ensureSdCardFontReady(int fontId, const std::deque<std::string
   }
 }
 
+void GfxRenderer::ensureSdCardFontReady(int fontId, const std::deque<std::string>& words,
+                                        const std::vector<EpdFontFamily::Style>& wordStyles,
+                                        const bool includeHyphen, bool (*cpFilter)(uint32_t)) const {
+  auto it = sdCardFonts_.find(fontId);
+  if (it != sdCardFonts_.end()) {
+    std::string shaped;
+    for (const auto& w : words) {
+      appendShapedRtlTokens(w.c_str(), shaped);
+    }
+    int missed = it->second->buildAdvanceTable(words, wordStyles, includeHyphen, shaped.empty() ? nullptr : shaped.c_str(),
+                                               cpFilter);
+    if (missed > 0) {
+      LOG_DBG("GFX", "ensureSdCardFontReady: %d glyph(s) not found", missed);
+    }
+  }
+}
+
 void GfxRenderer::begin() {
   frameBuffer = display.getFrameBuffer();
   if (!frameBuffer) {
@@ -1815,6 +1832,8 @@ void GfxRenderer::displayBufferAsync(const HalDisplay::RefreshMode refreshMode) 
   display.displayBufferAsync(refreshMode);
 }
 
+void GfxRenderer::noteGrayPanelDirty() const { display.noteGrayPanelDirty(); }
+
 void GfxRenderer::waitRefreshComplete() const { display.waitRefreshComplete(); }
 
 bool GfxRenderer::supportsAsyncRefresh() const { return !fadingFix && display.supportsAsyncRefresh(); }
@@ -2107,12 +2126,28 @@ bool GfxRenderer::copyBufferToRegion(int lx, int ly, int lw, int lh, const uint8
   return true;
 }
 
+// v254：SD 字型的空白寬度。getAdvance 回 0 的語意是「不在執行期快取表裡」，原本在這裡直接當成寬度 0 ——
+// 於是首行縮排（3 個空白寬）、字間距會隨「這一章表裡剛好有沒有 ' '」變動（換章清表、段落的字重遮罩、
+// v253 起的跨章保留都會改變它）。改成與 getTextAdvanceX 同一條規則：查不到就讀字形紀錄。
+// 之後表裡放了什麼只影響速度、不影響排版結果。
+int32_t GfxRenderer::sdSpaceAdvanceFP(const SdCardFont& sdFont, const int fontId, const EpdFontFamily::Style style) const {
+  int32_t advFP = sdFont.getAdvance(' ', resolveSdCardStyle(sdFont, style));
+  if (advFP == 0) {
+    const auto fontIt = fontMap.find(fontId);
+    if (fontIt != fontMap.end()) {
+      const AdvanceSdProbeScope probe;
+      const EpdGlyph* glyph = fontIt->second.getGlyph(' ', style);
+      advFP = glyph ? glyph->advanceX : 0;
+    }
+  }
+  return advFP;
+}
+
 int GfxRenderer::getSpaceWidth(const int fontId, const EpdFontFamily::Style style) const {
   // Advance table fast-path for SD card fonts during layout
   auto sdIt = sdCardFonts_.find(fontId);
   if (sdIt != sdCardFonts_.end() && sdIt->second->hasAdvanceTable()) {
-    const uint8_t resolvedStyle = resolveSdCardStyle(*sdIt->second, style);
-    return fp4::toPixel(sdIt->second->getAdvance(' ', resolvedStyle));
+    return fp4::toPixel(sdSpaceAdvanceFP(*sdIt->second, fontId, style));
   }
 
   const auto fontIt = fontMap.find(fontId);
@@ -2132,8 +2167,7 @@ int GfxRenderer::getSpaceAdvance(const int fontId, const uint32_t leftCp, const 
   // so we return just the space advance without kerning.
   auto sdIt = sdCardFonts_.find(fontId);
   if (sdIt != sdCardFonts_.end() && sdIt->second->hasAdvanceTable()) {
-    const uint8_t resolvedStyle = resolveSdCardStyle(*sdIt->second, style);
-    return fp4::toPixel(sdIt->second->getAdvance(' ', resolvedStyle));
+    return fp4::toPixel(sdSpaceAdvanceFP(*sdIt->second, fontId, style));  // v254：查不到就讀字形（見上）
   }
 
   const auto fontIt = fontMap.find(fontId);
@@ -2298,8 +2332,33 @@ int GfxRenderer::getLineHeight(const int fontId) const {
   return fontIt->second.getData(EpdFontFamily::REGULAR)->advanceY;
 }
 
-int GfxRenderer::getLineHeight(const int fontId, const float compression) const {
-  return static_cast<int>(getLineHeight(fontId) * compression + 0.5f);
+int32_t GfxRenderer::probeEmFP(const int fontId) const {
+  // ⚠️⚠️ **不要直接用 getCodepointAdvanceFP。** 它只對「SD 字型且 advance 表已建立」有效，
+  //   其餘一律回 kAdvanceUnavailable(-1)。直排踩過這個坑：em 變負數 → 整章空白，
+  //   而那個空白版面還會被當成有效快取寫進 SD 卡（重刷韌體也清不掉）。
+  // → 備援鏈：SD 逐碼位快路徑 → getTextAdvanceX（走 fontMap，內建字型有效）
+  //   → U+4E00「一」（任何中文字型都有）。回傳 12.4 定點；<= 16 表示量不到。
+  for (const uint32_t cp : {0x3000u, 0x4E00u}) {  // U+3000 全形空白：零墨水、五套皆全形
+    const int32_t fast = getCodepointAdvanceFP(fontId, cp, EpdFontFamily::REGULAR);
+    if (fast > 16) return fast;
+    char utf8[4] = {0};  // 兩者都在 BMP，三位元組編碼
+    utf8[0] = static_cast<char>(0xE0 | (cp >> 12));
+    utf8[1] = static_cast<char>(0x80 | ((cp >> 6) & 0x3F));
+    utf8[2] = static_cast<char>(0x80 | (cp & 0x3F));
+    const int px = getTextAdvanceX(fontId, utf8, EpdFontFamily::REGULAR);
+    if (px > 1) return px * 16;
+  }
+  return 0;
+}
+
+int GfxRenderer::getReaderLineHeight(const int fontId, const float pitchEm) const {
+  const int declared = getLineHeight(fontId);
+  const int32_t emFP = probeEmFP(fontId);
+  if (emFP > 16 && pitchEm > 0.0f) {
+    const int h = static_cast<int>((static_cast<float>(emFP) * pitchEm) / 16.0f + 0.5f);
+    if (h > 0) return h;
+  }
+  return declared > 0 ? declared : 1;  // 絕不回 0：分頁拿它當除數
 }
 
 int GfxRenderer::getTextHeight(const int fontId) const {

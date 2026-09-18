@@ -6,6 +6,7 @@
 #include <BitmapHelpers.h>
 #include <FsHelpers.h>
 #include <GfxRenderer.h>
+#include <HalClock.h>
 #include <HalStorage.h>
 #include <Logging.h>
 
@@ -13,20 +14,69 @@
 #include <string>
 
 #include "Bitmap.h"  // Required for BmpHeader struct definition
+#include "CrossPointSettings.h"
 #include "activities/Activity.h"
+
+// v275：檔名的時間戳從「開機毫秒」改成「時分-毫秒後三位」。
+//   理由是實際踩到的：同一頁拍兩次時，只靠開機毫秒無法一眼看出哪張是新的
+//   （2026-09-17 為了分辨兩張截圖來回查了半天）。時分對得上狀態列與 diag.log 的時間。
+//   ⚠️ **後三位毫秒【不保證】唯一**（複查抓到我原本的說法是錯的）：兩張剛好差整數秒就會同名。
+//      所以撞名靠的是下面 `makeUniquePath` 的存在性檢查，不是這個後綴。
+//      （舊的純毫秒更糟：每次開機都從 0 數，跨開機必然撞。）
+//   ⚠️ RTC 取不到時間就退回原本的毫秒 —— 不要讓檔名變成一堆 0000 互相覆蓋。
+static void formatStamp(char* out, size_t outSize, unsigned long ms) {
+  char clock[8] = {0};
+  if (halClock.formatTime(clock, sizeof(clock), SETTINGS.clockUtcOffsetQ, /*use12Hour=*/false) && clock[0] != '\0') {
+    // "HH:MM" → "HHMM"
+    char hhmm[6] = {0};
+    size_t k = 0;
+    for (size_t i = 0; clock[i] != '\0' && k < sizeof(hhmm) - 1; ++i) {
+      if (clock[i] != ':') hhmm[k++] = clock[i];
+    }
+    snprintf(out, outSize, "%s-%03lu", hhmm, ms % 1000UL);
+    return;
+  }
+  snprintf(out, outSize, "%lu", ms);
+}
+
+// 撞名就換一個名字，**絕不覆蓋既有的截圖**（覆蓋＝直接弄丟使用者的東西）。
+//   只在真的撞到時才多跑 exists()；截圖本來就是低頻動作，這點成本無所謂。
+static void makeUniquePath(char* buf, size_t bufSize) {
+  if (!Storage.exists(buf)) return;
+  char base[300];
+  snprintf(base, sizeof(base), "%s", buf);
+  char* dot = strrchr(base, '.');
+  if (dot) *dot = '\0';
+  for (int n = 2; n <= 20; ++n) {
+    snprintf(buf, bufSize, "%s-%d.bmp", base, n);
+    if (!Storage.exists(buf)) return;
+  }
+  // 20 個都撞（幾乎不可能）：改用開機毫秒。
+  // ⚠️ **這一步也要驗存在**（複查第二輪抓到）：毫秒跨開機會重複，上一次開機留下的同名檔會被蓋掉，
+  //    而上面那句「絕不覆蓋」就變成假的。再試 20 個，全撞就放棄 —— 寧可這次不存，也不蓋掉舊的。
+  for (unsigned long n = 0; n < 20; ++n) {
+    snprintf(buf, bufSize, "%s-%lu.bmp", base, static_cast<unsigned long>(millis()) + n);
+    if (!Storage.exists(buf)) return;
+  }
+  buf[0] = '\0';  // 空路徑 ＝ 放棄；呼叫端本來就會因為開檔失敗而寫 LOG_ERR
+}
 
 void ScreenshotUtil::buildFilename(const ScreenshotInfo& info, char* buf, size_t bufSize) {
   const unsigned long ts = millis();
+  char stamp[16];
+  formatStamp(stamp, sizeof(stamp), ts);
 
   if (info.readerType == ScreenshotInfo::ReaderType::None || info.title[0] == '\0') {
-    snprintf(buf, bufSize, "/screenshots/screenshot-%lu.bmp", ts);
+    snprintf(buf, bufSize, "/screenshots/screenshot-%s.bmp", stamp);  // v275：這條也用同一個時間戳
+    makeUniquePath(buf, bufSize);
     return;
   }
 
   char sanitizedTitle[64];
   FsHelpers::sanitizePathComponentForFat32(info.title, sanitizedTitle, sizeof(sanitizedTitle));
   if (sanitizedTitle[0] == '\0') {
-    snprintf(buf, bufSize, "/screenshots/screenshot-%lu.bmp", ts);
+    snprintf(buf, bufSize, "/screenshots/screenshot-%s.bmp", stamp);
+    makeUniquePath(buf, bufSize);
     return;
   }
 
@@ -38,11 +88,11 @@ void ScreenshotUtil::buildFilename(const ScreenshotInfo& info, char* buf, size_t
   const int chapterNum = info.spineIndex + 1;
 
   if (info.readerType == ScreenshotInfo::ReaderType::Epub && info.spineIndex >= 0) {
-    snprintf(buf, bufSize, "/screenshots/%s/%s_ch%d_p%d_%dpct_%lu.bmp", sanitizedTitle, sanitizedTitle, chapterNum,
-             info.currentPage, pct, ts);
+    snprintf(buf, bufSize, "/screenshots/%s/%s_sp%d_p%d_%dpct_%s.bmp", sanitizedTitle, sanitizedTitle, chapterNum,
+             info.currentPage, pct, stamp);
   } else {
-    snprintf(buf, bufSize, "/screenshots/%s/%s_p%d_%dpct_%lu.bmp", sanitizedTitle, sanitizedTitle, info.currentPage,
-             pct, ts);
+    snprintf(buf, bufSize, "/screenshots/%s/%s_p%d_%dpct_%s.bmp", sanitizedTitle, sanitizedTitle, info.currentPage,
+             pct, stamp);
   }
 
   // Truncate title if total path exceeds FAT32 limit
@@ -57,16 +107,17 @@ void ScreenshotUtil::buildFilename(const ScreenshotInfo& info, char* buf, size_t
       }
       sanitizedTitle[maxTitleLen] = '\0';
       if (info.readerType == ScreenshotInfo::ReaderType::Epub && info.spineIndex >= 0) {
-        snprintf(buf, bufSize, "/screenshots/%s/%s_ch%d_p%d_%dpct_%lu.bmp", sanitizedTitle, sanitizedTitle, chapterNum,
-                 info.currentPage, pct, ts);
+        snprintf(buf, bufSize, "/screenshots/%s/%s_sp%d_p%d_%dpct_%s.bmp", sanitizedTitle, sanitizedTitle, chapterNum,
+                 info.currentPage, pct, stamp);
       } else {
-        snprintf(buf, bufSize, "/screenshots/%s/%s_p%d_%dpct_%lu.bmp", sanitizedTitle, sanitizedTitle, info.currentPage,
-                 pct, ts);
+        snprintf(buf, bufSize, "/screenshots/%s/%s_p%d_%dpct_%s.bmp", sanitizedTitle, sanitizedTitle, info.currentPage,
+                 pct, stamp);
       }
     } else {
-      snprintf(buf, bufSize, "/screenshots/screenshot-%lu.bmp", ts);
+      snprintf(buf, bufSize, "/screenshots/screenshot-%s.bmp", stamp);
     }
   }
+  makeUniquePath(buf, bufSize);
 }
 
 void ScreenshotUtil::takeScreenshot(GfxRenderer& renderer) {
@@ -79,6 +130,12 @@ void ScreenshotUtil::takeScreenshot(GfxRenderer& renderer) {
   ScreenshotInfo info = activityManager.getScreenshotInfo();
   char filename[256];
   buildFilename(info, filename, sizeof(filename));
+  // v275：空路徑 ＝ `makeUniquePath` 找不到不撞名的名字而放棄。**明寫這個檢查**，不要靠
+  //   「`saveFramebufferAsBmp("")` 應該會失敗」——那是假設，不是事實（複查第三輪要求）。
+  if (filename[0] == '\0') {
+    LOG_ERR("SCR", "Screenshot skipped: no free filename");
+    return;
+  }
 
   bool saved = saveFramebufferAsBmp(filename, fb, renderer.getDisplayWidth(), renderer.getDisplayHeight());
   if (saved) {

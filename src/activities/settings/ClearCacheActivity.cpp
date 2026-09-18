@@ -16,6 +16,7 @@
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "util/BookCacheUtils.h"
+#include "util/DiagLog.h"  // v292：這條路原本零證人（全是 LOG_*，在這台機器上等於丟掉）
 
 namespace {
 
@@ -170,6 +171,12 @@ void ClearCacheActivity::clearCache(bool keepProgress) {
 
   clearedCount = 0;
   failedCount = 0;
+  // v292：**這條路原本一個證人都沒有** —— 它的訊息全是 LOG_DBG／LOG_ERR，而這台機器沒有
+  //   序列埠、gh_release 又把 LOG_DBG 編掉，所以「到底有沒有刪到」使用者與我都看不出來
+  //   （實機回報「設定裡清快取好像沒刪掉 txt 快取」時，雙方都沒有任何依據可查）。
+  //   逐格式分別計數，才分得出「沒掃到」與「掃到了但刪不掉」——這兩個的修法完全不同。
+  //   memory: no-serial-port-means-log-it-or-lose-it。
+  unsigned seenEpub = 0, seenTxt = 0, seenXtc = 0, seenOther = 0;
 
   // v192：openNextFile() 因 SD I/O 錯誤回傳空值時，無法與正常 EOF 區分，會被當成掃完。這是上游既有行為。
   for (auto file = root.openNextFile(); file; file = root.openNextFile()) {
@@ -183,8 +190,16 @@ void ClearCacheActivity::clearCache(bool keepProgress) {
     }
 
     if (!(file.isDirectory() && isBookCacheDirectoryName(gName))) {
+      if (file.isDirectory()) seenOther++;  // 資料目錄下的其他資料夾（bookmarks/ 等）
       file.close();
       continue;
+    }
+    if (strncmp(gName, "epub_", 5) == 0) {
+      seenEpub++;
+    } else if (strncmp(gName, "txt_", 4) == 0) {
+      seenTxt++;
+    } else {
+      seenXtc++;
     }
 
     if (!joinPath(gBookPath, sizeof(gBookPath), DataDir::path(), gName)) {
@@ -271,6 +286,11 @@ void ClearCacheActivity::clearCache(bool keepProgress) {
     clearedCount++;
   }
   root.close();
+  // v292：一行把整件事講完。`dirs=` 是掃到的書籍快取資料夾（逐格式），
+  //   `cleared=`／`failed=` 是實際處理的結果。txt 沒被刪到的話，看 `txt=` 是 0（沒掃到）
+  //   還是 >0 而 `failed=` 也 >0（掃到了但刪不掉）—— 兩者的修法完全不同。
+  DiagLog::line("CACHECLEAR keep=%d dirs=epub:%u,txt:%u,xtc:%u other=%u cleared=%u failed=%u",
+                keepProgress ? 1 : 0, seenEpub, seenTxt, seenXtc, seenOther, clearedCount, failedCount);
 
   if (!keepProgress) {
     // v192：重設時只把最近閱讀清單的百分比歸零，不准刪 recent.json 的項目本身。

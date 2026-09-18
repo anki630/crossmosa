@@ -189,4 +189,29 @@ const char* outcomeName() {
   return "?";
 }
 
+bool existedAtResolve() {
+  // 只列出「resolve() 走到那個 return 時，activeDir 【被 isDirectory() 級的證據證明過】
+  // 是一個目錄」的 outcome。逐條的依據（對照上面的程式碼）：
+  //   AlreadyNew  —— Storage.open(NEW_DIR).isDirectory() 為真才會設。
+  //   Migrated    —— 只有在 dirHasEntries(LEGACY_DIR) 為真之後才走到 rename，而
+  //                  dirHasEntries 自己就要求 isDirectory()；搬的是目錄，落地也是目錄。
+  //   BothNewWins —— newReal ＝ looksLikeRealDataDir(NEW_DIR) || dirHasEntries(NEW_DIR)。
+  //                  前者要 exists("<dir>/<哨兵>") 成立（路徑走不進普通檔案），後者要
+  //                  isDirectory()。兩條都蘊含 NEW_DIR 是目錄。
+  //
+  // ⚠️ 複查（codex）駁回了原本還列在這裡的 MigrationFailed 與 StubBlocked：
+  //    那兩條只有 Storage.exists(LEGACY_DIR) 當證據，而 **exists() 對普通檔案也成立**。
+  //    它們現在回 false ＝ 照舊 mkdir，只是少省一點時間。
+  //
+  // ⚠️ 名字刻意叫 existedAtResolve 而不是 knownToExist —— 它陳述的是**開機當下的歷史事實**，
+  //    不是此刻的保證（網頁檔案管理／清快取可以在之後把目錄刪掉）。呼叫端不得把它當保證用；
+  //    PersistableStore 的自癒重試才是正確性的來源。
+  switch (outcome_) {
+    case Outcome::AlreadyNew:
+    case Outcome::Migrated:
+    case Outcome::BothNewWins: return true;
+    default: return false;
+  }
+}
+
 }  // namespace DataDir

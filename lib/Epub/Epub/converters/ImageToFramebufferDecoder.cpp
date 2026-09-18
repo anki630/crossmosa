@@ -5,14 +5,19 @@
 #include <Arduino.h>
 #include <Logging.h>
 
+#include "DecodeStats.h"
+
 char ImageToFramebufferDecoder::lastError[64] = "";
 bool ImageToFramebufferDecoder::lastErrorTransient = false;
+uint32_t ImageToFramebufferDecoder::lastErrorNeedBytes = 0;
+bool ImageToFramebufferDecoder::lastDecodeAborted = false;  // v260
 void ImageToFramebufferDecoder::setLastError(const bool transient, const char* fmt, ...) {
   va_list ap;
   va_start(ap, fmt);
   vsnprintf(lastError, sizeof(lastError), fmt, ap);
   va_end(ap);
   lastErrorTransient = transient;
+  lastErrorNeedBytes = 0;
 }
 
 bool ImageToFramebufferDecoder::validateAndStoreDimensions(const int64_t width, const int64_t height,
@@ -47,6 +52,8 @@ void ImageToFramebufferDecoder::yieldDuringDecode(uint32_t& lastYieldMs) {
   const uint32_t now = millis();
   if (now - lastYieldMs >= 250) {
     lastYieldMs = now;
+    DecodeStatTimer t(g_decodeStats.yieldUs);  // v246 儀器
+    g_decodeStats.yields++;
     vTaskDelay(1);
   }
 }

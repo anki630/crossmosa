@@ -3,6 +3,7 @@
 #include <I18n.h>
 #include <Logging.h>
 #include <ObfuscationUtils.h>
+#include <Epub/VerticalText.h>  // v284：行距與直排欄距共用 COLUMN_PITCH_* 三個常數
 
 #include <algorithm>
 #include <cstring>
@@ -305,7 +306,7 @@ ReaderRenderSpec CrossPointSettings::readerRenderSpec(const uint16_t viewportWid
                                                       const uint16_t viewportHeight) const {
   ReaderRenderSpec spec;
   spec.fontId = getReaderFontId();
-  spec.lineCompression = getReaderLineCompression();
+  spec.lineHeightEm = getReaderLinePitchEm();
   spec.extraParagraphSpacing = extraParagraphSpacing != 0;
   spec.paragraphAlignment = paragraphAlignment;
   spec.viewportWidth = viewportWidth;
@@ -320,42 +321,40 @@ ReaderRenderSpec CrossPointSettings::readerRenderSpec(const uint16_t viewportWid
   return spec;
 }
 
-float CrossPointSettings::getReaderLineCompression() const {
-  // SD card fonts use same compression as Bookerly (the most neutral values)
-  if (sdFontFamilyName[0] != '\0') {
-    switch (lineSpacing) {
-      case TIGHT:
-        return 0.95f;
-      case NORMAL:
-      default:
-        return 1.0f;
-      case WIDE:
-        return 1.1f;
-    }
-  }
-
-  switch (fontFamily) {
-    case NOTOSERIF:
+float CrossPointSettings::getReaderLinePitchEm() const {
+  // v284：**行距改成字身框（em）的倍數，與直排欄距共用同一組常數**
+  //   （`vtext::COLUMN_PITCH_{TIGHT,NORMAL,WIDE}` ＝ 1.35／1.50／1.75）。
+  //
+  // 在此之前這裡回傳的是「字型宣告 advanceY 的壓縮率」，也就是**行距實際上由六個字型
+  // 廠商各自決定**。實測同一個 22pt：IBMPlex 2.01 em、Noto 1.44 em、芫荽 1.11 em、
+  // 原俠正楷與 RoundTC **1.00 em（零行距，撇捺會碰到上一行）**。換字型就換版面密度，
+  // 而那從來不是我們的設計決定。
+  //
+  // ⭐ 為什麼可以直接沿用直排那三個值（2026-09-18 查過規範原文，完整引文與出處在
+  //   `docs/specs/2026-09-18-line-spacing.md`）：
+  //   ① **沒有任何一份規範讓行距隨書寫方向改變** —— JIS X 4051 §7.4.1、JLReq §2.4.2、
+  //      clreq §7.1.1.5 區分的是**每行字數**，不是直排橫排。兩軸共用一把尺是對的。
+  //   ② 三份規範的行間窗口一致：**0.5–1.0 em**（＝行送り 1.5–2.0 em）。
+  //      我們的 1.50 em ＝ 0.5 em 行間 ＝ **那個窗口的下緣**。
+  //   ③ ⚠️ 下緣是有條件的：JLReq／clreq 都明說「**行長短**時可取二分（0.5 em）」，
+  //      而 JIS §7.4.1 d) 規定**每行超過 30 字**時行間要 ≥ 0.7 em（行送り ≥ 1.70 em）。
+  //      這台機器**越不過那個門檻**：528×792 扣掉版邊後，最壞情況是橫向 16pt 的
+  //      **22.7 字**（字級越大字數越少；直向 16pt 只有 14.8 字）。全部 ≤ 23 字。
+  //      → **螢幕變大或字級再變小時，這個結論要重驗** —— 它不是絕對的不變量。
+  //   ℹ️ 術語陷阱：規範的「行間／行距」指**行與行之間的空白**，「行送り」才是**行距（pitch）**，
+  //      而中文實務（Word／InDesign）說的「行距」是後者。引用數字前先確認是哪一個。
+  //
+  // ⚠️ 原本 NOTOSANS 另有一組更小的值（0.90／0.95／1.00），那是在**補償**這個缺陷
+  //   （Noto Sans 宣告的 advanceY 偏大）。改以 em 為基準後補償失去意義，一併刪掉 ——
+  //   留著會變成「補償一個已經不存在的問題」（memory: workarounds-outlive-their-premise）。
+  switch (lineSpacing) {
+    case TIGHT:
+      return vtext::COLUMN_PITCH_TIGHT;
+    case WIDE:
+      return vtext::COLUMN_PITCH_WIDE;
+    case NORMAL:
     default:
-      switch (lineSpacing) {
-        case TIGHT:
-          return 0.95f;
-        case NORMAL:
-        default:
-          return 1.0f;
-        case WIDE:
-          return 1.1f;
-      }
-    case NOTOSANS:
-      switch (lineSpacing) {
-        case TIGHT:
-          return 0.90f;
-        case NORMAL:
-        default:
-          return 0.95f;
-        case WIDE:
-          return 1.0f;
-      }
+      return vtext::COLUMN_PITCH_NORMAL;
   }
 }
 

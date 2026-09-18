@@ -1,5 +1,6 @@
 #pragma once
 #include <cstdarg>
+#include <cstddef>
 
 // v53 量測儀器(暫時性,量完即移除)。
 //
@@ -66,6 +67,10 @@ void mem(const char* tag);
 // 記一行自由格式文字(翻頁分段耗時、字型 prewarm 統計等)。
 // 回傳是否寫進 diag.log。既有呼叫點可忽略；v194 麵包屑要確認成功才清 RTC。
 bool line(const char* fmt, ...) __attribute__((format(printf, 1, 2)));
+
+// v249：讀走一個 lib 端的麵包屑（lib/hal/Breadcrumb.h 的跨 task 交接）並寫成「<prefix> <內容>」一行。
+// 沒有就什麼都不做。與原本「看 buf[0]、印、清 [0]」相同語意：diag 沒開時一樣會讀走清掉。
+void crumb(const char* prefix, char* buf, size_t cap);
 
 // v55:傾印各大池的「大型已用區塊」位址與大小。mem() 只說「最大連續塊剩多少」,
 // 答不出【是誰卡在池中間】——diag3.log 那顆把 p2 從 115,616 砍到 42,312 的

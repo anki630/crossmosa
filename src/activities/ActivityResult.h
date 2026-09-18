@@ -20,11 +20,14 @@ struct KeyboardResult {
 struct MenuResult {
   int action = -1;
   uint8_t orientation = 0;
-  uint8_t pageTurnOption = 0;
-  // v119/v161（txt 選單）：pending 語意的字級。EPUB 選單不用（其字級走 Text Settings），保持 0。
-  uint8_t fontSize = 0;
   // v184：清除快取時的選擇（0=只清快取保留進度、1=連進度一起重設）。
   uint8_t resetProgress = 0;
+  // v288 移除兩個【已死】的欄位，理由記著免得有人又加回來：
+  //   ・`pageTurnOption` —— 自動翻頁已移除（見 EpubReaderMenuActivity 的說明）。
+  //   ・`fontSize` —— v287 把 txt 選單裡與「文字設定」重複的字級拿掉之後就沒有生產者了。
+  // ⚠️ 留著全零的死欄位比刪掉更危險：之後有人讀它會安靜地拿到 0，而不是編譯錯誤。
+  // ⚠️ 下面的初始化一律用【具名初始化】—— 這個 struct 被兩個閱讀器的選單共用，
+  //    位置式初始化在增刪欄位時會安靜地對錯位（這一版就差點踩到）。
 };
 
 struct ChapterResult {
@@ -55,6 +58,9 @@ struct ProgressChangeResult {
   // Preferred over xpath/percentage on resolution: it is immune to re-pagination.
   bool hasVisibleTextOffset = false;
   uint32_t visibleTextOffset = 0;
+  // v290：txt 的位元組位移（同 BookmarkEntry，刻意是新欄位不是借用上面那個）。
+  bool hasByteOffset = false;
+  uint32_t byteOffset = 0;
 };
 
 enum class NetworkMode;

@@ -49,4 +49,12 @@ enum class Outcome : uint8_t {
 Outcome outcome();
 const char* outcomeName();
 
+// v283：resolve() 當下，path() 是否【已被 isDirectory() 級的證據證明】是一個目錄。
+// 用途：讓每次存檔都跑一次的 mkdir 省掉（SdFat 的 mkdir 即使目錄已存在，也要走一次
+// 完整路徑解析；v282 實機量到這條路上任何一個動目錄的操作都以百毫秒計）。
+// ⚠️ 名字說的是「開機當下」——這是**歷史事實，不是此刻的保證**（網頁檔案管理／清快取
+// 可以在之後刪掉目錄）。回傳 false 永遠安全（呼叫端照舊 mkdir）；回傳 true 也不得被當成
+// 保證用——正確性由寫入端的自癒重試（開檔失敗 → mkdir → 再試一次）負責，不是由這個函式。
+bool existedAtResolve();
+
 }  // namespace DataDir

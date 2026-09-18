@@ -55,7 +55,14 @@ class PersistableStoreBase {
   // 手法同 ProgressFile::writeAtomic（已在進度檔驗證過）。呼叫端負責父目錄存在。
   // ⚠️ 依賴 HalFile 的 write(const uint8_t*, size_t) override —— 沒有它
   //    serializeJson 會退化成逐 byte、每個 byte 一次 SD semaphore。
-  static bool writeDocAtomic(const char* path, const JsonDocument& doc);
+  // v283：mkdirMs 只是給 PERSISTW 那行 log 用的（呼叫端花在確保資料目錄上的毫秒數），
+  //   不影響任何行為；直接呼叫 writeDocAtomic 的人不必理它。
+  static bool writeDocAtomic(const char* path, const JsonDocument& doc, unsigned long mkdirMs = 0);
+
+  // v283：這條路的分段計時要進 diag.log，但 `lib/Serialization` 看不到 `src/util/DiagLog.h`
+  //   —— 同 ParsedText::vertDiagHook 的理由與寫法（這台機器沒有序列埠，LOG_* 等於丟掉）。
+  //   沒接就是靜默 no-op，桌面測試不需要它。
+  static void (*diagHook)(const char* line);
 
   // Serializes doc and writes it to path (ensures the data dir exists). Logs on failure.
   // 內部走 writeDocAtomic，所有既有呼叫端自動受益。

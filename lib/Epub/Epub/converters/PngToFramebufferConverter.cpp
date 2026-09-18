@@ -13,13 +13,14 @@
 
 #include "DirectPixelWriter.h"
 #include "DitherUtils.h"
+#include "DecodeFile.h"
 #include "PixelCache.h"
 
 namespace {
 
 // Context struct passed through PNGdec callbacks to avoid global mutable state.
 // The draw callback receives this via pDraw->pUser (set by png.decode()).
-// The file I/O callbacks receive the HalFile* via pFile->fHandle (set by pngOpen()).
+// The file I/O callbacks receive the DecodeFile* via pFile->fHandle (set by pngOpen()).
 struct PngContext {
   GfxRenderer* renderer{nullptr};
   const RenderConfig* config{nullptr};
@@ -34,6 +35,7 @@ struct PngContext {
   int dstHeight{0};
   int lastDstY{-1};  // Track last rendered destination Y to avoid duplicates
   uint32_t lastYieldMs{0};  // yieldDuringDecode() 的節流狀態
+  bool inputAborted{false};  // v260：回呼因按鍵中止解碼
 
   PixelCache cache;
   bool caching{false};
@@ -41,50 +43,43 @@ struct PngContext {
   uint8_t* grayLineBuffer{nullptr};
 };
 
-// File I/O callbacks use pFile->fHandle to access the HalFile*,
+// File I/O callbacks use pFile->fHandle to access the DecodeFile* (HalFile ＋ v247 預讀緩衝),
 // avoiding the need for global file state.
-void* pngOpenWithHandle(const char* filename, int32_t* size) {
-  // v194：throwing new HalFile 在 -fno-exceptions 下 OOM 會 abort。失敗不呼叫 close()。
-  HalFile* f = new (std::nothrow) HalFile();
-  if (!f) {
-    HalStorage::noteAllocFail("HalFile:pngOpen", sizeof(HalFile));
-    return nullptr;
-  }
-  // v194：HalStorage 已有 const char* 多載。std::string(filename) 在 nothrow 守衛之後仍會 abort。
-  if (!Storage.openFileForRead("PNG", filename, *f)) {
-    delete f;
-    return nullptr;
-  }
-  *size = f->size();
-  return f;
-}
+void* pngOpenWithHandle(const char* filename, int32_t* size) { return openDecodeFile("PNG", filename, size); }
 
-void pngCloseWithHandle(void* handle) {
-  HalFile* f = reinterpret_cast<HalFile*>(handle);
-  if (f) {
-    f->close();
-    delete f;
-  }
-}
+void pngCloseWithHandle(void* handle) { closeDecodeFile(handle); }
 
+// v247：讀／跳走預讀層（語意與直接呼叫 HalFile 相同，桌機比對見 ReadAheadCore.h）。
 int32_t pngReadWithHandle(PNGFILE* pFile, uint8_t* pBuf, int32_t len) {
-  HalFile* f = reinterpret_cast<HalFile*>(pFile->fHandle);
-  if (!f) return 0;
-  return f->read(pBuf, len);
+  auto* d = static_cast<DecodeFile*>(pFile->fHandle);
+  if (!d || len <= 0) return 0;
+  int32_t bytesRead;
+  {
+    DecodeStatTimer t(g_decodeStats.readUs);  // v246 儀器
+    bytesRead = d->read(pBuf, static_cast<size_t>(len));
+  }
+  if (d->hadError()) g_decodeStats.ioError = 1;
+  g_decodeStats.readCalls++;
+  if (bytesRead > 0) g_decodeStats.readBytes += static_cast<uint32_t>(bytesRead);
+  return bytesRead;
 }
 
 int32_t pngSeekWithHandle(PNGFILE* pFile, int32_t pos) {
-  HalFile* f = reinterpret_cast<HalFile*>(pFile->fHandle);
-  if (!f) return -1;
-  return f->seek(pos);
+  auto* d = static_cast<DecodeFile*>(pFile->fHandle);
+  if (!d || pos < 0) return -1;
+  const bool ok = d->seek(static_cast<size_t>(pos));
+  if (d->hadError()) g_decodeStats.ioError = 1;
+  return ok;
 }
 
-// The PNG decoder (PNGdec) is ~42 KB due to internal zlib decompression buffers.
-// We heap-allocate it on demand rather than using a static instance, so this memory
-// is only consumed while actually decoding/querying PNG images. This is critical on
-// the ESP32-C3 where total RAM is ~320 KB.
-constexpr size_t PNG_DECODER_APPROX_SIZE = 44 * 1024;                          // ~42 KB + overhead
-constexpr size_t MIN_FREE_HEAP_FOR_PNG = PNG_DECODER_APPROX_SIZE + 16 * 1024;  // decoder + 16 KB headroom
+// The PNG decoder (PNGdec) is heap-allocated on demand rather than a static instance, so this memory
+// is only consumed while actually decoding PNG images.
+// v245：原註解寫「~42 KB」是過期的 —— 裝置上 sizeof(PNG) 實測 59,456 B（PNG_MAX_BUFFERED_PIXELS=16416），
+//   而且是【一整塊】，比內部堆讀幾章後的連續塊天花板（約 53KB，CLAUDE.md 硬限制第 6 條）還大 →
+//   p2 一被切開，每張 PNG 都 png-alloc-decoder 失敗直到重開機（diag244-2；同一張圖 v191 就失敗過）。
+//   scripts/patch_pngdec.py 把 zlib 視窗（PNG_ZLIB_BUF_SIZE，約 40KB）與列緩衝（16,416）搬出物件，
+//   這裡分三塊配。【總量】不變，所以總量門檻沿用舊值 60KB（行為不變；它本來就只比真實總量多約 0.5KB）。
+constexpr size_t MIN_FREE_HEAP_FOR_PNG = 60 * 1024;
 
 // PNGdec keeps TWO scanlines in its internal ucPixels buffer (current + previous)
 // and each scanline includes a leading filter byte.
@@ -214,6 +209,11 @@ int pngDrawCallback(PNGDRAW* pDraw) {
   if (!ctx || !ctx->config || !ctx->renderer || !ctx->grayLineBuffer) return 0;
 
   ImageToFramebufferDecoder::yieldDuringDecode(ctx->lastYieldMs);
+  // v260：同 JPEG —— 按鍵中止（只有閱讀器補圖那一遍會 arm）。
+  if (ImageToFramebufferDecoder::inputAbortRequested()) {
+    ctx->inputAborted = true;
+    return 0;
+  }
 
   int srcY = pDraw->y;
   int srcWidth = ctx->srcWidth;
@@ -357,11 +357,23 @@ bool PngToFramebufferConverter::decodeToFramebuffer(const std::string& imagePath
     return false;
   }
 
-  // Heap-allocate PNG decoder (~42 KB) - freed at end of function
+  // v245：解碼器分三塊配，大的先配（先配大塊才不會被小塊切掉最大的洞）。宣告順序＝解構逆序：
+  // cleanup（png->close）→ png → pixelBuf → zlibBuf，close 不碰這兩塊緩衝。
+  // v251：列緩衝改到 open() 之後、依圖寬配剛好的大小（見下面 requiredInternal）。原本固定 16,416B 先配 ——
+  //   268px 寬的章首圖只要約 2KB，而那 16KB 在背景排版的碎片化堆上要另找一塊 ≥17,408 的洞，常常就是配不到的那一塊。
+  auto zlibBuf = makeUniqueNoThrow<uint8_t[]>(PNG_ZLIB_BUF_SIZE);
+  if (!zlibBuf) {
+    LOG_ERR("PNG", "Failed to allocate PNG zlib buffer (%u bytes)", static_cast<unsigned>(PNG_ZLIB_BUF_SIZE));
+    setLastError(true, "png-alloc-zlib %u", static_cast<unsigned>(PNG_ZLIB_BUF_SIZE));
+    lastErrorNeedBytes = static_cast<uint32_t>(PNG_ZLIB_BUF_SIZE);  // v255
+    return false;
+  }
+  std::unique_ptr<uint8_t[]> pixelBuf;
   std::unique_ptr<PNG> png(new (std::nothrow) PNG());
   if (!png) {
     LOG_ERR("PNG", "Failed to allocate PNG decoder");
-    setLastError(true, "png-alloc-decoder");
+    setLastError(true, "png-alloc-decoder %u", static_cast<unsigned>(sizeof(PNG)));
+    lastErrorNeedBytes = static_cast<uint32_t>(sizeof(PNG));  // v255
     return false;
   }
 
@@ -371,6 +383,8 @@ bool PngToFramebufferConverter::decodeToFramebuffer(const std::string& imagePath
   ctx.screenWidth = renderer.getScreenWidth();
   ctx.screenHeight = renderer.getScreenHeight();
 
+  g_decodeStats.fmt = 'P';
+  const uint32_t setupStartUs = static_cast<uint32_t>(micros());  // v246 儀器：open → cache.begin
   int rc = png->open(imagePath.c_str(), pngOpenWithHandle, pngCloseWithHandle, pngReadWithHandle, pngSeekWithHandle,
                      pngDrawCallback);
   const ScopedCleanup cleanup{[&png]() { png->close(); }};
@@ -379,7 +393,6 @@ bool PngToFramebufferConverter::decodeToFramebuffer(const std::string& imagePath
     setLastError(false, "png-open rc=%d", rc);
     return false;
   }
-
   ImageDimensions sourceDimensions;
   if (!validateAndStoreDimensions(png->getWidth(), png->getHeight(), sourceDimensions, "PNG")) return false;
 
@@ -426,6 +439,30 @@ bool PngToFramebufferConverter::decodeToFramebuffer(const std::string& imagePath
     return false;
   }
 
+  // v251：列緩衝＝剛好 requiredInternal（現在列＋前一列＋各自 16B 對齊，PNGdec DecodePNG 用到 2×pitch＋32，這裡 2×pitch＋34）。
+  //   放在 isSupportedBitDepth 之後：16-bit 樣本的 pitch 是 bytesPerPixelFromType 的兩倍，這個公式只對支援的深度成立。
+  //   ⚠️ PNGdec 只有在 decode() 帶 PNG_FAST_PALETTE 時會用 ucPixels[PNG_MAX_BUFFERED_PIXELS-512] 當調色盤表 ——
+  //   下面 decode(&ctx, 0) 沒帶；哪天要帶，這裡必須改回配滿 PNG_MAX_BUFFERED_PIXELS。
+  //   ⚠️ 必須清零：PNGdec 從不清「前一列」（第一列的 Up／Average／Paeth 濾波要讀到 0）—— 以前緩衝在 PNG 物件裡、open() 會 memset，
+  //   搬出來之後靠 makeUniqueNoThrow 的 value-init（new T[n]()）撐住。桌機用未清零的 malloc 會解出不同的圖（tools/decode-io-check/png_exact）。
+  //   尾端多留 16B（防禦用）：PNGdec 內建 zlib 的 ALLOWS_UNALIGNED 路徑一次搬 4 bytes、最多寫出目標尾端 3 bytes，
+  //   而 requiredInternal 在最壞對齊下只剩 2 bytes。⚠️ 裝置建置【沒有】定義它（用 riscv32 編譯器預處理 inffast.c／inflate.c 確認：
+  //   條件是 64 位元或 HAL_ESP32_HAL_H_，而 zlib 的 include 鏈不含 Arduino 標頭）→ 裝置逐 byte 複製、不溢出；
+  //   64 位元桌機測試會開，比裝置嚴苛。那條路徑在「兩列之間的對齊間隔 < 3」時理論上也會蓋到另一列（PNGdec 原本的配置，與緩衝大小無關）。
+  //   桌機（tools/decode-io-check/png_exact.sh）：裝置版 zlib＋ASan 1,312 次與滿大小逐位元組相同、越界 0；
+  //   一般編譯把兩塊緩衝前後填對抗內容、起點錯開，8,896 次與 PIL 逐位元組相同（滿大小對照組同樣全對）。
+  constexpr int kInflateOvershootGuard = 16;
+  const size_t pixelBufBytes = static_cast<size_t>(requiredInternal + kInflateOvershootGuard);
+  pixelBuf = makeUniqueNoThrow<uint8_t[]>(pixelBufBytes);
+  if (!pixelBuf) {
+    LOG_ERR("PNG", "Failed to allocate PNG row buffer (%u bytes)", static_cast<unsigned>(pixelBufBytes));
+    setLastError(true, "png-alloc-rows %u", static_cast<unsigned>(pixelBufBytes));
+    lastErrorNeedBytes = static_cast<uint32_t>(pixelBufBytes);  // v255
+    return false;
+  }
+  // open() 會把整個內部結構 memset 歸零 —— 緩衝指標必須在它之後、decode() 之前設。
+  png->setBuffers(zlibBuf.get(), pixelBuf.get());
+
   // The converter expands each source row to 8-bit grayscale before dithering,
   // so this scratch buffer is sized by source pixels even when PNGdec reads a
   // packed 1/2/4-bit row internally.
@@ -441,7 +478,8 @@ bool PngToFramebufferConverter::decodeToFramebuffer(const std::string& imagePath
   auto grayLineBuffer = makeUniqueNoThrow<uint8_t[]>(grayBufSize);
   if (!grayLineBuffer) {
     LOG_ERR("PNG", "Failed to allocate gray line buffer");
-    setLastError(true, "png-alloc-gray");
+    setLastError(true, "png-alloc-gray %u", static_cast<unsigned>(grayBufSize));
+    lastErrorNeedBytes = static_cast<uint32_t>(grayBufSize);  // v255
     return false;
   }
   ctx.grayLineBuffer = grayLineBuffer.get();
@@ -455,21 +493,58 @@ bool PngToFramebufferConverter::decodeToFramebuffer(const std::string& imagePath
   ctx.caching = !config.cachePath.empty();
   if (ctx.caching) {
     if (!ctx.cache.begin(config.cachePath, ctx.dstWidth, ctx.dstHeight, config.x, config.y, 1)) {
+      // v248：同 JPEG —— 串流時配不到快取帶就退回抽到 SD 的舊路，不准沒快取硬解。
+      if (g_decodeStats.streamed) {
+        setLastError(true, "stream-nocache");
+        return false;
+      }
       LOG_ERR("PNG", "Failed to start cache stream, continuing without caching");
       ctx.caching = false;
     }
   }
 
+  g_decodeStats.setupUs += static_cast<uint32_t>(micros()) - setupStartUs;
+  g_decodeStats.srcW = static_cast<uint16_t>(ctx.srcWidth);
+  g_decodeStats.srcH = static_cast<uint16_t>(ctx.srcHeight);
+  g_decodeStats.dstW = static_cast<uint16_t>(ctx.dstWidth);
+  g_decodeStats.dstH = static_cast<uint16_t>(ctx.dstHeight);
+  g_decodeStats.scaleDenom = 1;
+
   unsigned long decodeStart = millis();
   ctx.lastYieldMs = decodeStart;
-  rc = png->decode(&ctx, 0);
+  {
+    DecodeStatTimer t(g_decodeStats.decodeUs);  // v246 儀器
+    rc = png->decode(&ctx, 0);
+  }
   unsigned long decodeTime = millis() - decodeStart;
 
   ctx.grayLineBuffer = nullptr;
 
+  // v260：按鍵中止 —— 不是失敗（同 JPEG）。
+  if (ctx.inputAborted) {
+    setLastError(true, "aborted-input");
+    lastDecodeAborted = true;
+    if (ctx.caching) ctx.cache.abort();
+    return false;
+  }
+
   if (rc != PNG_SUCCESS) {
     LOG_ERR("PNG", "Decode failed: %d", rc);
     setLastError(false, "png-decode rc=%d", rc);
+    if (ctx.caching) ctx.cache.abort();
+    return false;
+  }
+  // v247：同 JPEG —— 讀檔出過錯就不寫永久快取，當暫時失敗下次重試。
+  if (g_decodeStats.ioError) {
+    LOG_ERR("PNG", "I/O error during decode, dropping cache: %s", imagePath.c_str());
+    setLastError(true, "png-io");
+    if (ctx.caching) ctx.cache.abort();
+    return false;
+  }
+  // v248：同 JPEG —— 串流來源寫出快取前驗完整（IEND 之後的零頭、宣告大小、解壓錯誤）。
+  if (!verifyActiveDecodeSourceComplete()) {
+    LOG_ERR("PNG", "Streamed source incomplete/corrupt, dropping cache: %s", imagePath.c_str());
+    setLastError(true, "stream-verify");
     if (ctx.caching) ctx.cache.abort();
     return false;
   }
@@ -478,6 +553,7 @@ bool PngToFramebufferConverter::decodeToFramebuffer(const std::string& imagePath
 
   // Finalize the streamed cache (caching may have been cleared on a flush error).
   if (ctx.caching) {
+    DecodeStatTimer t(g_decodeStats.finalizeUs);  // v246 儀器
     ctx.cache.finalize();
   }
 

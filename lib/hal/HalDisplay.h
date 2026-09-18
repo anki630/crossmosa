@@ -1,4 +1,6 @@
 #pragma once
+
+#include <atomic>
 #include <Arduino.h>
 #include <EInkDisplay.h>
 
@@ -52,6 +54,14 @@ class HalDisplay {
   // does). Panels without deferral fall back to a blocking refresh.
   void displayBufferAsync(RefreshMode mode = RefreshMode::FAST_REFRESH);
   // Block until a pending deferred refresh completes (no-op when none is).
+  // v269（實機回報：從封面跳回主畫面「灰灰的、像褪色的報紙」）：
+  //   抗鋸齒是在黑白之後用弱波形把灰「推」上去；`cleanupGrayscaleBuffers` 之後**控制器平面**是黑白畫面，
+  //   但**面板上**留著那些灰。下一次整頁刷新若走差分（FAST/DU），只驅動變化處 → 灰留在原地。
+  //   ⚠️ 狀態住在這一層，不讓 app 拿自己的旗標跨 task 讀（codex：畫灰階的是算繪任務、離開閱讀器的是主任務，
+  //      那是真的資料競爭，而且順序也保證不了）。設旗標的是畫灰階的那個 task，取用的是下一次整頁刷新，
+  //      兩邊都在這裡、用 atomic 交換 —— 誰先到誰負責清。
+  void noteGrayPanelDirty() { grayPanelDirty_.store(true, std::memory_order_relaxed); }
+
   void waitRefreshComplete();
   // True when displayBufferAsync() genuinely overlaps (panel driver defers);
   // false where it falls back to a blocking refresh.
@@ -116,8 +126,15 @@ class HalDisplay {
   uint16_t getDisplayWidthBytes() const;
   uint32_t getBufferSize() const;
 
+  // v245：每次推畫面上面板（B/W、async、refresh、灰階底、預處理、灰階）就加一 —— 在呼叫驅動【之前】加，
+  // 計的是「嘗試」不是「成功」（保守：失敗也算變了）。用途是「面板上現在是不是我上次畫的那一幀」——
+  // 中間開過選單、別的畫面時序號會變。deepSleep 不計：睡眠畫面本身會推幀，醒來是重開機（RAM 歸零）。
+  uint32_t frameSeq() const { return frameSeq_; }
+
  private:
   EInkDisplay einkDisplay;
+  uint32_t frameSeq_ = 0;
+  std::atomic<bool> grayPanelDirty_{false};  // v269：見 noteGrayPanelDirty
 };
 
 extern HalDisplay display;
