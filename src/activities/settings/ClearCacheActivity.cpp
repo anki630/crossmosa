@@ -286,6 +286,21 @@ void ClearCacheActivity::clearCache(bool keepProgress) {
     clearedCount++;
   }
   root.close();
+  // v320：桌布平面快取（<DataDir>/wallcache，見 SleepActivity.cpp）也算快取 —— 它會跨重刷韌體留在卡上，
+  //   「清除快取」清不到它的話，使用者沒有任何介面能清（codex 複查第 10 條）。不存在時 removeDir 失敗是正常的。
+  {
+    static char wallDir[96];
+    const int wn = snprintf(wallDir, sizeof(wallDir), "%s/wallcache", DataDir::path());
+    if (wn > 0 && static_cast<size_t>(wn) < sizeof(wallDir) && Storage.exists(wallDir)) {
+      const bool wok = Storage.removeDir(wallDir);
+      DiagLog::line("CACHECLEAR wallcache ok=%d", wok ? 1 : 0);
+      if (wok) {
+        clearedCount++;
+      } else {
+        failedCount++;
+      }
+    }
+  }
   // v292：一行把整件事講完。`dirs=` 是掃到的書籍快取資料夾（逐格式），
   //   `cleared=`／`failed=` 是實際處理的結果。txt 沒被刪到的話，看 `txt=` 是 0（沒掃到）
   //   還是 >0 而 `failed=` 也 >0（掃到了但刪不掉）—— 兩者的修法完全不同。

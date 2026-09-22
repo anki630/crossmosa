@@ -67,12 +67,16 @@ void ActivityManager::renderTaskLoop() {
       const uint32_t us = micros() - t0;
       if (fd) {
         const auto& s1 = fd->getStats();
-        DiagLog::line("UIDRAW %s us=%lu glyphs=%lu miss=%lu dec=%lums", who.c_str(), (unsigned long)us,
+        // v312：bank= 這次繪製實際用的刷新 bank（render() 內含 displayBuffer，所以是本次的）。
+        //   用途：證明跳過 logo 後「首頁那次是 GC、之後那次不是」—— 沒有它分不出 FULL 是省掉還是延後。
+        DiagLog::line("UIDRAW %s us=%lu glyphs=%lu miss=%lu dec=%lums bank=%u", who.c_str(), (unsigned long)us,
                       (unsigned long)(s1.getBitmapCalls - s0.getBitmapCalls),
                       (unsigned long)(s1.cacheMisses - s0.cacheMisses),
-                      (unsigned long)(s1.decompressTimeMs - s0.decompressTimeMs));
+                      (unsigned long)(s1.decompressTimeMs - s0.decompressTimeMs),
+                      static_cast<unsigned>(renderer.lastRefreshBank()));
       } else {
-        DiagLog::line("UIDRAW %s us=%lu nofd", who.c_str(), (unsigned long)us);
+        DiagLog::line("UIDRAW %s us=%lu nofd bank=%u", who.c_str(), (unsigned long)us,
+                      static_cast<unsigned>(renderer.lastRefreshBank()));
       }
     }
     // Notify any task blocked in requestUpdateAndWait() that the render is done.
@@ -239,8 +243,8 @@ void ActivityManager::goToReader(std::string path, const bool allowFastInitialRe
   replaceActivity(std::make_unique<ReaderActivity>(renderer, mappedInput, std::move(path), allowFastInitialRefresh));
 }
 
-void ActivityManager::goToSleep(bool fromTimeout) {
-  replaceActivity(std::make_unique<SleepActivity>(renderer, mappedInput, fromTimeout));
+void ActivityManager::goToSleep() {
+  replaceActivity(std::make_unique<SleepActivity>(renderer, mappedInput));
   loop();  // Important: sleep screen must be rendered immediately, the caller will go to sleep right after this returns
 }
 
@@ -289,6 +293,38 @@ void ActivityManager::popActivity() {
 }
 
 bool ActivityManager::preventAutoSleep() const { return currentActivity && currentActivity->preventAutoSleep(); }
+
+// v327：全域淺睡眠的黑名單制 —— 看的是【目前】的 activity（推在上面的那個）；閱讀器上疊選單時選單說可以，
+//   閱讀器仍活在下面。沒有 activity（開機早期）就不睡。
+bool ActivityManager::supportsLightSleep() const {
+  // codex（v327）：黑名單要看【整個堆疊】—— WiFi 畫面上疊一個鍵盤／確認框，最上層說可以、底下的網路 activity
+  //   就被留在 RAM，而淺睡眠會把 WiFi 關掉、醒來也不會重新 onEnter。
+  if (!currentActivity || !currentActivity->supportsLightSleep()) return false;
+  return std::all_of(stackActivities.begin(), stackActivities.end(),
+                     [](const auto& activity) { return activity->supportsLightSleep(); });
+}
+
+// v327：閱讀器是不是【最上層】（不是「堆疊裡有」）—— wake frame 只在這時才寫，否則存到的是選單／註腳畫面。
+bool ActivityManager::currentIsReaderActivity() const { return currentActivity && currentActivity->isReaderActivity(); }
+
+// v329：閱讀器可能在堆疊裡（上面疊著選單）—— 全部問一遍。
+unsigned ActivityManager::flushProgress() {
+  unsigned fails = 0;
+  for (auto& activity : stackActivities) {
+    if (activity && activity->flushProgress() < 0) fails++;
+  }
+  if (currentActivity && currentActivity->flushProgress() < 0) fails++;
+  return fails;
+}
+
+unsigned ActivityManager::flushProgressDurable() {
+  unsigned fails = 0;
+  for (auto& activity : stackActivities) {
+    if (activity && activity->flushProgressDurable() < 0) fails++;
+  }
+  if (currentActivity && currentActivity->flushProgressDurable() < 0) fails++;
+  return fails;
+}
 
 bool ActivityManager::isReaderActivity() const {
   return std::any_of(stackActivities.begin(), stackActivities.end(),

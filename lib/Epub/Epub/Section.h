@@ -72,6 +72,9 @@ class Section {
   bool buildVertical_ = false;
   // v187：最近一次 loadSectionFile 丟掉快取的原因（0 無／1 版號／2 參數／3 CSS 截斷重排／4 partial 尾段壞）。
   uint8_t lastLoadReject_ = 0;
+  // v309：最近一次比對時，【存檔裡】記的 em。配上現場量到的那個，就能一次分辨
+  // 「是 em 對不上」還是「別的欄位變了」—— reject=2 有十幾個欄位，不該靠猜。
+  int32_t lastFileEmFP_ = -1;
   mutable bool lastLoadWasLowMemory_ = false;  // v152，見 lastLoadWasLowMemory()
   // Pages laid out by the active build (== build_->lut.size()). Distinct from pageCount,
   // which is the pages *available to read* and also counts a loaded partial file's pages.
@@ -127,6 +130,8 @@ class Section {
   /// 重建從章首跑到同一個長段落、再撞同一次 OOM）；真 parse error 才走原本的錯誤路徑。
   bool lastBuildWasLowMemory() const { return lastBuildWasLowMemory_; }
   uint8_t lastLoadReject() const { return lastLoadReject_; }
+  // v309：見 lastFileEmFP_ 的說明。-1 表示這次沒讀到檔頭（例如版號就不符）。
+  int32_t lastFileEmFP() const { return lastFileEmFP_; }
   // v194：src 讀走後歸零。-1＝沒有待寫的 SECTPOISON 行。
   static int lastPoisonAvoidedSpine;
 

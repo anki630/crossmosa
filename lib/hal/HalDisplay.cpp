@@ -33,6 +33,19 @@ void HalDisplay::begin(bool seamless) {
   }
 }
 
+void HalDisplay::defuseInitialFullSyncsKeepResync() {
+  // 見 HalDisplay.h 的說明。只在 begin(seamless=false) 之後、第一次繪製之前呼叫。
+  // 8279：_oldPlaneValid=true、_initialFullsRemaining=0；8253：_initialFullSyncsRemaining=0、_redRamSynced=true。
+  // 兩者都不碰 _forceFullSyncNext。
+  // ⚠️ v316 更正：codex 第二輪說「GC 不看舊平面」是錯的。8279 的 GC 是 KW 兩平面波形，
+  //    displayStart 只在 !_oldPlaneValid 時才把 DTM1 填白；v312 用 skipInitialResync() 把
+  //    _oldPlaneValid 硬設成 true → 第一次 GC 拿【開機後的 RAM 垃圾】當舊幀差分 → 使用者看到
+  //    「像電視開機的橫線」。改成只歸零初繪預算（defuseInitialFulls），_oldPlaneValid 留 false：
+  //    首頁那次 GC 先填白舊平面再刷（多一次 52KB SPI ≈ 30ms），之後計數 0 → 下一次 FAST 走 DU。
+  //    「保留一次性 resync」仍是前提；若哪天 begin() 不再對電源鍵喚醒 requestResync()，這裡要自己補。
+  einkDisplay.defuseInitialFulls();
+}
+
 void HalDisplay::clearScreen(uint8_t color) const { einkDisplay.clearScreen(color); }
 
 void HalDisplay::drawImage(const uint8_t* imageData, uint16_t x, uint16_t y, uint16_t w, uint16_t h,

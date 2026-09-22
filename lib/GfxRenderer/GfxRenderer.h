@@ -89,6 +89,19 @@ class GfxRenderer {
   mutable int _stripRows = 0;
   mutable bool _stripActive = false;
 
+  // v320：上一次 drawBitmap／drawBitmap1Bit 有沒有【整張畫完】（配不到列緩衝、讀列失敗都會提早返回）。
+  //   桌布平面快取只在三趟都完整時才存檔，否則壞掉的半張圖會被當成有效快取永久留在 SD 卡上。
+  mutable bool _lastBitmapOk = false;
+
+  // v313 證人：probeEmFP 最後一次量到的碼位／路徑／原始值／像素（純觀測；只在 _probing 時寫入，
+  //   一般排版的 getTextAdvanceX 不多做任何事）。路徑：1=SD 字寬表命中 2=SD 表未命中→逐字
+  //   3=非 SD 逐字路徑 0=沒量到。要抓的是 v284 起身分裡的 lineHeightEmBits 有沒有在兩次量測間翻轉。
+  mutable bool _probing = false;
+  mutable uint32_t _probeCp = 0;
+  mutable uint8_t _probePath = 0;
+  mutable int32_t _probeAdvFP = 0;
+  mutable int _probePx = 0;
+
   // CJK UI font fallback map: primary (built-in, Latin-only) UI font id -> a
   // size-matched SD-card font id that carries CJK glyphs. When a string drawn
   // or measured with a mapped primary font contains a CJK codepoint the primary
@@ -357,7 +370,15 @@ class GfxRenderer {
   // v284：量一個全形字的字身框（em），12.4 定點；量不到回 0。
   //   ⭐ 直排的欄距與橫排的行距**共用這一支** —— 兩軸同一把尺，才不會各自漂移。
   //   （`vtext::probeEmFP` 現在是這支的薄包裝，保留是為了讓桌面的 vertical-oracle 不必改。）
+  bool lastBitmapDrawOk() const { return _lastBitmapOk; }  // v320
   int32_t probeEmFP(int fontId) const;
+  // v313 證人：上一次 probeEmFP 的量測明細（見 _probeCp 等）。
+  void lastProbeDiag(uint32_t& cp, uint8_t& path, int32_t& advFP, int& px) const {
+    cp = _probeCp;
+    path = _probePath;
+    advFP = _probeAdvFP;
+    px = _probePx;
+  }
 
   // v284：**內文行距 ＝ 字身框 × pitchEm**，與直排欄距同源（都是 em 的倍數）。
   //   在此之前橫排行距直接用字型宣告的 advanceY —— 等於**交給六個字型廠商各自決定**，
@@ -418,7 +439,7 @@ class GfxRenderer {
   void writeGrayscalePlaneStrip(bool lsbPlane, const uint8_t* scratch, int yStart, int numRows) const;
   bool supportsStripGrayscale() const;
   bool storeBwBuffer();    // Returns true if buffer was stored successfully
-  void restoreBwBuffer();  // Restore and free the stored buffer
+  bool restoreBwBuffer();  // Restore and free the stored buffer; false = chunks were missing, nothing restored
   void cleanupGrayscaleWithFrameBuffer() const;
 
   // Font helpers

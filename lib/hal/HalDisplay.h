@@ -33,6 +33,17 @@ class HalDisplay {
   // (~770ms each on X3).
   void begin(bool seamless = false);
 
+  // v312：跳過開機 logo 時用。begin(seamless=false) 之後驅動同時掛著【兩套】機制：
+  //   ① 計數 _initialFullsRemaining=2（前兩次 GC 繪製各消耗一次；X3 8253／8279 皆同）
+  //   ② 一次性 _forceFullSyncNext（requestResync() 設的，下一次繪製強制 GC，之後自動清）
+  //   有 logo 時 ①的兩次由 logo＋首頁吃掉；沒 logo 時第二次會落到首頁之後的第一次操作
+  //   （翻頁／開選單），等於把 ~770ms 的 FULL 延後而不是省掉（codex 複查指出）。
+  //   本方法只歸零①、保留②：首頁那次仍是乾淨的 GC，之後回到正常。
+  //   驅動的 skipInitialResync() 正是這個語意（8279：_oldPlaneValid=true、計數=0，不碰強制旗標）。
+  void defuseInitialFullSyncsKeepResync();
+  // v320.1：預建桌布快取在 splash 之前畫過進度提示 → 讓接下來的第一個畫面走乾淨刷新（一次性 resync）。
+  void requestResync() { einkDisplay.requestResync(); }
+
   // Display dimensions
   static constexpr uint16_t DISPLAY_WIDTH = EInkDisplay::DISPLAY_WIDTH;
   static constexpr uint16_t DISPLAY_HEIGHT = EInkDisplay::DISPLAY_HEIGHT;

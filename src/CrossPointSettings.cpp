@@ -223,6 +223,21 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
     }
   }
 
+  // v330：QuickResume 整條路移除（SLEEP_SCREEN_MODE 少了 6）。泛用迴圈已把舊存檔的 6 夾回預設（DARK），
+  //   但 clamp 不改寫檔案 —— 這裡補一次 resave，免得 6 留在 SD 上等著被日後加的新模式撿走。
+  //   看的是【原始】變體（codex：先窄化成 uint8_t 再比，256／非整數會被折成 0 而漏掉），只在有值且不是
+  //   [0, COUNT) 的整數時才 resave；沒有這個 key 的新檔不會多寫一次。
+  //   `quickResumeSleepScreen` 這個 key 不再有條目：留在舊檔裡沒有讀者，下一次任何設定存檔就消失
+  //   （刻意不為它多寫一次 —— 每台升級的機器都有這個 key，開機路徑上一次 SD 寫入可能停頓 1 秒）。
+  //   ⚠️ 這個 key 名不要重用。
+  {
+    const auto rawSleepScreen = doc["sleepScreen"];
+    if (!rawSleepScreen.isNull() &&
+        (!rawSleepScreen.is<int>() || rawSleepScreen.as<int>() < 0 ||
+         rawSleepScreen.as<int>() >= static_cast<int>(SLEEP_SCREEN_MODE_COUNT)))
+      needsResave = true;
+  }
+
   if (doc["sleepTimeoutMinutes"].isNull() && !doc["sleepTimeout"].isNull()) {
     const uint8_t legacyValue =
         clamp(doc["sleepTimeout"] | (uint8_t)SLEEP_10_MIN, SLEEP_TIMEOUT_COUNT, (uint8_t)SLEEP_10_MIN);

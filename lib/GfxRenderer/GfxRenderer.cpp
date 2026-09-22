@@ -1523,9 +1523,12 @@ void GfxRenderer::drawIcon(const uint8_t bitmap[], const int x, const int y, con
   }
 }
 
+// ⚠️ v320：這支（含 drawBitmap1Bit 與 Bitmap 的抖色）的輸出被【桌布平面快取】存在 SD 卡上。
+//    改了任何會影響像素的邏輯，要把 SleepActivity.cpp 的 WALLCACHE_PIXEL_VERSION +1，否則舊快取照舊算法顯示。
 void GfxRenderer::drawBitmap(const Bitmap& bitmap, const int x, const int y, const int maxWidth, const int maxHeight,
                              const float cropX, const float cropY) const {
   if (fontCacheManager_ && fontCacheManager_->isScanning()) return;
+  _lastBitmapOk = false;  // v320：只有整張畫完才會變 true（桌布平面快取用它決定這一趟能不能存）
   // For 1-bit bitmaps, use optimized 1-bit rendering path (no crop support for 1-bit)
   if (bitmap.is1Bit() && cropX == 0.0f && cropY == 0.0f) {
     drawBitmap1Bit(bitmap, x, y, maxWidth, maxHeight);
@@ -1633,10 +1636,12 @@ void GfxRenderer::drawBitmap(const Bitmap& bitmap, const int x, const int y, con
 
   free(outputRow);
   free(rowBytes);
+  _lastBitmapOk = true;  // v320
 }
 
 void GfxRenderer::drawBitmap1Bit(const Bitmap& bitmap, const int x, const int y, const int maxWidth,
                                  const int maxHeight) const {
+  _lastBitmapOk = false;  // v320
   float scale = 1.0f;
   bool isScaled = false;
   if (maxWidth > 0 && bitmap.getWidth() > maxWidth) {
@@ -1702,6 +1707,7 @@ void GfxRenderer::drawBitmap1Bit(const Bitmap& bitmap, const int x, const int y,
 
   free(outputRow);
   free(rowBytes);
+  _lastBitmapOk = true;  // v320
 }
 
 void GfxRenderer::fillPolygon(const int* xPoints, const int* yPoints, int numPoints, bool state) const {
@@ -2263,10 +2269,15 @@ int GfxRenderer::getTextAdvanceX(const int fontId, const char* text, EpdFontFami
         continue;
       }
       int32_t advFP = sdIt->second->getAdvance(cp, styleIdx);
+      const bool fromTable = advFP != 0;  // v313 證人用
       if (advFP == 0 && !utf8IsCombiningMark(cp)) {
         const AdvanceSdProbeScope probe;
         const EpdGlyph* glyph = font.getGlyph(cp, style);
         advFP = glyph ? glyph->advanceX : 0;
+      }
+      if (_probing) {  // v313 證人：只有 probeEmFP 那一個字會進來
+        _probePath = fromTable ? 1 : 2;
+        _probeAdvFP = advFP;
       }
       widthFP += isSupSub ? (advFP + 1) / 2 : advFP;
     }
@@ -2284,6 +2295,10 @@ int GfxRenderer::getTextAdvanceX(const int fontId, const char* text, EpdFontFami
   int widthPx = 0;
   int32_t prevAdvanceFP = 0;  // 12.4 fixed-point: prev glyph's advance + next kern for snap
   const auto& font = fontIt->second;
+  if (_probing) {  // v313 證人：非 SD（或 SD 但沒有字寬表）的逐字路徑
+    _probePath = 3;
+    _probeAdvFP = 0;
+  }
   while ((cp = utf8NextCodepoint(reinterpret_cast<const uint8_t**>(&text)))) {
     // RTL vowel marks (niqqud/harakat) are zero-advance overlays in drawText — no width.
     if (BidiUtils::isTransparentMark(cp)) {
@@ -2339,13 +2354,26 @@ int32_t GfxRenderer::probeEmFP(const int fontId) const {
   // → 備援鏈：SD 逐碼位快路徑 → getTextAdvanceX（走 fontMap，內建字型有效）
   //   → U+4E00「一」（任何中文字型都有）。回傳 12.4 定點；<= 16 表示量不到。
   for (const uint32_t cp : {0x3000u, 0x4E00u}) {  // U+3000 全形空白：零墨水、五套皆全形
-    const int32_t fast = getCodepointAdvanceFP(fontId, cp, EpdFontFamily::REGULAR);
-    if (fast > 16) return fast;
+    // ⛔⛔ v308：**不再走 getCodepointAdvanceFP 的快路徑。**
+    //   v307 的實機證人把問題釘死了：淺睡眠量到 em=733（12.4 定點，字寬表熱），
+    //   而開書驗證快取時量到 em=736（整數像素×16，表冷）—— 733/16=45.8px、736/16=46.0px。
+    //   快取是在【表熱】時寫入、在【表冷】時驗證，所以永遠對不上 → 每次開書都重排，
+    //   使用者看到「翻過很多次的書又在建立索引」。
+    //   v307 想用「回頭再試一次快路徑」補救，實機證明無效：getTextAdvanceX() 不會建 FP 表。
+    //   ⭐ 這個值的唯一職責是當【快取身分】與行距基準 —— **決定性遠比 0.4% 的精度重要**。
+    //     所以只走一條路：整數像素 × 16。不論表冷表熱、不論 SD 字型或內建字型，值都一樣。
+    //   ⚠️ 代價：與舊快取的身分值不同 → 每個章節會重排【一次】，之後永遠不再發生。
     char utf8[4] = {0};  // 兩者都在 BMP，三位元組編碼
     utf8[0] = static_cast<char>(0xE0 | (cp >> 12));
     utf8[1] = static_cast<char>(0x80 | ((cp >> 6) & 0x3F));
     utf8[2] = static_cast<char>(0x80 | (cp & 0x3F));
+    _probing = true;  // v313 證人：讓 getTextAdvanceX 記下這個字走了哪條路、原始值多少
+    _probePath = 0;
+    _probeAdvFP = 0;
     const int px = getTextAdvanceX(fontId, utf8, EpdFontFamily::REGULAR);
+    _probing = false;
+    _probeCp = cp;
+    _probePx = px;
     if (px > 1) return px * 16;
   }
   return 0;
@@ -2588,7 +2616,7 @@ bool GfxRenderer::storeBwBuffer() {
  * It should be called to restore the BW buffer state after grayscale rendering is complete.
  * Uses chunked restoration to match chunked storage.
  */
-void GfxRenderer::restoreBwBuffer() {
+bool GfxRenderer::restoreBwBuffer() {
   // Check if all chunks are allocated
   bool missingChunks = false;
   for (const auto& bwBufferChunk : bwBufferChunks) {
@@ -2600,7 +2628,7 @@ void GfxRenderer::restoreBwBuffer() {
 
   if (missingChunks) {
     freeBwBufferChunks();
-    return;
+    return false;
   }
 
   for (size_t i = 0; i < bwBufferChunks.size(); i++) {
@@ -2613,6 +2641,7 @@ void GfxRenderer::restoreBwBuffer() {
 
   freeBwBufferChunks();
   LOG_DBG("GFX", "Restored and freed BW buffer chunks");
+  return true;
 }
 
 /**

@@ -102,7 +102,7 @@ class ActivityManager {
   }
 
   void goToReader(std::string path, bool allowFastInitialRefresh = false);
-  void goToSleep(bool fromTimeout = false);
+  void goToSleep();
   void goToBoot();
   void goToFullScreenMessage(std::string message, EpdFontFamily::Style style = EpdFontFamily::REGULAR);
   void goToCrashReport();
@@ -117,6 +117,10 @@ class ActivityManager {
 
   bool preventAutoSleep() const;
   bool isReaderActivity() const;
+  bool supportsLightSleep() const;  // v327：目前 activity 可不可以淺睡眠（黑名單制）
+  bool currentIsReaderActivity() const;  // v327：閱讀器在最上層（wake frame 只在這時寫）
+  unsigned flushProgress();               // v329：current ＋ 堆疊全部 flushProgress()，回【失敗】了幾個
+  unsigned flushProgressDurable();        // v332：同上，但走 SD 檢查點
   bool handleForcedRefresh();
   bool skipLoopDelay() const;
   ScreenshotInfo getScreenshotInfo() const;

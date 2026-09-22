@@ -45,6 +45,7 @@ void FontCacheManager::clearCache() {
   // v110:快取被清空 ⇒ 身分必然失效。做在機制裡而不是靠每個呼叫點自覺
   // (TxtReader/Dictionary 的既有 scope 因此自動安全)。
   warmIdentity_.invalidate();
+  noteWarmMutation(scopeReason_ ? scopeReason_ : WM_EXTERNAL_CLEAR);  // v313 證人
   if (fontDecompressor_) fontDecompressor_->clearCache();
   for (auto& [id, font] : sdCardFonts_) {
     font->clearCache();
@@ -53,6 +54,7 @@ void FontCacheManager::clearCache() {
 
 size_t FontCacheManager::releaseRetainedCache() {
   warmIdentity_.invalidate();
+  noteWarmMutation(WM_RELEASE);  // v313 證人
   if (fontDecompressor_) fontDecompressor_->clearCache();
   size_t bytes = 0;
   for (auto& [id, font] : sdCardFonts_) {
@@ -153,7 +155,9 @@ void FontCacheManager::recordText(const char* text, int fontId, EpdFontFamily::S
 
 FontCacheManager::PrewarmScope::PrewarmScope(FontCacheManager& manager) : manager_(&manager) {
   manager_->scanMode_ = ScanMode::Scanning;
+  manager_->scopeReason_ = WM_SCOPE_CTOR;  // v313 證人：這一次 clearCache 記成「scope 建構」
   manager_->clearCache();
+  manager_->scopeReason_ = 0;
   manager_->resetStats();
   // 主桶預先配置 2048(與改版前的單一緩衝相同):一頁 800-1000 個中文字約 2.4-3KB;
   // 拆成四桶後若各給一半,主桶反而要多一次 realloc。開頭無從得知哪個字重是主桶,
@@ -282,7 +286,11 @@ FontCacheManager::PrewarmScope::~PrewarmScope() {
   if (active_) {
     endScanAndPrewarm();  // no-op if already called (scanMode_ guard)
     // v110:預設仍然清空(既有行為)。只有明確開了 retain 的呼叫端才把字留下來。
-    if (!retainCacheOnExit_) manager_->clearCache();
+    if (!retainCacheOnExit_) {
+      manager_->scopeReason_ = WM_SCOPE_DTOR;  // v313 證人
+      manager_->clearCache();
+      manager_->scopeReason_ = 0;
+    }
   }
 }
 

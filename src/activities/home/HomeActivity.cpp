@@ -401,9 +401,23 @@ void HomeActivity::render(RenderLock&&) {
   coverRectW = pageWidth;
   coverRectH = metrics.homeCoverTileHeight;
 
+  // v311 證人：首頁「開機後第一次繪製」比之後多約 600ms（v310 log：1,144ms vs 508–571ms），
+  //   而那段沒有任何儀器。差別就在這一行 —— 快照沒還原（bufferRestored=0）時主題要從 SD 讀
+  //   三張縮圖來畫，之後的重繪走 restoreCoverBuffer() 的 RAM 快照。只在慢的那次記（≥50ms 或
+  //   非快照），安靜的重繪不洗版。有了數字才知道「縮圖放 RAM 常駐」值不值得。
+  // 呼叫前先存一份：主題可能透過 reference 改掉 bufferRestored／coverRendered，
+  // 證人要記的是「進入這一行時有沒有快照」，不是呼叫後的狀態（codex 指出）。
+  const bool restoredAtEntry = bufferRestored;
+  const bool renderedAtEntry = coverRendered;
+  const unsigned long coverT0 = millis();
   GUI.drawRecentBookCover(renderer, Rect{0, metrics.homeTopPadding, pageWidth, metrics.homeCoverTileHeight},
                           recentBooks, selectorIndex, coverRendered, coverBufferStored, bufferRestored,
                           std::bind(&HomeActivity::storeCoverBuffer, this));
+  const unsigned long coverMs = millis() - coverT0;
+  if (!restoredAtEntry || coverMs >= 50) {
+    DiagLog::line("HOMECOVER ms=%lu restored=%d rendered=%d books=%u", coverMs, restoredAtEntry ? 1 : 0,
+                  renderedAtEntry ? 1 : 0, static_cast<unsigned>(recentBooks.size()));
+  }
 
   // Build menu items dynamically
   // v275：「最近閱讀比瀏覽檔案更常用」→ 最近閱讀排第一。

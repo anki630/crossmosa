@@ -1,4 +1,5 @@
 #pragma once
+#include "util/NvsStore.h"  // v332：FNV1A_BASIS
 
 #include <atomic>
 #include <WarmIdentity.h>
@@ -137,6 +138,27 @@ class EpubReaderActivity final : public Activity {
   int lastSavedSpineIndex = -1;
   int lastSavedPage = -1;
   int lastSavedPageCount = -1;
+  // v332：三層儲存 —— 閱讀位置的主檔是晶片 NVS（每一次真的翻頁寫，實測 3–4ms、GC 33ms）。progress.bin 只在：
+  //   離開書（onExit）、淺睡眠入口桌布之後的檢查點（flushProgressDurable）、NVS 寫失敗的退路（第一次立刻、之後每 10 次）、
+  //   還沒有 progress.bin 的書第一次翻頁（錨）。休眠前的 flush 只補 NVS。
+  //   開書時 NVS 贏的條件（codex 三輪）：有錨（progress.bin 存在）＋ 同路徑 hash ＋ 同身分（書名 hash ^ spine 數）＋
+  //   NVS 記的 progress.bin 指紋／長度＝現在讀到的（＝SD 那份自我們上次寫之後沒被別人動過）＋ spine／page 在範圍內。
+  //   否則用 SD。⚠️ 接受的殘餘：同路徑、同書名、同 spine 數、同 progress.bin 內容的不同檔案會對上（等於同一本書）。
+  //   ⚠️ 所有寫入仍在 RenderLock 下（render 尾段＝render task；onExit／flush／檢查點＝主任務持鎖）。
+  //   （v329 的「每 10 頁寫 SD」與換章寫 SD 一併拿掉；當機／斷電現在最多丟【一頁】。）
+  bool progressDirty_ = false;     // progress.bin 過期（離開／檢查點時補寫）
+  bool nvsProgDirty_ = false;      // NVS 那格不是目前位置（第一次 render、或 NVS 寫失敗）→ 休眠前補
+  uint32_t sdProgHash_ = NvsStore::FNV1A_BASIS;  // 這本書 progress.bin 的指紋（開書時讀到的／上次寫的）→ NVS 配對
+  uint32_t sdProgLen_ = 0;                       // 同上的長度（0＝沒有檔）
+  uint8_t nvsFailStreak_ = 10;                   // NVS 失敗計數：第一次失敗立刻寫 SD，之後每 10 次一次（v329 節奏；codex）
+  int lastObservedSpine_ = -1;
+  int lastObservedPage_ = -1;
+  uint32_t lastRenderDlogMs_ = 0;  // 上一次 render（含尾段）花在 DiagLog append 的毫秒 → EPLAT dlog=
+  int32_t lastNvsUs_ = -1;         // 上一次尾段的 NVS 進度寫入微秒（-1＝沒寫、-2＝寫失敗）→ EPLAT nvs=
+  uint32_t nvsBookHash_ = 0;       // fnv1a(書路徑)|1，開書時算（onEnter 的進度載入）；0＝還沒算
+  uint32_t nvsBookIdent_ = 0;      // fnv(書名) ^ spine 數×黃金常數：同名不同書的保險（codex 第二輪）
+  bool saveProgressNow(const char* why);
+  int32_t writeProgressNvs(int spineIndex, int page, int pageCount, bool hasOffset, uint32_t offset);  // 回 微秒 或 -2
 
   // v189：abortOnInput —— 從背景 tick（主任務、持鎖）呼叫時為 true：那裡沒有人在輪詢按鍵，
   // 預取的 ~300ms SD 讀取就是盲區，原始電平一有動靜就中止。render 尾端（render task）不開：
@@ -423,6 +445,8 @@ class EpubReaderActivity final : public Activity {
   // （舊視窗設計下這裡整章為真：4 次翻頁 3 次沒有 tick，CPU 卻整章全速。）
   bool skipLoopDelay() override { return (buildTickDue() || nextBuildTickDue()) && !buildHeapPaused; }
   bool isReaderActivity() const override { return true; }
+  int flushProgress() override;  // v329：休眠前把欠的進度寫掉；註腳中改存來源位置（同 onExit）。v332：只補 NVS
+  int flushProgressDurable() override;  // v332：淺睡眠入口桌布之後的 SD 檢查點（沒人等）
   bool handleForcedRefresh() override {
     {
       RenderLock lock(*this);

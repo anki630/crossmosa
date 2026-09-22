@@ -54,6 +54,11 @@ TextSettingsActivity::TextSettingsActivity(GfxRenderer& renderer, MappedInputMan
 
 void TextSettingsActivity::onEnter() {
   Activity::onEnter();
+  // v311：進場先確保 SD 內文字型已載入。v311 起首頁醒來不再於開機時載字型（省 267ms），
+  //   而本頁的預覽走 getReaderFontId() —— 它是惰性的（CLAUDE.md A-3）：未載入就退回內建字型，
+  //   預覽會畫成內建字型而不是使用者選的家族，直到動一次字級／家族（那兩條路本來就有 ensureLoaded）。
+  //   已載入時這一行是 no-op。閱讀器那條由 ReaderActivity::onEnter 負責，不受影響。
+  sdFontSystem.ensureLoaded(renderer);
   ParsedText::setBoldBodyText(SETTINGS.boldBodyText != 0);  // v187：網頁設定頁可能改了它而沒經過這個旗標
 
   metrics_ = UITheme::getInstance().getMetrics();

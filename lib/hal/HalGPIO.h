@@ -125,11 +125,21 @@ class HalGPIO {
     uint16_t requiredMs = 0;      // 設定值（400 或 10）
     uint16_t calibratedMs = 0;    // 實際比較的門檻 = required - millis()，下限 1
   };
+  // v295：earlyEvidenceSatisfied ＝「開機早期的取樣已經證明按住夠久」（main.cpp 的
+  // powerHeldEvidenceMs()）。它**只縮短等待上限**，不改變任何判定：
+  //   還按著 → 實測 9–11ms 內就偵測到（716/716 次），遠低於縮短後的上限 → 行為完全相同
+  //   已放開 → 提早放棄，而那正是 v294 會用證據救回來的情況，結論一樣、只是早 0.94 秒
+  // ⚠️ 傳 false（預設）即維持 v294 行為，逐行等價。
   bool verifyPowerButtonWakeup(uint16_t requiredDurationMs, bool shortPressAllowed,
-                               PowerVerifyDiag* diag = nullptr);
+                               PowerVerifyDiag* diag = nullptr, bool earlyEvidenceSatisfied = false);
 
   // Check if USB is connected
   bool isUsbConnected() const;
+
+  // v303：淺睡眠的待機耗電量測。SOC 是整數百分比 —— 30 分鐘 5mA 只掉 0.17%，量不出東西。
+  // 電壓（mV）與電流（有號 mA）解析度細得多。X3 專用；其他板子回 false 且不改動輸出參數。
+  // ⚠️ 只在「已經決定要睡／剛醒來」時呼叫：它會做兩次 I2C 交易。
+  bool readBatteryVI(uint16_t* outMilliVolts, int16_t* outMilliAmps) const;
 
   // Returns true once per edge (plug or unplug) since the last update()
   bool wasUsbStateChanged() const;

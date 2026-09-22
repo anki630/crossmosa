@@ -1,6 +1,7 @@
 #pragma once
 #include <cstdarg>
 #include <cstddef>
+#include <cstdint>  // v329：writeMsTotal()
 
 // v53 量測儀器(暫時性,量完即移除)。
 //
@@ -67,6 +68,10 @@ void mem(const char* tag);
 // 記一行自由格式文字(翻頁分段耗時、字型 prewarm 統計等)。
 // 回傳是否寫進 diag.log。既有呼叫點可忽略；v194 麵包屑要確認成功才清 RTC。
 bool line(const char* fmt, ...) __attribute__((format(printf, 1, 2)));
+// v329：line() 花在 SD append 上的累計毫秒與次數 —— 閱讀器用差值把「記 log 本身」的成本從翻頁時間裡分出來
+//   （這張卡的小寫入會停頓 ~1.3s，log 的 append 也是小寫入）。
+uint32_t writeMsTotal();
+uint32_t writeCount();
 
 // v249：讀走一個 lib 端的麵包屑（lib/hal/Breadcrumb.h 的跨 task 交接）並寫成「<prefix> <內容>」一行。
 // 沒有就什麼都不做。與原本「看 buf[0]、印、清 [0]」相同語意：diag 沒開時一樣會讀走清掉。

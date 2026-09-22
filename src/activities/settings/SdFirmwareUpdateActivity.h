@@ -32,6 +32,7 @@ class SdFirmwareUpdateActivity : public Activity {
       : Activity("SdFirmwareUpdate", renderer, mappedInput), recoveryMode(recoveryMode) {}
 
   void onEnter() override;
+  bool supportsLightSleep() const override { return false; }  // v327：這個畫面不淺睡眠（見 Activity.h）
   void loop() override;
   void render(RenderLock&&) override;
   bool preventAutoSleep() override { return state == State::UPDATING || state == State::VALIDATING; }

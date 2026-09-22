@@ -22,7 +22,7 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
     COVER = 3,
     COVER_CUSTOM = 4,
     BLANK = 5,
-    QUICK_RESUME = 6,
+    // v330：QUICK_RESUME = 6 連同整條路移除。舊存檔裡的 6 由 loadFromFile 的泛用 clamp 落回預設並 resave。
     SLEEP_SCREEN_MODE_COUNT
   };
   enum SLEEP_SCREEN_COVER_MODE { FIT = 0, CROP = 1, SLEEP_SCREEN_COVER_MODE_COUNT };
@@ -184,12 +184,6 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   enum TILT_PAGE_TURN { TILT_OFF = 0, TILT_NORMAL = 1, TILT_NVERTED = 2, TILT_PAGE_TURN_COUNT };
 
   enum TOUCH_READER_CONTROLS { TOUCH_READER_OFF = 0, TOUCH_READER_ON = 1, TOUCH_READER_CONTROLS_COUNT };
-
-  enum QUICK_RESUME_SLEEP_SCREEN {
-    QUICK_RESUME_NEVER = 0,
-    QUICK_RESUME_AFTER_TIMEOUT = 1,
-    QUICK_RESUME_SLEEP_SCREEN_COUNT
-  };
 
   // Sleep screen settings
   uint8_t sleepScreen = DARK;
@@ -356,8 +350,6 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   // CrossMosa：預設繁體中文（Language::TC = 1）。這是繁中客製韌體，
   // 讓使用者不必首次開機先切一次語言。
   uint8_t language = 1;
-  // Quick Resume: keep current content visible with moon icon instead of showing a static sleep screen.
-  uint8_t quickResumeSleepScreen = QUICK_RESUME_NEVER;
 
   static constexpr uint8_t MIN_SLEEP_TIMEOUT_MINUTES = 1;
   static constexpr uint8_t SLEEP_TIMEOUT_NEVER_MINUTES = 31;

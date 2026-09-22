@@ -123,6 +123,7 @@ class WifiSelectionActivity final : public Activity {
   explicit WifiSelectionActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, bool autoConnect = true)
       : Activity("WifiSelection", renderer, mappedInput), allowAutoConnect(autoConnect) {}
   void onEnter() override;
+  bool supportsLightSleep() const override { return false; }  // v327：這個畫面不淺睡眠（見 Activity.h）
   void onExit() override;
   void loop() override;
   void render(RenderLock&&) override;

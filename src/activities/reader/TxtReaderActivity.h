@@ -1,4 +1,5 @@
 #pragma once
+#include "util/NvsStore.h"  // v332：FNV1A_BASIS
 
 #include <Txt.h>
 
@@ -66,6 +67,22 @@ class TxtReaderActivity final : public Activity {
 
   // --- 串流狀態 ---
   size_t pageStartOffset_ = 0;  // 這一頁從檔案的第幾個位元組開始
+  // v332：三層儲存（同 EPUB）—— 閱讀位置主檔＝NVS，每次真的翻頁寫；progress.bin 只在離開時寫（onExit）；
+  //   休眠前 flush 只補 NVS；NVS 寫失敗 → 當場退回寫 progress.bin。所有寫入仍在 RenderLock 下。
+  bool progressDirty_ = false;   // progress.bin 過期
+  bool nvsProgDirty_ = false;    // NVS 那格不是目前位置
+  uint32_t sdProgHash_ = NvsStore::FNV1A_BASIS;  // progress.bin 的指紋（開書時讀到的／上次寫的）→ NVS 配對
+  uint32_t sdProgLen_ = 0;                       // 同上的長度（0＝沒有檔）
+  uint8_t nvsFailStreak_ = 10;                   // NVS 失敗計數：第一次失敗立刻寫 SD，之後每 10 次一次（codex）
+  bool saveProgressSd(size_t offset, const char* why);  // v332：真的寫 progress.bin ＋ NVS 配對
+  size_t lastObservedOffset_ = SIZE_MAX;
+  uint32_t dlogStartAtRender_ = 0;
+  uint32_t lastRenderDlogMs_ = 0;  // 上一次 render 花在 DiagLog append 的毫秒（含它自己的 TXTPAGE 行）→ 下一次 TXTPAGE dlog=
+  int32_t lastNvsUs_ = -1;         // 上一次 render 的 NVS 進度寫入微秒（-1＝沒寫、-2＝失敗）→ 下一次 TXTPAGE nvs=
+  uint32_t nvsBookHash_ = 0;       // fnv1a(檔案路徑)|1，開書時算（loadProgress）
+  bool saveProgressNow(const char* why);
+  int32_t writeProgressNvs(size_t offset);  // 回 微秒 或 -2
+  void loadProgressSd();                     // v332：原本的 loadProgress（只讀 progress.bin，含舊格式遷移）
   size_t nextPageOffset_ = 0;   // 下一頁的起點(由 loadPageAtOffset 算出,舊版算了卻丟掉)
   bool atLastPage_ = false;     // 這一頁排完就到檔尾了
 
@@ -168,7 +185,7 @@ class TxtReaderActivity final : public Activity {
   int estimatedTotalPages() const;
   int estimatedCurrentPage() const;
 
-  void saveProgress(size_t offset) const;
+  bool saveProgress(size_t offset, uint32_t* fingerprintOut = nullptr, uint32_t* lenOut = nullptr) const;  // v329：回傳 writeAtomic 的成敗；v332：指紋
   void loadProgress();
 
  public:
@@ -183,5 +200,7 @@ class TxtReaderActivity final : public Activity {
   void loop() override;
   void render(RenderLock&&) override;
   bool isReaderActivity() const override { return true; }
+  int flushProgress() override;  // v329；v332：只補 NVS
+  int flushProgressDurable() override;  // v332：淺睡眠入口的 SD 檢查點
   ScreenshotInfo getScreenshotInfo() const override;
 };

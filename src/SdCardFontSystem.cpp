@@ -47,7 +47,7 @@ constexpr UiFontSize kUiFontSizes[] = {
 
 }  // namespace
 
-void SdCardFontSystem::begin(GfxRenderer& renderer) {
+void SdCardFontSystem::begin(GfxRenderer& renderer, const bool loadSelectedNow) {
   registry_.discover();
 
   // Register this system as the SD font ID resolver in settings.
@@ -57,8 +57,10 @@ void SdCardFontSystem::begin(GfxRenderer& renderer) {
   };
   SETTINGS.sdFontResolverCtx = this;
 
-  // If user has a saved SD font selection, load it
-  if (SETTINGS.sdFontFamilyName[0] != '\0') {
+  // If user has a saved SD font selection, load it.
+  // v311：loadSelectedNow=false（首頁醒來）→ 跳過載入，只保留探索與解析器；
+  //   進閱讀器時 ReaderActivity::onEnter 的 ensureLoaded() 會補載（FONTLOAD why=ensure）。
+  if (loadSelectedNow && SETTINGS.sdFontFamilyName[0] != '\0') {
     const auto* family = registry_.findFamily(SETTINGS.sdFontFamilyName);
     if (family) {
       if (manager_.loadFamily(*family, renderer, SETTINGS.fontPointSize)) {

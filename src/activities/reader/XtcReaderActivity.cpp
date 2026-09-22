@@ -44,7 +44,7 @@ void XtcReaderActivity::onEnter() {
 
   // Save current XTC as last opened book and add to recent books
   APP_STATE.openEpubPath = xtc->getPath();
-  APP_STATE.saveToFile();
+  APP_STATE.save();
   RECENT_BOOKS.addBook(xtc->getPath(), xtc->getTitle(), xtc->getAuthor(), xtc->getThumbBmpPath());
 
   // Trigger first update
@@ -55,7 +55,7 @@ void XtcReaderActivity::onExit() {
   Activity::onExit();
 
   APP_STATE.readerActivityLoadCount = 0;
-  APP_STATE.saveToFile();
+  APP_STATE.saveDurable();  // v332：離開書＝沒人等的時刻，NVS＋state.json 都寫（SD 那份是降版／換卡的保險）
   xtc.reset();
 }
 

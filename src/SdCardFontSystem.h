@@ -14,8 +14,9 @@ class SdCardFontSystem {
   SdCardFontSystem() = default;
   SdCardFontSystem(const SdCardFontSystem&) = delete;
   SdCardFontSystem& operator=(const SdCardFontSystem&) = delete;
-  /// Discover SD card fonts and load user's saved selection. Call once during setup.
-  void begin(GfxRenderer& renderer);
+  /// Discover SD card fonts and (when loadSelectedNow) load user's saved selection. Call once during setup.
+  /// v311：首頁醒來不需要內文字型 → 傳 false 只探索＋註冊解析器；之後 ensureLoaded() 會載入。
+  void begin(GfxRenderer& renderer, bool loadSelectedNow = true);
 
   /// Ensure the correct SD font family is loaded for the current settings.
   /// Call before entering the reader or after settings change.

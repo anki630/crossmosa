@@ -66,6 +66,7 @@ class CrossPointWebServerActivity final : public Activity {
   explicit CrossPointWebServerActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)
       : Activity("CrossPointWebServer", renderer, mappedInput) {}
   void onEnter() override;
+  bool supportsLightSleep() const override { return false; }  // v327：這個畫面不淺睡眠（見 Activity.h）
   void onExit() override;
   void loop() override;
   void render(RenderLock&&) override;

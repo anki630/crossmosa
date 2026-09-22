@@ -1,5 +1,6 @@
 #pragma once
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 
 // v110 字型預取:「這份 glyph 快取屬於哪一頁」。
@@ -54,4 +55,38 @@ struct WarmIdentity {
            boldBodyText == cur.boldBodyText;
   }
   void invalidate() { valid = false; }
+
+  // v313 證人用：哪些欄位不同。0 ⇔ matches() 為真。
+  //   bit 0=self.valid 1=cur.valid 2=book 3=spine 4=page 5=font 6=vw 7=vh 8=lh
+  //       9=align 10=imgR 11=extraSp 12=hyph 13=embed 14=focus 15=bold
+  uint16_t diffMask(const WarmIdentity& cur) const {
+    uint16_t m = 0;
+    if (!valid) m |= 1u << 0;
+    if (!cur.valid) m |= 1u << 1;
+    if (bookHash != cur.bookHash) m |= 1u << 2;
+    if (spineIndex != cur.spineIndex) m |= 1u << 3;
+    if (pageNumber != cur.pageNumber) m |= 1u << 4;
+    if (fontId != cur.fontId) m |= 1u << 5;
+    if (viewportWidth != cur.viewportWidth) m |= 1u << 6;
+    if (viewportHeight != cur.viewportHeight) m |= 1u << 7;
+    if (lineHeightEmBits != cur.lineHeightEmBits) m |= 1u << 8;
+    if (paragraphAlignment != cur.paragraphAlignment) m |= 1u << 9;
+    if (imageRendering != cur.imageRendering) m |= 1u << 10;
+    if (extraParagraphSpacing != cur.extraParagraphSpacing) m |= 1u << 11;
+    if (hyphenationEnabled != cur.hyphenationEnabled) m |= 1u << 12;
+    if (embeddedStyle != cur.embeddedStyle) m |= 1u << 13;
+    if (focusReadingEnabled != cur.focusReadingEnabled) m |= 1u << 14;
+    if (boldBodyText != cur.boldBodyText) m |= 1u << 15;
+    return m;
+  }
+  // v313 證人用：緊湊字串（約 55 字元）。o = align(2b) | imgR(2b)<<2 | extra<<4 | hyph<<5 | embed<<6 | focus<<7 | bold<<8。
+  int format(char* out, size_t n) const {
+    const unsigned o = (paragraphAlignment & 3u) | ((imageRendering & 3u) << 2) | (extraParagraphSpacing ? 1u << 4 : 0) |
+                       (hyphenationEnabled ? 1u << 5 : 0) | (embeddedStyle ? 1u << 6 : 0) |
+                       (focusReadingEnabled ? 1u << 7 : 0) | (boldBodyText ? 1u << 8 : 0);
+    return snprintf(out, n, "b:%08lx/s:%ld/p:%ld/f:%ld/wh:%ux%u/lh:%08lx/o:%03x/v:%d", static_cast<unsigned long>(bookHash),
+                    static_cast<long>(spineIndex), static_cast<long>(pageNumber), static_cast<long>(fontId),
+                    static_cast<unsigned>(viewportWidth), static_cast<unsigned>(viewportHeight),
+                    static_cast<unsigned long>(lineHeightEmBits), o, valid ? 1 : 0);
+  }
 };

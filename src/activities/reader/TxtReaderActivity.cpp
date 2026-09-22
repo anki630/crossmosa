@@ -39,6 +39,7 @@
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "util/DiagLog.h"
+#include "util/NvsStore.h"
 #include "util/BookmarkFile.h"
 #include "util/BookmarkUtil.h"
 #include "util/ScreenshotUtil.h"  // v289：選單觸發的截圖
@@ -116,7 +117,7 @@ void TxtReaderActivity::onEnter() {
   auto filePath = txt->getPath();
   auto fileName = filePath.substr(filePath.rfind('/') + 1);
   APP_STATE.openEpubPath = filePath;
-  APP_STATE.saveToFile();
+  APP_STATE.save();
   RECENT_BOOKS.addBook(filePath, fileName, "", "");
 
   // Trigger first update
@@ -124,6 +125,7 @@ void TxtReaderActivity::onEnter() {
 }
 
 void TxtReaderActivity::onExit() {
+  if (progressDirty_) saveProgressNow("exit");  // v329：欠的進度在離開時寫掉（ActivityManager 持 RenderLock）
   Activity::onExit();
 
   // Reset orientation back to portrait for the rest of the UI
@@ -140,7 +142,7 @@ void TxtReaderActivity::onExit() {
   }
 
   APP_STATE.readerActivityLoadCount = 0;
-  APP_STATE.saveToFile();
+  APP_STATE.saveDurable();  // v332：離開書＝沒人等的時刻，NVS＋state.json 都寫（SD 那份是降版／換卡的保險）
   txt.reset();
 }
 
@@ -664,6 +666,11 @@ void TxtReaderActivity::render(RenderLock&&) {
   // （上一輪的存進度＋預取還沒做完時，這一頁要排隊）。
   const uint32_t renderStartMs = millis();
   const uint32_t pressMs = pressMs_.exchange(0);
+  const uint32_t prevDlogMs = lastRenderDlogMs_;  // v329：TXTPAGE dlog= 報【上一次】render 的（含那次 TXTPAGE 自己的 append）
+  lastRenderDlogMs_ = 0;
+  const int32_t prevNvsUs = lastNvsUs_;  // v331：同 dlog，報上一次的
+  lastNvsUs_ = -1;
+  dlogStartAtRender_ = DiagLog::writeMsTotal();
   dispDoneMs_ = 0;  // 這次 render 沒走到面板就不報 lat，不沿用上一頁的時刻
   if (!txt) {
     return;
@@ -752,9 +759,28 @@ void TxtReaderActivity::render(RenderLock&&) {
   }
   prefetchStatValid_ = false;
 
-  const uint32_t saveStartMs = millis();
-  saveProgress(pageOffset);
-  const uint32_t saveMs = millis() - saveStartMs;
+  // v329：進度不在翻頁路徑寫（見 .h）。save= 現在只在真的寫那一頁才非零；只數位置真的變了的 render。
+  uint32_t saveMs = 0;
+  {
+    const bool firstObs = lastObservedOffset_ == SIZE_MAX;
+    const bool moved = !firstObs && pageOffset != lastObservedOffset_;
+    lastObservedOffset_ = pageOffset;
+    if (firstObs || moved) {
+      progressDirty_ = true;  // progress.bin 過期：離開時補寫（第一次 render 也算，同 EPUB）
+      nvsProgDirty_ = true;
+    }
+    if (moved) {
+      if (sdProgLen_ == 0) saveProgressSd(pageOffset, "anchor");  // v332：沒有 progress.bin 先寫一次當錨（同 EPUB）
+      // v332：閱讀位置的主檔＝NVS，每一次真的翻頁寫（同 EPUB）。失敗 → 當場退回寫 progress.bin（save= 就是那次的毫秒）。
+      lastNvsUs_ = writeProgressNvs(pageOffset);
+      if (lastNvsUs_ == -2 && ++nvsFailStreak_ >= 10) {  // 退路：第一次失敗立刻、之後每 10 次（v329 的節奏；codex）
+        nvsFailStreak_ = 0;
+        const uint32_t saveStartMs = millis();
+        saveProgressSd(pageOffset, "nvsfail");
+        saveMs = millis() - saveStartMs;
+      }
+    }
+  }
 
   // v119 分段儀器:v118 只量到 layout,其餘各段都還是從 EPUB 換算的估計值。
   // 只在 SD 根目錄有 /diag.on 時才會真的寫入。
@@ -763,13 +789,14 @@ void TxtReaderActivity::render(RenderLock&&) {
   const bool pressValid = pressMs != 0 && static_cast<uint32_t>(renderStartMs - pressMs) < 10000;
   const uint32_t latWait = pressValid ? renderStartMs - pressMs : 0;
   const uint32_t latTotal = pressValid && dispDoneMs_ != 0 ? dispDoneMs_ - pressMs : 0;
-  DiagLog::line("TXTPAGE off=%u next=%u layout=%u rd=%u fnt=%u wrp=%u prewarm=%u bw=%u disp=%u aa=%u save=%u warm=%u afail=%u dropped=%u lines=%u est=%d/%d eng=2 remap=%u vmiss=%u flush=%u words=%u eoom=%u cut=%u glue=%u vert=%u pitch=%u rescue=%u wait=%u lat=%u",
+  DiagLog::line("TXTPAGE off=%u next=%u layout=%u rd=%u fnt=%u wrp=%u prewarm=%u bw=%u disp=%u aa=%u save=%u warm=%u afail=%u dropped=%u lines=%u est=%d/%d eng=2 remap=%u vmiss=%u flush=%u words=%u eoom=%u cut=%u glue=%u vert=%u pitch=%u rescue=%u wait=%u lat=%u dlog=%u nvs=%d",
                 static_cast<unsigned>(pageOffset), static_cast<unsigned>(nextOffset), layoutMs, segReadMs_, segFontMs_, segWrapMs_, segPrewarmMs_,
                 segBwMs_, segDispMs_, segAaMs_, saveMs, diagWarmHit_, diagAllocFail_, diagDropped_,
                 static_cast<unsigned>(currentPageLines.size()),
                 estimatedCurrentPage(), estimatedTotalPages(), diagRemapMiss_, diagVerifyMiss_, diagFlushes_, diagWords_, diagEngOom_,
                 diagChunkCut_, diagGlue_, vertical_ ? 1u : 0u, static_cast<unsigned>(columnPitch_),
-                diagRescue_, static_cast<unsigned>(latWait), static_cast<unsigned>(latTotal));
+                diagRescue_, static_cast<unsigned>(latWait), static_cast<unsigned>(latTotal),
+                static_cast<unsigned>(prevDlogMs), static_cast<int>(prevNvsUs));
   // v240：txt 也寫 SDCFFAIL（EPUB 閱讀器一直有寫）。v239 看得到 afail 卻不知道差多少位元組，
   // 分不出是新引擎把記憶體切碎、還是某頁剛好用到比較多字。預取的失敗會出現在【下一頁】的這一行之後。
   DiagLog::crumb("SDCFFAIL", SdCardFont::lastAllocFail, sizeof(SdCardFont::lastAllocFail));
@@ -780,6 +807,7 @@ void TxtReaderActivity::render(RenderLock&&) {
   if (!atLastPage_ && nextOffset > pageOffset) {
     prefetchNextPage(nextOffset);
   }
+  lastRenderDlogMs_ = DiagLog::writeMsTotal() - dlogStartAtRender_;  // v329：下一次 TXTPAGE 的 dlog=
 
   // v120:消化在這次繪製期間被按下、但當時還不知道要去哪裡的那一次翻頁。
   // 只消化一次(旗標立刻清掉),所以連按多次不會變成無限前進。
@@ -877,7 +905,70 @@ void TxtReaderActivity::renderStatusBar(const size_t offset, const size_t endOff
                     /*pageCountEstimated=*/true, /*progressDecimals=*/2, /*hidePageCount=*/true);
 }
 
-void TxtReaderActivity::saveProgress(const size_t offset) const {
+// v329：閒置／離開／休眠時真的寫（翻頁時每 N 頁那次在 render 裡、有 save= 證人）。
+bool TxtReaderActivity::saveProgressNow(const char* why) { return saveProgressSd(pageStartOffset_, why); }
+
+// v332：真的寫 progress.bin（離開／檢查點／NVS 退路）：成功就記指紋並讓 NVS 那格指向這份（配對）。
+bool TxtReaderActivity::saveProgressSd(const size_t offset, const char* why) {
+  if (!txt) return false;
+  const uint32_t t0 = millis();
+  uint32_t fp = 0, len = 0;
+  const bool ok = saveProgress(offset, &fp, &len);
+  if (ok) {
+    progressDirty_ = false;  // 失敗留著 dirty（codex：不可吞掉）
+    sdProgHash_ = fp;
+    sdProgLen_ = len;
+    writeProgressNvs(offset);
+  }
+  DiagLog::line("PROGRESS save why=%s ok=%d ms=%lu", why, ok ? 1 : 0, static_cast<unsigned long>(millis() - t0));
+  return ok;
+}
+
+int TxtReaderActivity::flushProgress() {
+  if (!txt) return 0;
+  if (!nvsProgDirty_) return 0;  // v332：NVS 已是目前位置（每次翻頁都寫）
+  const int32_t us = writeProgressNvs(pageStartOffset_);
+  if (us != -2) {
+    DiagLog::line("PROGRESS nvs why=flush us=%ld", static_cast<long>(us));
+    return 1;
+  }
+  return saveProgressNow("flush") ? 1 : -1;  // 退路：SD
+}
+
+// v332：淺睡眠入口、桌布已上面板之後（沒人等）→ SD 檢查點（同 EPUB）。
+int TxtReaderActivity::flushProgressDurable() {
+  if (!txt || !progressDirty_) return 0;
+  return saveProgressSd(pageStartOffset_, "checkpoint") ? 1 : -1;
+}
+
+// v332：NVS 進度寫入（render 尾段與 flush 共用）。回傳微秒；-2＝失敗。
+int32_t TxtReaderActivity::writeProgressNvs(const size_t offset) {
+  if (!txt) return -2;
+  if (nvsBookHash_ == 0) nvsBookHash_ = NvsStore::fnv1a(txt->getPath().c_str()) | 1u;
+  NvsStore::ProgBlob pb{};
+  pb.magic = 'P';
+  pb.version = 2;
+  pb.kind = 2;
+  pb.flags = NvsStore::PROG_HAS_OFFSET;
+  pb.bookHash = nvsBookHash_;
+  pb.seq = NvsStore::nextSeq();
+  pb.page = static_cast<uint16_t>(std::clamp<long>(estimatedCurrentPage(), 0, 0xFFFE));
+  pb.pageCount = static_cast<uint16_t>(std::clamp<long>(estimatedTotalPages(), 0, 0xFFFE));
+  pb.offset = static_cast<uint32_t>(offset);
+  pb.sdHash = sdProgHash_;
+  pb.sdLen = static_cast<uint16_t>(std::min<uint32_t>(sdProgLen_, 0xFFFF));
+  pb.identity = static_cast<uint32_t>(txt->getFileSize());  // 同名不同檔的保險
+  uint32_t us = 0;
+  int err = 0;
+  const bool ok = NvsStore::putProg(pb, &us, &err);
+  if (ok) {
+    nvsProgDirty_ = false;
+    nvsFailStreak_ = 10;  // 成功就重設（codex 第二輪）
+  }
+  return ok ? static_cast<int32_t>(us) : -2;
+}
+
+bool TxtReaderActivity::saveProgress(const size_t offset, uint32_t* fingerprintOut, uint32_t* lenOut) const {
   const int page = estimatedCurrentPage();
   const uint32_t off = static_cast<uint32_t>(offset);
   uint8_t data[PROGRESS_SIZE];
@@ -895,10 +986,35 @@ void TxtReaderActivity::saveProgress(const size_t offset) const {
   data[11] = static_cast<uint8_t>((avgBytesPerPage_ >> 24) & 0xFF);
   if (!ProgressFile::writeAtomic(txt->getCachePath(), data, sizeof(data))) {
     LOG_ERR("TRS", "Failed to save progress: offset %u", static_cast<unsigned>(off));
+    return false;
   }
+  if (fingerprintOut) *fingerprintOut = NvsStore::fnv1aBytes(data, sizeof(data));  // v332：NVS 配對用
+  if (lenOut) *lenOut = sizeof(data);
+  return true;
 }
 
+// v332：先讀 progress.bin（舊格式遷移都在裡面），再讓 NVS 蓋過去（同一本書時 NVS 永遠不比 SD 舊）。
+//   avgBytesPerPage_ 留 SD 那份（NVS 沒存；只影響頁數估計）。offset 超出檔案大小就不信（換過卡、同名不同檔）。
 void TxtReaderActivity::loadProgress() {
+  sdProgHash_ = NvsStore::FNV1A_BASIS;
+  sdProgLen_ = 0;
+  loadProgressSd();  // 順便記下 progress.bin 的指紋（讀到幾個 byte 就是幾個）
+  nvsBookHash_ = NvsStore::fnv1a(txt->getPath().c_str()) | 1u;
+  const uint32_t fileSize = static_cast<uint32_t>(txt->getFileSize());
+  NvsStore::ProgBlob pb{};
+  bool used = false;
+  // NVS 贏的條件（同 EPUB，codex）：同一個檔（路徑 hash＋大小）＋ 它記的 progress.bin 指紋／長度＝現在讀到的 ＋ offset 在檔內。
+  if (sdProgLen_ != 0 && NvsStore::readProg(&pb) && pb.kind == 2 && pb.bookHash == nvsBookHash_ && pb.identity == fileSize &&
+      pb.sdHash == sdProgHash_ && pb.sdLen == sdProgLen_ && (pb.flags & NvsStore::PROG_HAS_OFFSET) != 0 &&
+      pb.page != UINT16_MAX && pb.offset < fileSize) {
+    pageStartOffset_ = pb.offset;
+    used = true;
+  }
+  DiagLog::line("PROG src=%s off=%u sdlen=%u", used ? "nvs" : "sd", static_cast<unsigned>(pageStartOffset_),
+                static_cast<unsigned>(sdProgLen_));
+}
+
+void TxtReaderActivity::loadProgressSd() {
   pageStartOffset_ = 0;
   avgBytesPerPage_ = 0;
   const size_t fileSize = txt->getFileSize();
@@ -911,6 +1027,8 @@ void TxtReaderActivity::loadProgress() {
       return;
     }
     got = f.read(data, PROGRESS_SIZE);
+    sdProgLen_ = static_cast<uint32_t>(got);  // v332：指紋（NVS 配對用）
+    sdProgHash_ = NvsStore::fnv1aBytes(data, got);
   }
   if (got < 4) {
     return;

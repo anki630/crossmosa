@@ -462,6 +462,12 @@ void DiagLog::dumpPools(unsigned minBytes, const char* tag) {
   }
 }
 
+#include <atomic>
+static std::atomic<uint32_t> g_writeMsTotal{0};  // render task 與主任務都會呼叫 line()（codex）
+static std::atomic<uint32_t> g_writeCount{0};
+uint32_t DiagLog::writeMsTotal() { return g_writeMsTotal.load(std::memory_order_relaxed); }
+uint32_t DiagLog::writeCount() { return g_writeCount.load(std::memory_order_relaxed); }
+
 bool DiagLog::line(const char* fmt, ...) {
   if (!active()) return false;
   // v58:放大到 384。加了 reuse/cum_reuse 之後最壞情況已達 252 字元,對 256 只剩 4 bytes——
@@ -478,7 +484,10 @@ bool DiagLog::line(const char* fmt, ...) {
     vsnprintf(buf + pre, sizeof(buf) - static_cast<size_t>(pre), fmt, args);
     va_end(args);
   }
+  const uint32_t w0 = millis();
   const bool ok = append(buf);
+  g_writeMsTotal.fetch_add(millis() - w0, std::memory_order_relaxed);  // v329
+  g_writeCount.fetch_add(1, std::memory_order_relaxed);
   LOG_INF("DIAG", "%s", buf);
   return ok;
 }

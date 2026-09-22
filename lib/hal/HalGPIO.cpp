@@ -182,7 +182,17 @@ bool HalGPIO::wasAnyReleased() const { return inputMgr.wasAnyReleased() || merge
 
 bool HalGPIO::anyButtonDownRaw() { return inputMgr.getState() != 0; }
 
-bool HalGPIO::powerDownRaw() { return (inputMgr.getState() & (1u << BTN_POWER)) != 0u; }
+bool HalGPIO::powerDownRaw() {
+  // v310：真的只讀電源腳，一次 digitalRead，約 1µs。
+  //   原本走 inputMgr.getState() —— 那是兩次 analogRead（ADC ladder）之後才 digitalRead，
+  //   委員會鑑識（grok）指出 SAR ADC 切換後緊接讀相鄰腳位會被汙染，而且違反本函式自己
+  //   「原始電平、不經 ADC ladder」的用途。它現在是電源鍵休眠判定的唯一資料來源
+  //   （main.cpp 的 PowerKeyTracker），乾淨與便宜都是硬需求。
+  const int8_t pin = BoardConfig::ACTIVE.input.power;
+  if (pin < 0) return false;
+  const int activeLevel = BoardConfig::ACTIVE.input.powerActiveHigh ? HIGH : LOW;
+  return digitalRead(pin) == activeLevel;
+}
 
 bool HalGPIO::inputActive() {
   // 三段都要：原始電平（按下瞬間）、去彈跳中（放開後 5ms 內）、已認列按著（放開落在 update() 取樣
@@ -229,7 +239,7 @@ bool HalGPIO::isXteinkDevice() const {
 }
 
 bool HalGPIO::verifyPowerButtonWakeup(uint16_t requiredDurationMs, bool shortPressAllowed,
-                                     PowerVerifyDiag* diag) {
+                                     PowerVerifyDiag* diag, bool earlyEvidenceSatisfied) {
   // v197：純診斷輸出。下面的判定邏輯與回傳值一個字都沒動 —— 只在既有的出口各記一筆。
   // ⚠️ 複查質疑「多幾個指令會不會擾動時序」。算術上不會:本函式在開機約 744ms 才被呼叫
   //    （實測 WAKE steps stores=744），而 requiredDurationMs 是 400 或 10 —— 兩者都 < 744，
@@ -266,8 +276,20 @@ bool HalGPIO::verifyPowerButtonWakeup(uint16_t requiredDurationMs, bool shortPre
 
   const auto start = millis();
   inputMgr.update();
-  // inputMgr.isPressed() may take up to ~500ms to return correct state
-  while (!inputMgr.isPressed(BTN_POWER) && millis() - start < 1000) {
+  // 上游註解原本寫「isPressed() may take up to ~500ms to return correct state」——**那是錯的**：
+  // v197–v294 實測 716/716 次，按著的時候 **9–11ms**（一個輪詢週期）就偵測到，而且與本函式
+  // 被呼叫的時刻無關（檢查時刻 600→1,599ms，waited 恆為 10）。等滿 1,000ms 只發生在
+  // 「手指已經放開」時，而那時再等也等不到人。
+  //
+  // v295：早期取樣已證明按住夠久時（earlyEvidenceSatisfied），把上限縮到 60ms。
+  // ⚠️ **判定結果在所有情況下都不變**，只有延遲變短：
+  //    還按著 → ≤11ms 就偵測到，60ms 有 5 倍餘裕 → 走同一條路，行為逐行相同
+  //    已放開 → 提早放棄回 false，而 main.cpp 的早期證據會接住它（v294 已實機驗證 4/4）
+  //    沒有早期證據 → 上限維持 1,000ms，與 v294 完全等價
+  // 實測代價：被救回的喚醒畫面從 3,513ms 提早到約 2,570ms。
+  constexpr unsigned long EARLY_EVIDENCE_WAIT_CAP_MS = 60;
+  const unsigned long waitCapMs = earlyEvidenceSatisfied ? EARLY_EVIDENCE_WAIT_CAP_MS : 1000;
+  while (!inputMgr.isPressed(BTN_POWER) && millis() - start < waitCapMs) {
     delay(10);
     inputMgr.update();
   }
@@ -297,6 +319,19 @@ bool HalGPIO::verifyPowerButtonWakeup(uint16_t requiredDurationMs, bool shortPre
   if (diag) {
     diag->outcome = 0;  // 通過
   }
+  return true;
+}
+
+bool HalGPIO::readBatteryVI(uint16_t* outMilliVolts, int16_t* outMilliAmps) const {
+  // v303：淺睡眠的待機耗電量測。SOC 只有整數百分比 —— 30 分鐘 5mA 掉 0.17%，量不出來；
+  // 電壓（mV）與電流（有號 mA）細得多。X3 才有 BQ27220。
+  if (!deviceIsX3()) return false;
+  uint16_t mv = 0;
+  int16_t ma = 0;
+  if (!X3GPIO::readI2CReg16LE(I2C_ADDR_BQ27220, BQ27220_VOLT_REG, &mv)) return false;
+  if (!X3GPIO::readBQ27220CurrentMA(&ma)) return false;
+  if (outMilliVolts) *outMilliVolts = mv;
+  if (outMilliAmps) *outMilliAmps = ma;
   return true;
 }
 

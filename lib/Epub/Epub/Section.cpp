@@ -290,6 +290,7 @@ bool Section::loadSectionFile(const ReaderRenderSpec& spec) {
       return false;
     }
 
+    lastFileEmFP_ = fileEmFP;  // v309 證人：讓上層能印出「存檔裡的 em」
     if (spec.fontId != fileFontId || spec.lineHeightEm != fileLineHeightEm ||
         renderer.probeEmFP(spec.fontId) != fileEmFP ||
         spec.extraParagraphSpacing != fileExtraParagraphSpacing || spec.paragraphAlignment != fileParagraphAlignment ||

@@ -37,8 +37,31 @@ class FontCacheManager {
   // 不變量:任何 clearCache()/prewarmCache() 都會 invalidate();只有呼叫端在一次
   // 【完整未中止】的 prewarm 之後才顯式 adopt。無人 adopt ⇒ 永遠 invalid ⇒ 永不相符。
   const WarmIdentity& warmIdentity() const { return warmIdentity_; }
-  void adoptWarmIdentity(const WarmIdentity& id) { warmIdentity_ = id; }
-  void invalidateWarm() { warmIdentity_.invalidate(); }
+  // v313 證人：身分／快取「最後一次被誰動過」。純觀測：epoch 每動一次 +1、reason 記原因，
+  //   adoptSeq 每次採用 +1。第二關第一輪量到「預取完成卻冷」升到 11–23%，而 log 分不出是
+  //   身分欄位變了、被人清掉、還是畫到別頁 —— 這三個數字配 WIDA／WIDC 兩行就分得出。
+  enum WarmMut : uint8_t {
+    WM_NONE = 0,
+    WM_ADOPT_PF = 1,        // 預取完成後採用（prefetchNextPage／prefetchIntoNextChapter）
+    WM_SCOPE_CTOR = 2,      // PrewarmScope 建構時的 clearCache（每次預取／冷繪都會）
+    WM_SCOPE_DTOR = 3,      // PrewarmScope 解構、未 retain 時的 clearCache
+    WM_EXTERNAL_CLEAR = 4,  // scope 以外的 clearCache()（中止路徑、其他呼叫端）
+    WM_RELEASE = 5,         // releaseRetainedCache()（低記憶體釋放，十個呼叫點）
+    WM_INVALIDATE = 6,      // invalidateWarm()
+    WM_ADOPT_RENDER = 7,    // 冷繪之後採用
+  };
+  void adoptWarmIdentity(const WarmIdentity& id, const uint8_t reason = WM_ADOPT_PF) {
+    warmIdentity_ = id;
+    warmAdoptSeq_++;
+    noteWarmMutation(reason);
+  }
+  void invalidateWarm() {
+    warmIdentity_.invalidate();
+    noteWarmMutation(WM_INVALIDATE);
+  }
+  uint16_t warmMutEpoch() const { return warmMutEpoch_; }
+  uint8_t warmMutReason() const { return warmMutReason_; }
+  uint16_t warmAdoptSeq() const { return warmAdoptSeq_; }
 
   // RAII scope for two-pass prewarm pattern
   class PrewarmScope {
@@ -89,6 +112,15 @@ class FontCacheManager {
   FontDecompressor* fontDecompressor_ = nullptr;
   // v110:目前快取內容的身分。預設 invalid;沒有人 adopt 就永遠 invalid。
   WarmIdentity warmIdentity_;
+  // v313 證人（見 WarmMut）。scopeReason_ 非 0 ＝ clearCache() 正由 PrewarmScope 呼叫，記成 scope 的原因。
+  void noteWarmMutation(const uint8_t reason) {
+    warmMutEpoch_++;
+    warmMutReason_ = reason;
+  }
+  uint16_t warmMutEpoch_ = 0;
+  uint8_t warmMutReason_ = 0;
+  uint16_t warmAdoptSeq_ = 0;
+  uint8_t scopeReason_ = 0;
 
   enum class ScanMode : uint8_t { None, Scanning };
   ScanMode scanMode_ = ScanMode::None;

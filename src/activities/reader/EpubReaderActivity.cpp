@@ -3,6 +3,7 @@
 #include <Epub/ParsedText.h>
 #include "util/BenchFlags.h"
 #include "util/DiagLog.h"
+#include "util/NvsStore.h"
 #include "EpubReaderActivity.h"
 
 #include <BitmapHelpers.h>
@@ -151,7 +152,7 @@ void moveFinishedBookToReadFolder(const std::string& srcPath, const std::string&
   RECENT_BOOKS.updatePath(srcPath, dstPath, oldCachePath, newCachePath);
   if (APP_STATE.openEpubPath == srcPath) {
     APP_STATE.openEpubPath = dstPath;
-    APP_STATE.saveToFile();
+    APP_STATE.saveDurable();  // v332：搬檔是「沒人等」的路徑，NVS＋SD 都寫
   }
 }
 
@@ -269,6 +270,10 @@ void EpubReaderActivity::onEnter() {
   if (Storage.openFileForRead("ERS", epub->getCachePath() + "/progress.bin", f)) {
     uint8_t data[10];
     int dataSize = f.read(data, sizeof(data));
+    if (dataSize > 0) {  // v332：指紋（NVS 配對用）—— 這些 byte 本來就在手上，零成本
+      sdProgHash_ = NvsStore::fnv1aBytes(data, static_cast<size_t>(dataSize));
+      sdProgLen_ = static_cast<uint32_t>(dataSize);
+    }
     if (dataSize == 4 || dataSize == 6 || dataSize == 10) {
       currentSpineIndex = data[0] + (data[1] << 8);
       nextPageNumber = data[2] + (data[3] << 8);
@@ -289,6 +294,30 @@ void EpubReaderActivity::onEnter() {
       cachedVisibleTextOffset = static_cast<uint32_t>(data[6]) | (static_cast<uint32_t>(data[7]) << 8) |
                                 (static_cast<uint32_t>(data[8]) << 16) | (static_cast<uint32_t>(data[9]) << 24);
     }
+  }
+  // v332：NVS 是閱讀位置的主檔（每頁寫），progress.bin 只在離開書／檢查點寫。NVS 那格贏的條件（codex 第一輪否決了
+  //   「同一本書就贏」）：同一本書（路徑 hash）＋ 它記的 progress.bin 指紋與長度＝現在讀到的（＝SD 那份自我們上次寫之後
+  //   沒被別人動過：降版讀書、清快取、換卡、NVS 寫失敗後的 SD 退路，全都會讓指紋對不上 → SD 贏）＋ spine 在範圍內。
+  {
+    nvsBookHash_ = NvsStore::fnv1a(epub->getPath().c_str()) | 1u;
+    nvsBookIdent_ = NvsStore::fnv1a(epub->getTitle().c_str()) ^
+                    (static_cast<uint32_t>(epub->getSpineItemsCount()) * 2654435761u);
+    NvsStore::ProgBlob pb{};
+    bool used = false;
+    if (sdProgLen_ != 0 && NvsStore::readProg(&pb) && pb.kind == 1 && pb.bookHash == nvsBookHash_ &&
+        pb.identity == nvsBookIdent_ && pb.sdHash == sdProgHash_ && pb.sdLen == sdProgLen_ &&
+        static_cast<int>(pb.spine) < epub->getSpineItemsCount() && pb.page != UINT16_MAX) {
+      currentSpineIndex = pb.spine;
+      nextPageNumber = pb.page;
+      cachedSpineIndex = currentSpineIndex;
+      cachedChapterTotalPageCount = pb.pageCount;
+      if (pb.flags & NvsStore::PROG_HAS_OFFSET) cachedVisibleTextOffset = pb.offset;
+      else cachedVisibleTextOffset.reset();
+      used = true;
+    }
+    DiagLog::line("PROG src=%s spine=%d page=%d off=%ld sdlen=%u", used ? "nvs" : "sd", currentSpineIndex, nextPageNumber,
+                  cachedVisibleTextOffset ? static_cast<long>(*cachedVisibleTextOffset) : -1L,
+                  static_cast<unsigned>(sdProgLen_));
   }
   wakeTProg = millis();
   // We may want a better condition to detect if we are opening for the first time.
@@ -346,7 +375,9 @@ void EpubReaderActivity::onExit() {
   // v279（複查）：延後的寫入若還沒發生就在這裡補完 —— 否則「開書後馬上退出／休眠」會讓
   //   這本書沒進最近閱讀（`APP_STATE` 下面本來就會存，但最近閱讀沒有別的補救點）。
   //   ⚠️ 擺在 `emitBuildEnd` **之後**（複查第二輪）：先把診斷寫出去，再做這兩個慢 I/O。
-  flushDeferredOpenState(/*force=*/true);  // v189：離開（含休眠）時建置若還活著，這裡是最後一個能印 BUILD end 的地方
+  flushDeferredOpenState(/*force=*/true);
+  // v329：欠的進度在離開（含真關機的 goToSleep）時寫掉；註腳中不寫目前位置（下面既有的分支存的是來源位置）。
+  if (footnoteDepth == 0 && progressDirty_) saveProgressNow("exit");  // v189：離開（含休眠）時建置若還活著，這裡是最後一個能印 BUILD end 的地方
   // v31/v155：離開時把全書進度記進最近閱讀（主畫面續讀卡顯示「作者 (45%)」）。
   // 三情況（照舊樹）：讀完＝100；註腳中＝跳過（當前位置是註腳目標不是閱讀原點）；
   // 否則 章內進度 × spine 佔比。
@@ -374,13 +405,15 @@ void EpubReaderActivity::onExit() {
   renderer.setOrientation(GfxRenderer::Orientation::Portrait);
 
   APP_STATE.readerActivityLoadCount = 0;
-  APP_STATE.saveToFile();
+  APP_STATE.saveDurable();  // v332：離開書＝沒人等的時刻，NVS＋state.json 都寫（SD 那份是降版／換卡的保險）
 
   // Leaving mid-footnote loses the in-RAM return stack on deep sleep; persist the
   // pre-footnote position so the book reopens at the link origin, not the footnote.
   if (footnoteDepth > 0 && epub) {
     const SavedPosition& origin = savedPositions[0];
-    saveProgress(origin.spineIndex, origin.pageNumber, 0);
+    const uint32_t t0 = millis();
+    const bool ok = saveProgress(origin.spineIndex, origin.pageNumber, 0);
+    DiagLog::line("PROGRESS save why=exit-origin ok=%d ms=%lu", ok ? 1 : 0, static_cast<unsigned long>(millis() - t0));  // v329
   }
 
   // v175（diag174 定案）：離開時釋放保留中的字型快取（本頁 30–43KB 的 mini）。它原本一直活到
@@ -1691,7 +1724,7 @@ void EpubReaderActivity::flushDeferredOpenState(const bool force) {
   }
   deferredOpenStatePending_ = false;
   const unsigned long t0 = millis();
-  APP_STATE.saveToFile();
+  APP_STATE.save();
   const unsigned long t1 = millis();
   RECENT_BOOKS.addBook(epub->getPath(), epub->getTitle(), epub->getAuthor(), epub->getThumbBmpPath());
   DiagLog::line("OPENSTATE state=%lu recent=%lu", static_cast<unsigned long>(t1 - t0),
@@ -1771,6 +1804,11 @@ void EpubReaderActivity::render(RenderLock&& lock) {
   // v261（codex）：上一次的尾段先取走、立刻作廢 —— 提早 return 的 render 不會留下舊值給下一次（-1＝不知道）。
   const int32_t prevRenderTailMs = lastRenderTailMs_;
   lastRenderTailMs_ = -1;
+  const uint32_t prevDlogMs = lastRenderDlogMs_;   // v329：上一次 render 花在 DiagLog append 的毫秒
+  lastRenderDlogMs_ = 0;                            // 取走即作廢（提早 return 的 render 不留舊值；codex）
+  const int32_t prevNvsUs = lastNvsUs_;             // v331：上一次尾段的 NVS 影子寫入（同樣取走即作廢）
+  lastNvsUs_ = -1;
+  const uint32_t dlogStart = DiagLog::writeMsTotal();
   if (!epub) {
     return;
   }
@@ -1935,7 +1973,14 @@ void EpubReaderActivity::render(RenderLock&& lock) {
     const bool cacheLoaded = !adoptPrebuild && section->loadSectionFile(renderSpec);
     // v187 證人：快取被丟掉的原因（1 版號／2 參數／3 CSS 截斷重排／4 partial 壞）；沒有快取不記。
     if (!adoptPrebuild && !cacheLoaded && section->lastLoadReject() != 0) {
-      DiagLog::line("SCTLOAD reject=%u spine=%d", static_cast<unsigned>(section->lastLoadReject()), currentSpineIndex);
+      // v307 證人：reject=2（參數不符）有十幾個欄位，最可疑的是 em —— 它是【現場量】的，
+      // 而 probeEmFP() 的值以前會隨 advance 表冷熱改變。把當下量到的印出來，
+      // 下一輪就能分辨「是 em 變了」還是「別的欄位變了」。
+      // v309：`em=<現場量到>/<存檔裡的>`。兩個相同 ＝ 不是 em 的問題，是別的欄位
+      // （viewport／邊距／字級／行距／粗體／直排…），我就往那邊查，不必再猜。
+      DiagLog::line("SCTLOAD reject=%u spine=%d em=%ld/%ld", static_cast<unsigned>(section->lastLoadReject()),
+                    currentSpineIndex, static_cast<long>(renderer.probeEmFP(SETTINGS.getReaderFontId())),
+                    static_cast<long>(section->lastFileEmFP()));
     }
     if (cacheLoaded) {
       // Matching render params means identical pagination, so the saved page number is valid
@@ -2398,7 +2443,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
       const SdCardFont* font = sdFontSystem.currentReaderFont();
       // v261：sec／ext／mid／load 見上；ptail＝【上一次】render 在 renderContents 之後的尾段（存進度＋預取等），
       //   它會算進這一次的 wait（按鍵排在它後面）。
-      DiagLog::line("EPLAT wait=%u lat=%u render=%u afail=%u rescue=%u sec=%u ext=%u steps=%u pages=%d mid=%u load=%u ptail=%d",
+      DiagLog::line("EPLAT wait=%u lat=%u render=%u afail=%u rescue=%u sec=%u ext=%u steps=%u pages=%d mid=%u load=%u ptail=%d dlog=%u nvs=%d",
                     static_cast<unsigned>(renderStartMs - pressMs), static_cast<unsigned>(doneMs - pressMs),
                     static_cast<unsigned>(doneMs - start),
                     font ? static_cast<unsigned>(font->getStats().bitmapAllocFailures) : 0u,
@@ -2407,7 +2452,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
                     static_cast<unsigned>(Section::buildStepCount - stepsBeforeExt),
                     static_cast<int>(section ? section->pageCount : 0) - pagesBeforeExt,
                     static_cast<unsigned>(tPhaseMid - tPhaseExt), static_cast<unsigned>(tPhaseLoad - tPhaseMid),
-                    static_cast<int>(prevRenderTailMs));
+                    static_cast<int>(prevRenderTailMs), static_cast<unsigned>(prevDlogMs), static_cast<int>(prevNvsUs));
     }
     lastRenderCompleteMs = millis();
     renderTailStartMs = lastRenderCompleteMs;
@@ -2416,12 +2461,34 @@ void EpubReaderActivity::render(RenderLock&& lock) {
   // Only persist when the position actually changed. render() also runs on menu,
   // bookmark and screenshot re-renders, and writeAtomic is several FAT ops for 6 bytes.
   // Every real page turn changes currentPage, so progress durability is unaffected.
-  if (currentSpineIndex != lastSavedSpineIndex || section->currentPage != lastSavedPage ||
-      section->pageCount != lastSavedPageCount) {
-    if (saveProgress(currentSpineIndex, section->currentPage, section->estimatedTotalPages())) {
-      lastSavedSpineIndex = currentSpineIndex;
-      lastSavedPage = section->currentPage;
-      lastSavedPageCount = section->estimatedTotalPages();
+  // v332：閱讀位置的主檔是 NVS（見 .h）—— 每一次真的翻頁在這裡寫 NVS（3–4ms），progress.bin 只在離開書時寫。
+  //   只數位置相對【上一次 render】真的變了的那些（選單／補圖／截圖的同頁重畫不算；codex）；
+  //   註腳頁不算翻頁、不寫進度（來源位置由 onExit／flush-origin 專責）；第一次 render 只建基準（codex）。
+  if (footnoteDepth == 0) {
+    const bool positionChanged = currentSpineIndex != lastSavedSpineIndex || section->currentPage != lastSavedPage ||
+                                 section->pageCount != lastSavedPageCount;
+    const bool firstObs = lastObservedPage_ < 0;
+    const bool moved = !firstObs && (currentSpineIndex != lastObservedSpine_ || section->currentPage != lastObservedPage_);
+    lastObservedSpine_ = currentSpineIndex;
+    lastObservedPage_ = section->currentPage;
+    if (positionChanged || firstObs) {
+      progressDirty_ = true;  // progress.bin 過期：離開書時補寫（第一次 render 也算，沿用上游「第一頁就寫」的語意）
+      nvsProgDirty_ = true;
+      if (moved) {
+        // v332（codex 第三輪）：這本書還沒有 progress.bin → 先寫一次當【錨】（一本書一次；沒有錨的 NVS 位置開書時不採信，
+        //   否則「刪掉快取目錄」清不掉它）。之後每頁只寫 NVS。
+        if (sdProgLen_ == 0) saveProgressNow("anchor");
+        // v332：閱讀位置的主檔＝NVS，每一次真的翻頁寫（實測 3–4ms、GC 33ms）。offset 用載入時記下的頁首 offset
+        //   （同 saveProgress，不另開 section 檔；沒有就用 flags 明講「沒有」，開書時不會拿 0 當真的 offset）。
+        lastNvsUs_ = writeProgressNvs(currentSpineIndex, section->currentPage, section->estimatedTotalPages(),
+                                      currentPageVisibleOffset.has_value(), currentPageVisibleOffset.value_or(0));
+        if (lastNvsUs_ == -2 && ++nvsFailStreak_ >= 10) {
+          // 退路（codex：壞掉的 NVS 不能變成每頁一次 SD 停頓）：第一次失敗立刻寫 progress.bin，之後每 10 次失敗一次
+          //   —— v329 的節奏，最多丟 10 頁。
+          nvsFailStreak_ = 0;
+          saveProgressNow("nvsfail");
+        }
+      }
     }
   }
 
@@ -2448,6 +2515,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
   // 按鍵處理不碰鎖，中止訊號（isRenderPending）進得來（本樹 FCM 的中止粒度是字重桶之間）。
   prefetchNextPage(SETTINGS.getReaderFontId(), orientedMarginTop, orientedMarginLeft, lastRenderedPage_);
   if (renderTailStarted) lastRenderTailMs_ = static_cast<int32_t>(millis() - renderTailStartMs);  // v261：下一次 EPLAT 的 ptail=
+  lastRenderDlogMs_ = DiagLog::writeMsTotal() - dlogStart;  // v329：下一次 EPLAT 的 dlog=
 }
 
 // v110/v164：預取下一頁的字型 mini 資料到【同一塊】快取，不新增任何常駐記憶體。
@@ -2529,6 +2597,13 @@ void EpubReaderActivity::prefetchNextPage(const int fontId, const int marginTop,
   // 延後到完成才讀 SETTINGS 的話，快照與快取內容可能來自兩套設定（選單改字級的窄窗），
   // 身分就蓋在別套設定建的快取上。
   const WarmIdentity target = buildWarmIdentity(next);
+  // v313 證人：這一次身分裡 lineHeightEmBits 是怎麼量的（碼位／路徑／原始 12.4 值／px），採用時一起印。
+  //   要立刻讀：下面的 loadPage／scan 會再呼叫 getTextAdvanceX，但只有 probeEmFP 會寫這組值。
+  uint32_t pfProbeCp = 0;
+  uint8_t pfProbePath = 0;
+  int32_t pfProbeAdvFP = 0;
+  int pfProbePx = 0;
+  renderer.lastProbeDiag(pfProbeCp, pfProbePath, pfProbeAdvFP, pfProbePx);
   bool completed;
   {
     // ctor 的 clearCache() 清掉的正是【剛畫完那一頁】的快取 —— 此刻已無人使用。
@@ -2580,6 +2655,17 @@ void EpubReaderActivity::prefetchNextPage(const int fontId, const int marginTop,
     // 用進場時的快照，不重讀 currentPage 也不重讀 SETTINGS。
     fcm->adoptWarmIdentity(target);
     diagPrefetchMs = static_cast<unsigned>(millis() - t0);
+    // v313 證人（採用時）：q=採用序號 base/tgt=預取的基準與目標頁 cur=此刻的 currentPage
+    //   id=採用的身分 mut=快取異動 epoch adv=em 探針 cp:路徑:12.4 原始值:px。
+    //   與下一次 WIDC 對照：q／mut 相同 ⇒ 中間沒人動快取，差異全在欄位（diff 遮罩）或頁碼。
+    {
+      char idb[80];
+      target.format(idb, sizeof(idb));
+      DiagLog::line("WIDA q=%u base=%d cur=%d tgt=%d id=%s mut=%u adv=%lx:%u:%ld:%d",
+                    static_cast<unsigned>(fcm->warmAdoptSeq()), basePage, section->currentPage, next, idb,
+                    static_cast<unsigned>(fcm->warmMutEpoch()), static_cast<unsigned long>(pfProbeCp),
+                    static_cast<unsigned>(pfProbePath), static_cast<long>(pfProbeAdvFP), pfProbePx);
+    }
   } else {
     // 半成品快取。scope 解構已清過一次；這一行是保險（clearCache 冪等且自 invalidate）——
     // 這條路徑的正確性不該只靠另一個檔案的解構子記得幫忙。
@@ -2638,8 +2724,9 @@ bool EpubReaderActivity::prefetchIntoNextChapter(const int fontId, const int mar
   } else {
     fcm->clearCache();
   }
-  DiagLog::line("XPREFETCH spine=%d ok=%u ms=%lu", nextSpine, completed ? 1u : 0u,
-                static_cast<unsigned long>(millis() - t0));
+  DiagLog::line("XPREFETCH spine=%d ok=%u ms=%lu q=%u mut=%u", nextSpine, completed ? 1u : 0u,
+                static_cast<unsigned long>(millis() - t0), static_cast<unsigned>(fcm->warmAdoptSeq()),
+                static_cast<unsigned>(fcm->warmMutEpoch()));  // v313 證人：跨章預取的採用序號
   return true;
 }
 
@@ -2718,6 +2805,98 @@ bool EpubReaderActivity::applyDeferredReposition() {
   return changed;
 }
 
+// v332：真的寫 progress.bin 的唯一入口（離開書；NVS 寫失敗的退路）。
+bool EpubReaderActivity::saveProgressNow(const char* why) {
+  if (!epub || !section) return false;
+  const uint32_t t0 = millis();
+  const bool ok = saveProgress(currentSpineIndex, section->currentPage, section->estimatedTotalPages());
+  if (ok) {
+    lastSavedSpineIndex = currentSpineIndex;
+    lastSavedPage = section->currentPage;
+    lastSavedPageCount = section->estimatedTotalPages();
+    progressDirty_ = false;
+  }
+  DiagLog::line("PROGRESS save why=%s ok=%d ms=%lu", why, ok ? 1 : 0, static_cast<unsigned long>(millis() - t0));
+  return ok;
+}
+
+// v332：NVS 進度寫入（render 尾段、flush、SD 寫成功後的配對 共用）。回傳微秒；-2＝失敗（呼叫端決定要不要退回 SD）。
+int32_t EpubReaderActivity::writeProgressNvs(const int spineIndex, const int page, const int pageCount,
+                                             const bool hasOffset, const uint32_t offset) {
+  if (!epub) return -2;
+  if (nvsBookHash_ == 0) nvsBookHash_ = NvsStore::fnv1a(epub->getPath().c_str()) | 1u;
+  NvsStore::ProgBlob pb{};
+  pb.magic = 'P';
+  pb.version = 2;
+  pb.kind = 1;
+  pb.flags = hasOffset ? NvsStore::PROG_HAS_OFFSET : 0;
+  pb.bookHash = nvsBookHash_;
+  pb.seq = NvsStore::nextSeq();
+  pb.spine = static_cast<uint16_t>(std::clamp<int>(spineIndex, 0, 0xFFFE));
+  pb.page = static_cast<uint16_t>(std::clamp<int>(page, 0, 0xFFFE));  // 0xFFFF 留給導覽哨兵（codex）
+  pb.pageCount = static_cast<uint16_t>(std::clamp<int>(pageCount, 0, 0xFFFE));
+  pb.offset = hasOffset ? offset : 0;
+  pb.sdHash = sdProgHash_;  // 配對：這格對應哪一份 progress.bin
+  pb.sdLen = static_cast<uint16_t>(std::min<uint32_t>(sdProgLen_, 0xFFFF));
+  pb.identity = nvsBookIdent_;
+  uint32_t us = 0;
+  int err = 0;
+  const bool ok = NvsStore::putProg(pb, &us, &err);
+  if (ok) {
+    nvsProgDirty_ = false;
+    nvsFailStreak_ = 10;  // 成功就重設：下一次失敗（新的一波）立刻寫 SD（codex 第二輪）
+  }
+  return ok ? static_cast<int32_t>(us) : -2;
+}
+
+// v329：休眠前（enterDeepSleep 持 RenderLock）。註腳中要存【來源】位置 —— RAM 的返回堆疊撐不過真關機，
+//   醒來該回到連結來源不是註腳正文（同 onExit 既有分支；codex 抓到 flush 若只看 dirty 會把註腳正文留在 SD 上）。
+int EpubReaderActivity::flushProgress() {
+  if (!epub || !section) return 0;
+  // v332：休眠前只補 NVS（3ms；桌布前不再有 SD 寫入）。NVS 失敗才退回 progress.bin。
+  if (footnoteDepth > 0) {
+    // 註腳中要存【來源】位置：RAM 的返回堆疊撐不過真關機，醒來該回到連結來源不是註腳正文（同 onExit）。
+    const SavedPosition& origin = savedPositions[0];
+    std::optional<uint32_t> off;
+    if (origin.spineIndex == currentSpineIndex && origin.pageNumber >= 0 && origin.pageNumber < section->pageCount)
+      off = section->getVisibleTextOffsetForPage(static_cast<uint16_t>(origin.pageNumber));
+    const int32_t us = writeProgressNvs(origin.spineIndex, origin.pageNumber, 0, off.has_value(), off.value_or(0));
+    nvsProgDirty_ = true;  // 寫的是來源不是目前頁；回到正文後下一次翻頁會再寫
+    if (us != -2) {
+      DiagLog::line("PROGRESS nvs why=flush-origin us=%ld", static_cast<long>(us));
+      return 1;
+    }
+    const uint32_t t0 = millis();
+    const bool ok = saveProgress(origin.spineIndex, origin.pageNumber, 0);
+    DiagLog::line("PROGRESS save why=flush-origin ok=%d ms=%lu", ok ? 1 : 0, static_cast<unsigned long>(millis() - t0));
+    return ok ? 1 : -1;
+  }
+  if (!nvsProgDirty_) return 0;  // NVS 已是目前位置（每次翻頁都寫）
+  const int32_t us = writeProgressNvs(currentSpineIndex, section->currentPage, section->estimatedTotalPages(),
+                                      currentPageVisibleOffset.has_value(), currentPageVisibleOffset.value_or(0));
+  if (us != -2) {
+    DiagLog::line("PROGRESS nvs why=flush us=%ld", static_cast<long>(us));
+    return 1;
+  }
+  return saveProgressNow("flush") ? 1 : -1;
+}
+
+// v332：淺睡眠入口、桌布已上面板之後（沒人等）→ SD 檢查點：progress.bin 若過期就寫（成功後 NVS 配對）。
+//   淺睡眠中斷電、或之後走另一個 OTA 槽（降版），SD 最多落後「這次醒來之後的翻頁」，不是整段閱讀。
+int EpubReaderActivity::flushProgressDurable() {
+  if (!epub || !section) return 0;
+  if (footnoteDepth > 0) {
+    const SavedPosition& origin = savedPositions[0];
+    const uint32_t t0 = millis();
+    const bool ok = saveProgress(origin.spineIndex, origin.pageNumber, 0);
+    nvsProgDirty_ = true;  // 配對寫進 NVS 的是來源位置，不是目前頁
+    DiagLog::line("PROGRESS save why=checkpoint-origin ok=%d ms=%lu", ok ? 1 : 0, static_cast<unsigned long>(millis() - t0));
+    return ok ? 1 : -1;
+  }
+  if (!progressDirty_) return 0;
+  return saveProgressNow("checkpoint") ? 1 : -1;
+}
+
 bool EpubReaderActivity::saveProgress(int spineIndex, int currentPage, int pageCount) {
   std::optional<uint32_t> offset;
   if (section && spineIndex == currentSpineIndex && currentPage >= 0 && currentPage < section->pageCount) {
@@ -2727,7 +2906,13 @@ bool EpubReaderActivity::saveProgress(int spineIndex, int currentPage, int pageC
                  ? currentPageVisibleOffset
                  : section->getVisibleTextOffsetForPage(static_cast<uint16_t>(currentPage));
   }
-  return EpubReaderUtils::saveProgress(*epub, spineIndex, currentPage, pageCount, offset);
+  uint32_t fp = 0, len = 0;
+  if (!EpubReaderUtils::saveProgress(*epub, spineIndex, currentPage, pageCount, offset, &fp, &len)) return false;
+  // v332：SD 寫成功 → 記指紋，並讓 NVS 那格指向這份（配對）。NVS 失敗無妨：開機會因指紋對不上而選 SD。
+  sdProgHash_ = fp;
+  sdProgLen_ = len;
+  writeProgressNvs(spineIndex, currentPage, pageCount, offset.has_value(), offset.value_or(0));
+  return true;
 }
 
 void EpubReaderActivity::rememberCurrentContentOffset() {
@@ -3008,6 +3193,32 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int pa
   const WarmIdentity current = buildWarmIdentity(pageNo);
   const bool warmHit = fcm && fcm->warmIdentity().matches(current);
   diagWarmHit = warmHit ? 1 : 0;
+  // v313 證人（比對時，只在冷頁印）：q=存的身分是第幾次採用 rp=這次要畫的頁 cur=currentPage
+  //   diff=欄位差異遮罩（WarmIdentity::diffMask；bit0/1 = 存的／現在的 valid）stored/live=兩份身分
+  //   mut=epoch:最後一次動快取的原因（FontCacheManager::WarmMut）adv=這次的 em 探針。
+  //   判讀：diff 只有 bit4（頁碼）⇒ 按鍵排隊畫到別頁；bit8 ⇒ lineHeightEmBits 翻轉（看 adv 路徑）；
+  //   bit0 且 mut 比上一行 WIDA 新 ⇒ 中間被清（reason 說是誰）；q 比 WIDA 大 ⇒ 被另一次預取覆蓋。
+  if (!warmHit) {
+    char stored[80] = "-";
+    char live[80];
+    current.format(live, sizeof(live));
+    unsigned mask = 0xFFFFu, q = 0, ep = 0, why = 0;
+    if (fcm) {
+      fcm->warmIdentity().format(stored, sizeof(stored));
+      mask = fcm->warmIdentity().diffMask(current);
+      q = fcm->warmAdoptSeq();
+      ep = fcm->warmMutEpoch();
+      why = fcm->warmMutReason();
+    }
+    uint32_t pcp = 0;
+    uint8_t ppath = 0;
+    int32_t padv = 0;
+    int ppx = 0;
+    renderer.lastProbeDiag(pcp, ppath, padv, ppx);
+    DiagLog::line("WIDC q=%u rp=%d cur=%d fcm=%d diff=%04x stored=%s live=%s mut=%u:%u adv=%lx:%u:%ld:%d", q, pageNo,
+                  section->currentPage, fcm ? 1 : 0, mask, stored, live, ep, why, static_cast<unsigned long>(pcp),
+                  static_cast<unsigned>(ppath), static_cast<long>(padv), ppx);
+  }
   // wcum 只數翻頁不數重繪 —— 選單關閉必 miss（該次 render 尾端的預取已把快取換成 N+1）、
   // 書籤彈窗關閉必 hit（預取被彈窗閘門擋掉），混進去會把判準兩個方向都污染。
   if (currentSpineIndex != lastWarmSpine || pageNo != lastWarmPage) {
@@ -3026,7 +3237,7 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int pa
     // 採用【有條件】：nullptr 述詞不會中止，false 只可能是硬失敗（該字面快取已整組釋放）。
     // 失敗不採用 —— 身分蓋在空快取上會讓 warm=1 掩蓋 ring 慢頁。
     if (scope->endScanAndPrewarmAbortable(nullptr, nullptr)) {
-      fcm->adoptWarmIdentity(current);
+      fcm->adoptWarmIdentity(current, FontCacheManager::WM_ADOPT_RENDER);  // v313：與預取的採用分開記
     }
   } else {
     // 只歸零統計、不碰快取：診斷行印 per-render 差分，沿用上一頁的數字會誤導。
@@ -3205,7 +3416,7 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int pa
     scope->setRetainCacheOnExit(!section->isBuilding());
     page->render(renderer, fontId, orientedMarginLeft, orientedMarginTop);  // scan only
     if (scope->endScanAndPrewarmAbortable(nullptr, nullptr)) {
-      fcm->adoptWarmIdentity(current);
+      fcm->adoptWarmIdentity(current, FontCacheManager::WM_ADOPT_RENDER);  // v313：與預取的採用分開記
     }
     // v246 儀器：補圖那一遍的 bw＝這兩段＋整頁從快取畫一次。IMGDEC（loop 印）拆的是 imgs 裡的單張。
     DiagLog::line("IMGPAGE imgs=%u rescan=%u spine=%d page=%d", static_cast<unsigned>(tImgDecEnd - tImgDecStart),

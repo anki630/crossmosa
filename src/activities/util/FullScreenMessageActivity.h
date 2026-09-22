@@ -21,4 +21,5 @@ class FullScreenMessageActivity final : public Activity {
         style(style),
         refreshMode(refreshMode) {}
   void onEnter() override;
+  bool supportsLightSleep() const override { return false; }  // v327：這個畫面不淺睡眠（見 Activity.h）
 };

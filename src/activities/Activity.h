@@ -44,6 +44,14 @@ class Activity {
   virtual bool skipLoopDelay() { return false; }
   virtual bool preventAutoSleep() { return false; }
   virtual bool isReaderActivity() const { return false; }
+  // v327：全域淺睡眠（黑名單制）—— 預設可以；WiFi／檔案傳輸／Calibre（WiFi 開著睡等於沒睡，退出時本來就重啟）、
+  //   SD 韌體更新、當機、開機、桌布畫面回 false。淺睡眠只把 framebuffer 留在 RAM，跟畫面內容無關。
+  virtual bool supportsLightSleep() const { return true; }
+  // v329：把欠著沒寫的閱讀進度寫掉（閱讀器不再每頁寫 progress.bin）。休眠前由 enterDeepSleep 呼叫（持 RenderLock）。
+  //   回 0＝沒有要寫的、1＝寫成功、-1＝寫失敗（呼叫端可重試一次並記錄）。
+  virtual int flushProgress() { return 0; }
+  // v332：淺睡眠入口桌布之後的 SD 檢查點（沒人等）：progress.bin 若過期就寫。回傳同 flushProgress。
+  virtual int flushProgressDurable() { return 0; }
   // Returns true when the activity schedules its own forced refresh.
   virtual bool handleForcedRefresh() { return false; }
   virtual bool isHomeActivity() const { return false; }
