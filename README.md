@@ -17,42 +17,29 @@
 
 ![CrossMosa 實機照:全繁中主畫面、明體內文、名畫待機](docs/promo/hero-photo.jpg)
 
-你的 X3，書名還是一排 □□□ 嗎?
+**書名說中文。選單說中文。**
+連「憨」「璐」「羣」「倂」這些字，它都認得。書名不再是一排 □□□。
 
-CrossMosa 只做一件事:**讓 X3 把繁體中文書讀好。**
+**你的書，你挑字體。**
+明體、黑體、硬筆楷書。小字看不清，還有大字版。
 
-**書名、選單、目錄，說中文。**
-連「憨」「璐」「羣」「倂」這類冷僻字都認得。
+**翻頁，跟得上眼睛。**
+你讀這一頁的時候，下一頁的字已經備好了。
 
-**內文想用什麼字體就用什麼。**
-明體、黑體、硬筆楷書任選;看不清小字，另有大字版。
-
-**翻頁跟得上你的眼睛。**
-下一頁要用的字，趁你還在讀這一頁時就先備好了。
-
-**讀到最精彩的一章，不會突然重開機。**
+**讀到最精彩的一章，它不會重開機。**
 
 **闔上機器，它是一幅畫。**
-50 張世界名畫待機壁紙，今天梵谷，明天北齋。
+50 張世界名畫輪流待機。今天梵谷，明天北齋。
 
-還有:OPDS 中文書庫、用瀏覽器傳書進去不必拔卡、三種介面主題、書籤與註腳、螢幕截圖。
-
-安裝就三步:刷韌體 → 複製字型 → 開機切中文。今晚就能開始讀。
-刷壞了也有退路:SD 卡救援模式隨時能換回任何韌體;首刷機器不用接電腦。
-
-這是個人專案，免費開源，不是產品。
+你還可以逛 OPDS 書庫、用瀏覽器傳書進去、換介面主題、加書籤、截圖。
 
 ---
 
-## 這些痛，你遇過幾個?
+刷韌體、複製字型、開機切中文。三步，今晚就能開始讀。
 
-- 書名在檔案清單裡是一排方塊，要一本本點開用猜的。
-- 某些書就是打不開;或讀到一半，整台機器突然重開。
-- 連上 Wi-Fi 想抓書，機器直接當掉。
-- 長篇小說讀到後半，翻頁越來越卡。
-- 選單是英文或簡體;內文沒有台灣讀者習慣的明體。
+刷壞了也回得來。SD 卡救援模式隨時換回任何韌體，第一次刷機不用接電腦。
 
-這五件事，CrossMosa 都修掉了。每一項的來龍去脈在 [CHANGELOG](CHANGELOG.md)。
+免費，開源，個人專案。
 
 ---
 
@@ -570,32 +557,31 @@ Free, open source, one flash and it's yours.
 
 ![CrossMosa on real hardware: Traditional Chinese home menu, serif body text, masterpiece sleep screen](docs/promo/hero-photo.jpg)
 
-Are your book titles still a row of □□□?
+**Titles in Chinese. Menus in Chinese.**
+Including the uncommon characters real book titles use. No more rows of □□□.
 
-CrossMosa does one thing: **read Traditional Chinese books well on the X3.**
+**Your books, your typeface.**
+Serif, sans, brush. Too small to read? There's a large-print pack.
 
-**Titles, menus and tables of contents, in Chinese.**
-Including the uncommon characters real book titles actually use.
-
-**Body text in the face you want.**
-Serif, sans or brush — and a large-print pack if the default is too small.
-
-**Page turns keep up with you.**
-The next page's glyphs are fetched while you are still reading this one.
+**Page turns keep up with your eyes.**
+While you read this page, the next page's glyphs are already loaded.
 
 **The best chapter of the book won't reboot the device.**
 
 **Close it and it's a painting.**
-Fifty curated masterpieces as sleep wallpapers.
+Fifty masterpieces take turns on the sleep screen. Van Gogh today, Hokusai tomorrow.
 
-Also: OPDS libraries, browser-based file transfer (no card removal), three UI themes,
-bookmarks and footnotes, screenshots.
+You can also browse OPDS libraries, send books over from a browser, switch themes,
+bookmark, and take screenshots.
 
-Installing is three steps: flash, copy the fonts, boot and pick Chinese.
-If a flash goes wrong there is always a way back — SD rescue mode can restore any firmware,
+---
+
+Flash the firmware, copy the fonts, boot and pick Chinese. Three steps, and you can start tonight.
+
+If a flash goes wrong you can come back. SD rescue mode restores any firmware,
 and the first flash needs no computer.
 
-Personal project, not a product. Not affiliated with Xteink or with the upstream CrossPoint project.
+Free, open source, a personal project.
 
 Version: `2.0.1` · [Download](https://github.com/anki630/crossmosa/releases/latest) · [Changelog](CHANGELOG.md)
 
@@ -612,15 +598,6 @@ a reading-first memory policy, and X3-specific display tuning.
 
 Newer X3 units ship a different display controller. This build identifies it at boot, so both
 the newer and the older batches work. If your screen already updates normally, you do not need to flash.
-
-## Sound familiar?
-
-- Book titles are a row of boxes in the file list, so you open them one by one to guess.
-- Some books simply won't open — or the device reboots mid-chapter.
-- Joining Wi-Fi to fetch a book hangs the device.
-- Page turns get slower the deeper you are into a long novel.
-
-CrossMosa fixes all four. See the [CHANGELOG](CHANGELOG.md) for how.
 
 ## Install — you must do BOTH steps
 
