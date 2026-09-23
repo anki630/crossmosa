@@ -9,11 +9,10 @@
 **快速前往:**
 [**這一版更新了什麼**](CHANGELOG.md) ·
 [安裝](#安裝) ·
-[主要特色](#主要特色相對原版) ·
 [字集限制](#ui-字型的字集限制請先讀這段) ·
 [螢幕停住了？](#螢幕停住了救援步驟) ·
 [與原版的差異](#與原版-crosspoint-的關係) ·
-[下載 2.0](https://github.com/anki630/crossmosa/releases/latest) ·
+[下載](https://github.com/anki630/crossmosa/releases/latest) ·
 [English](#crossmosa-english)
 
 ![CrossMosa 實機照:全繁中主畫面、明體內文、名畫待機](docs/promo/hero-photo.jpg)
@@ -22,22 +21,30 @@
 
 CrossMosa 只做一件事:**讓 X3 把繁體中文書讀好。**
 
-- **書名、選單、目錄，說中文**——內建 7,973 個漢字，連「憨」「璐」「羣」「倂」這類冷僻字都有。
-- **內文想用什麼字體就用什麼**——明體、黑體、硬筆楷書、直排楷書，五套中文字型。看不清小字另有大字版。
-- **翻頁更快了**——下一頁的字趁你還在讀時先備好;備妥的頁面快 0.3 秒，沒備妥也不會更慢。
-- **讀到最精彩的一章，不會突然重開機**——排版、圖片、字型快取全都有記憶體不足時的退路。
-- **闔上機器，它是一幅畫**——50 張世界名畫待機壁紙，每一張都為這塊 4 階灰階螢幕挑過、裁過、調過;今天梵谷，明天北齋。
+**書名、選單、目錄，說中文。**
+連「憨」「璐」「羣」「倂」這類冷僻字都認得。
+
+**內文想用什麼字體就用什麼。**
+明體、黑體、硬筆楷書任選;看不清小字，另有大字版。
+
+**翻頁跟得上你的眼睛。**
+下一頁要用的字，趁你還在讀這一頁時就先備好了。
+
+**讀到最精彩的一章，不會突然重開機。**
+
+**闔上機器，它是一幅畫。**
+50 張世界名畫待機壁紙，今天梵谷，明天北齋。
+
+還有:OPDS 中文書庫、用瀏覽器傳書進去不必拔卡、三種介面主題、書籤與註腳、螢幕截圖。
 
 安裝就三步:刷韌體 → 複製字型 → 開機切中文。今晚就能開始讀。
-刷壞了也有退路:SD 卡救援模式隨時能換回任何韌體;首刷機器不用接電腦（SD 卡就能刷，見安裝章方法 A）。
+刷壞了也有退路:SD 卡救援模式隨時能換回任何韌體;首刷機器不用接電腦。
 
-這是個人專案，免費開源，不是產品——但上面每一項，都在真機上量測過。
+這是個人專案，免費開源，不是產品。
 
 ---
 
 ## 這些痛，你遇過幾個?
-
-用電子書機讀中文，大概都撞過這幾件事:
 
 - 書名在檔案清單裡是一排方塊，要一本本點開用猜的。
 - 某些書就是打不開;或讀到一半，整台機器突然重開。
@@ -45,15 +52,7 @@ CrossMosa 只做一件事:**讓 X3 把繁體中文書讀好。**
 - 長篇小說讀到後半，翻頁越來越卡。
 - 選單是英文或簡體;內文沒有台灣讀者習慣的明體。
 
-這五條，CrossMosa 各有一個具體的修法，而且都在真機上驗證過:內建 7,973 個漢字（方塊）、
-排版與記憶體護欄（打不開/突然重開）、連線前自動騰出記憶體（Wi-Fi 當機）、
-背景預先排版（後段卡頓）、繁中介面+三套中文字型（語言與字型）。
-細節在下面的特色表;每一項的來龍去脈都在 [CHANGELOG](CHANGELOG.md)。
-
-另外幾樣，是我們所知目前其他 X3 系統上沒有的:
-**翻頁字型預取**（備妥的頁面快 0.3 秒）、**50 張名畫待機策展**、**逐位元組可重現的建置**
-（任何人都能驗證發佈的韌體真的出自這份源碼），以及一個**連官方框架都還沒修的
-Wi-Fi 連線當機**，這裡先修掉了（細節見 CHANGELOG 的 1.0.0 節）。
+這五件事，CrossMosa 都修掉了。每一項的來龍去脈在 [CHANGELOG](CHANGELOG.md)。
 
 ---
 
@@ -70,49 +69,20 @@ Wi-Fi 連線當機**，這裡先修掉了（細節見 CHANGELOG 的 1.0.0 節）
 | | |
 |---|---|
 | **第一次刷，或不知道該選哪一版** | **刷 2.0.1。** 它會自己認出你的螢幕是哪一種，新舊機器都認得。刷舊版才要碰運氣——比較新的 X3 刷上去，畫面就不會再更新 |
-| **已經在用 1.0／1.1／1.2** | 建議升：換一章從十秒左右變成一兩秒，翻頁更順，書裡的圖也更少出不來，冷僻字不再變黑框 |
-| **已經在用 2.0.0** | 建議升：書名裡的黑方塊少了很多，逛 OPDS 書單也不會偶爾當機。設定與進度都不受影響 |
-
-> **2.0 做了什麼**：新一批次 X3 換了面板控制器 **UC8279**，舊韌體刷上去畫面不會更新——
-> 這一版會在開機自動辨識控制器並驅動它，新舊批次都認得。基底對齊 **CrossPoint 1.5.0**。
-> 另外換章從十秒級降到一兩秒、翻頁更順、清除快取可以保留閱讀進度。
-> 完整說明見 [CHANGELOG](CHANGELOG.md)。
+| **已經在用 1.0／1.1／1.2** | 建議升:換一章從十秒左右變成一兩秒，翻頁更順，書裡的圖也更少出不來 |
+| **已經在用 2.0.0** | 建議升:書名裡的黑方塊少了很多，逛 OPDS 書單也不會偶爾當機。設定與進度都不受影響 |
 
 CrossMosa 是原版 [CrossPoint](https://github.com/crosspoint-reader/crosspoint-reader)（本分支的來源專案，開發圈慣稱 upstream）的繁體中文分支。
 原版是通用的開源電子書系統，支援兩種機型、二十幾種介面語言、多種檔案格式。
 CrossMosa 把範圍收窄，專心做三件事:
 
 1. **介面與內文都是繁體中文**——選單、檔名、書名、OPDS 書庫、書的內文。
-2. **閱讀優先**。這台機器只有 320 KB RAM，任何功能都在跟閱讀搶記憶體。
-   凡是會讓翻頁掉字、讓長章節排不出來的東西，一律讓路（見「與原版的差異」）。
-3. **只針對 X3 調校**。原版同時支援 X3 與 X4;本分支的顯示波形時間、記憶體預算、
-   字型尺寸全部照 X3 的 792×528 面板與這顆 ESP32-C3 實測而定。
-   X3 有兩種螢幕驅動晶片：**UC8253**（較早的機器）與 **UC8279**（較新的機器）。
-   本版開機時會自己認出是哪一種，**兩種都已經在實機上刷過**。
+2. **閱讀優先**。凡是會讓翻頁掉字、讓長章節排不出來的東西，一律讓路。
+3. **只針對 X3 調校**。原版同時支援 X3 與 X4;本分支的顯示、記憶體與字型全部照 X3 實測而定。
 
 這是個人專案，不是產品。**沒有任何隸屬於 Xteink 或原版 CrossPoint 專案的關係。**
 
----
-
-## 主要特色（相對原版）
-
-| | 內容 |
-|---|---|
-| **全繁中介面** | 446 個 UI 字串完整翻譯，台灣用語;經過一輪逐字串對照實際畫面的情境複查 |
-| **內建 UI 字型含漢字** | **7,973 個漢字**（BIG5 一級全部，加上掃全書庫挑出來的常用字），檔名 / 書名 / 選單不再是方塊 |
-| **SD 卡中文內文字型** | 五套:黑體、明體、硬筆楷書、直排楷書，各四個字級 16/18/20/22。另有大字版 24/26/28 |
-| **字型預取** | 下一頁要用的字趁你還在讀這一頁的空檔先從 SD 讀好，翻頁中位數 1,278 ms → 952 ms（省約 330 ms） |
-| **CJK 排版** | 逐字斷行、中文行距校正、重組文字時不插多餘空格 |
-| **記憶體護欄群** | 章節排版、斷字、圖片解碼、字型快取、TLS 握手全部有記憶體不足時的降級路徑，不再直接重開機 |
-| **OPDS 中文書庫** | 已造訪頁存 SD 的上/下一頁堆疊、返回保留游標位置、長按翻頁一次一動作、下載完成直接開書 |
-| **圖片與灰階加速** | 有圖的書頁整頁 5,849 ms → 2,422 ms;抗鋸齒的兩個灰階平面合併成單趟走訪 |
-| **網頁傳檔** | 瀏覽器上傳書 / 字型 / 管理 SD 卡，不必拔卡(`http://crossmosa.local`) |
-| **介面重整** | 可選主題：**Formosa**、**Formosa Extended**、**Formosa Pro**（Pro 為這一版新增）。圓角外框 + 左側豎條的統一選取語言、真頁籤形分頁列、e-ink 上不塗滿背景 |
-
 ![OPDS 中文書庫](docs/promo/photo-opds.jpg)
-
-其他:QR 書摘（修正過容量計算，掃得出來）、書籤與註腳、每頁停留時間量測、
-可用哨兵檔開關的裝置端診斷紀錄（這台機器沒有序列埠）。
 
 ---
 
@@ -597,17 +567,52 @@ core 裡，不是本專案能改的)，兩次建置就會差幾十個位元組�
 
 **Traditional-Chinese-focused firmware for the Xteink X3 e-reader**, based on
 [CrossPoint](https://github.com/crosspoint-reader/crosspoint-reader) 1.5.0.
+Free, open source, one flash and it's yours.
 
 ![CrossMosa on real hardware: Traditional Chinese home menu, serif body text, masterpiece sleep screen](docs/promo/hero-photo.jpg)
 
-Version: `2.0.1`
+Are your book titles still a row of □□□?
+
+CrossMosa does one thing: **read Traditional Chinese books well on the X3.**
+
+**Titles, menus and tables of contents, in Chinese.**
+Including the uncommon characters real book titles actually use.
+
+**Body text in the face you want.**
+Serif, sans or brush — and a large-print pack if the default is too small.
+
+**Page turns keep up with you.**
+The next page's glyphs are fetched while you are still reading this one.
+
+**The best chapter of the book won't reboot the device.**
+
+**Close it and it's a painting.**
+Fifty curated masterpieces as sleep wallpapers.
+
+Also: OPDS libraries, browser-based file transfer (no card removal), three UI themes,
+bookmarks and footnotes, screenshots.
+
+Installing is three steps: flash, copy the fonts, boot and pick Chinese.
+If a flash goes wrong there is always a way back — SD rescue mode can restore any firmware,
+and the first flash needs no computer.
+
+Personal project, not a product. Not affiliated with Xteink or with the upstream CrossPoint project.
+
+Version: `2.0.1` · [Download](https://github.com/anki630/crossmosa/releases/latest) · [Changelog](CHANGELOG.md)
+
+> 🧪 **Want to try what's next?** Pre-release **2.1.0-beta.4** adds vertical (top-to-bottom) reading,
+> and the power button now sleeps and resumes where you left off.
+> **Don't start here if this is your first CrossMosa flash** — install 2.0.1 first.
+> See the [2.1.0-beta.4 notes](https://github.com/anki630/crossmosa/releases/tag/v2.1.0-beta.4).
 
 ## What it is
 
 A narrow fork of CrossPoint with one goal: read Traditional Chinese books well on the X3.
 It trades away breadth (other languages, other formats, the X4) for Chinese typography,
-a reading-first memory policy, and X3-specific display tuning. Personal project, not a product.
-Not affiliated with Xteink or with the upstream CrossPoint project.
+a reading-first memory policy, and X3-specific display tuning.
+
+Newer X3 units ship a different display controller. This build identifies it at boot, so both
+the newer and the older batches work. If your screen already updates normally, you do not need to flash.
 
 ## Sound familiar?
 
@@ -616,29 +621,7 @@ Not affiliated with Xteink or with the upstream CrossPoint project.
 - Joining Wi-Fi to fetch a book hangs the device.
 - Page turns get slower the deeper you are into a long novel.
 
-CrossMosa has a specific, device-verified fix for each: 7,973 built-in Han characters,
-out-of-memory guards through layout and rendering, freeing memory before the radio comes up,
-and background pre-pagination. Four things here are, as far as we know, not in any other X3
-system: **glyph prefetch** (~0.3 s off prefetched page turns, never slower), the **curated 50-masterpiece sleep
-wallpapers**, **byte-for-byte reproducible builds**, and a fix for a **Wi-Fi connection crash
-that upstream arduino-esp32 still carries**. See the [CHANGELOG](CHANGELOG.md) for each.
-
-## Highlights vs upstream
-
-- Fully translated Traditional Chinese UI (446 strings, Taiwan usage).
-- Built-in UI font carries **7,973 Han characters** (all of BIG5 Level 1, plus the ones that
-  actually turn up when you scan whole ebook libraries), so filenames, titles and menus render.
-- Five Chinese reading fonts for the SD card — serif, sans, two brush faces (one pre-rotated
-  for vertical text) — four sizes each. A large-print pack (24/26/28) is a separate download.
-- **Glyph prefetch**: the next page's SD reads happen while you are still reading the current page —
-  median page turn 1,278 ms → 952 ms.
-- CJK line breaking, corrected CJK line spacing, no spurious spaces when re-joining text.
-- Out-of-memory guards throughout layout, hyphenation, image decoding, font cache and TLS —
-  low memory degrades instead of rebooting.
-- OPDS improvements for large Chinese libraries; image/greyscale rendering roughly 2.4× faster;
-  browser-based file transfer; UI themes **Formosa**, **Formosa Extended**, and **Formosa Pro**
-  (Pro is new in this release). Newer X3 batches use a **UC8279** panel controller; this build
-  identifies it at boot. If your screen already updates normally, you do not need to flash.
+CrossMosa fixes all four. See the [CHANGELOG](CHANGELOG.md) for how.
 
 ## Install — you must do BOTH steps
 
