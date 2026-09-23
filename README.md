@@ -9,8 +9,8 @@
 **快速前往:**
 [**這一版更新了什麼**](CHANGELOG.md) ·
 [安裝](#安裝) ·
-[字集限制](#ui-字型的字集限制請先讀這段) ·
-[螢幕停住了？](#螢幕停住了救援步驟) ·
+[字型](docs/fonts.md) ·
+[螢幕停住了？](docs/rescue.md) ·
 [與原版的差異](#與原版-crosspoint-的關係) ·
 [下載](https://github.com/anki630/crossmosa/releases/latest) ·
 [English](#crossmosa-english)
@@ -87,363 +87,25 @@ CrossMosa 是下班後的個人專案。如果它讓你的 X3 變好用了，幾
 
 ## 安裝
 
-以下把這套系統（技術上叫「韌體」）刷進機器。
+三步，順的話十分鐘。
 
-<a id="flash-warning"></a>
+1. **刷韌體** — 把 `update.bin` 放進 SD 卡根目錄，關機後按住左側「上一頁」鍵 ＋ 電源鍵。
+2. **複製字型** — 把字型資料夾放進 SD 卡的 `/.fonts/`。沒有字型，中文書會整頁都是方塊。
+3. **開機** — 設定 → 閱讀器 → 閱讀字型，選剛剛那套。
 
-### ⚠️ 先讀這段
+**第一次刷之前，請先讀 [首次安裝](docs/install.md)。** 那裡有風險、備份，和三種刷機方法。
 
-**新一批的 X3 換了螢幕驅動晶片。** 出廠時面板控制器從 **UC8253** 換成 **UC8279**。1.x 不認得它——
-刷完之後畫面就不再更新，可能停在「更新已完成」一個像素都不換，但空白 SD 卡放進去仍會出現資料目錄：
-機器還在跑，只是舊韌體不會驅動新控制器。上游在
-[#2707](https://github.com/crosspoint-reader/crosspoint-reader/pull/2707) 加入偵測、收在 1.5.0，本版包含它。
-
-**如果你想試試，很歡迎。** 換章從十秒級降到一兩秒、翻頁更順、圖片顯示更穩、清除快取可以保留閱讀進度——
-這一版累積的改進不少。它是預發布版，所以請先讀完這一段再開始；除此之外，想嚐鮮就試吧。
-
-**但仍然不保證每一台都成功。** 面板控制器是已知的原因之一，不是唯一的。
-**e-ink 會保留殘影，所以「畫面上有東西」不代表機器還活著**；反過來，韌體也可能正常執行，
-只是面板收不到命令。要判斷機器是死是活，**看 SD 卡上檔案的時間戳，不要看螢幕**。
-上游還有一筆同類的未解回報：[#2183](https://github.com/crosspoint-reader/crosspoint-reader/issues/2183)。
-
-**開始之前，先做這三件事**
-
-1. **把 SD 卡上的 `/.crossmosa/` 整個資料夾備份到電腦。** 設定、Wi-Fi 憑證、OPDS 設定，以及
-   每一本書的閱讀進度都在裡面——重刷韌體救不回來。（下面的救援步驟**不需要**格式化 SD 卡，
-   但社群另一版的做法會要求格式化，備份起來比較安心。）
-2. **SD 卡根目錄只留一個 `.bin` 檔。** 救援時螢幕可能完全沒有畫面，你會看不到自己選了什麼。
-3. **最壞的情況是機器救不回來。** 已經有使用者的機器變成磚，**照著救援程序也沒救回來**。
-   救援是一條可能有用的路，不是保險。刷之前先假設這台機器可能就這樣沒了，你仍然願意，再開始。
-
-> 已經刷了 1.x、**畫面停住不動**的：[救援步驟在這裡](#螢幕停住了救援步驟)。順的話約五到六分鐘。
-
-### ⚠️ 一定要做兩件事，少做一件，中文書就是滿頁方塊
-
-刷韌體**只解決介面**。**書的內文字型不在韌體裡**，它在 SD 卡上。
-
-韌體內建的閱讀備援字型**只有拉丁文**——沒有複製 SD 字型的話，
-選單是正常中文，但**打開任何中文書，內文會整頁都是方塊(□□□□)**。這不是壞掉，是缺字型。
-
-| 步驟 | 檔案 | 去哪 |
-|---|---|---|
-| **1. 刷韌體** | `crossmosa-2.0.1-firmware.zip` | 裝置的 flash |
-| **2. 複製字型** | `crossmosa-2.0.1-sd-fonts.zip` | SD 卡的 `/.fonts/` |
-
-兩個檔案都在同一個 [Release](../../releases) 頁面。
-
-### 步驟 1:刷韌體（首次安裝）
-
-**方法 A — SD 卡首刷（推薦:機器不用接電腦）**
-
-原廠韌體自帶 SD 更新模式。你只需要有辦法把一個檔案放進 SD 卡
-（電腦+讀卡機、或手機+轉接頭都行），機器本身從頭到尾不用接任何東西:
-
-1. 把 zip 裡的 `update.bin` 複製到 SD 卡**根目錄**(檔名已預先改好——
-   這顆就是其他教學裡說要改名的 firmware.bin;注意瀏覽器重複下載會變
-   `update (1).bin`，那樣不行)。
-2. 關機 → **按住左側「上一頁」鍵 + 電源鍵**，看到載入畫面就放手。
-3. 等它刷完自己開機，約五分鐘。**刷完建議把 `update.bin` 從卡上刪掉**
-   （避免日後誤刷舊版）。失敗的話長按電源 5–10 秒強制重開，
-   重新下載檔案再試（多半是檔案沒抓完整）。
-
-這條路是 **X3 限定**（X4 原廠韌體沒有這個組合鍵），而且**不需要電腦偵測得到機器**——
-線材、Hub、驅動有問題、甚至 USB 被鎖，都不影響。社群文件記載它**連 USB-locked
-的機器也適用**。維護者自己的第一次就是這樣刷的（Mac 的 Hub 一直偵測不到機器）。
-
-**方法 B — 網頁 flasher（USB 偵測得到的話）**
-
-1. USB-C 接電腦，喚醒裝置。
-2. 開 https://crosspointreader.com/#flash-tools,選 **X3**，點 **Custom .bin**,
-   上傳 zip 裡的 `update.bin`。
-3. 瀏覽器的序列裝置選單看不到機器?換一個 USB 埠、不要經過 Hub、換一個支援
-   WebSerial 的瀏覽器(Chrome/Edge)。還是不行就回方法 A，不用糾結。
-
-**方法 C — 命令列**（進階）
-
-```bash
-pip install esptool
-esptool.py --chip esp32c3 --port /dev/ttyACM0 --baud 921600 \
-           write_flash 0x10000 update.bin
-```
-
-> zip 裡另附 `bootloader.bin` 與 `partitions.bin`，只有在做完整重刷（0x0 起）時才需要;
-> 一般更新只要 `update.bin`。
-
-> **關於 USB-locked 機器**:部分第三方通路（例如 AliExpress）的機器出廠鎖住 USB 燒錄，
-> 直接向 xteink.com 買的沒有鎖。**方法 A 不受鎖定影響**。上游的警告仍然算數:
-> **不要用 Xteink Unlocker 來刷 CrossMosa**(該工具官方只支援 CrossPoint 與 CrossInk，
-> 刷其他韌體有變磚風險)。退路:CrossMosa 保留完整的 SD 救援模式（見「日後更新」），
-> 但別把它當成保證:已有使用者照著救援程序，機器仍然沒回來。
-> 已知會讓救援失效的情況至少有兩種，我 2026-08 兩種都踩到了:
-> ①救援模式需要**以電源鍵喚醒**才會觸發，所以**韌體一旦卡在開機迴圈就進不去**
-> （重置迴圈的喚醒原因不是電源鍵）;那種情況要先讓**電池完全放光**打斷迴圈才有機會。
-> ②**部分 X3 的 USB 只有充電、沒有資料傳輸**，那種機器上方法 B 與方法 C 完全不可用。
-> 除此之外還有目前無法解釋的失敗案例。**沒有任何一條路能保證把機器救回來。**
-> 上游完整原文:[`docs/UPSTREAM-README.md`](docs/UPSTREAM-README.md) "USB-locked devices"。
-
-### 步驟 2:複製 SD 卡字型
-
-解開 `crossmosa-2.0.1-sd-fonts.zip`，把**整個字型資料夾**複製到 SD 卡的 `/.fonts/` 底下:
-
-```
-SD 卡根目錄
-└── .fonts/
-    ├── NotoSerifTC/          ← 明體(建議先裝這套)
-    │   ├── NotoSerifTC_16.cpfont
-    │   ├── NotoSerifTC_18.cpfont
-    │   ├── NotoSerifTC_20.cpfont
-    │   └── NotoSerifTC_22.cpfont
-    ├── NotoSansTC/           ← 黑體
-    ├── Iansui/               ← 硬筆楷書
-    └── GuanKiapTsingKhai-90/ ← 楷書·直排用
-```
-
-| 字型 | 風格 | 漢字涵蓋 | 大小 | 說明 |
-|---|---|---|---|---|
-| **NotoSerifTC** | 明體 | 27,950 | 88 MB | 建議先裝這套 |
-| **NotoSansTC** | 黑體 | 27,950 | 85 MB | 有粗體，1-bit 下筆畫最穩 |
-| **Iansui** 芫荽 | 硬筆楷書 | 27,950 | 41 MB | 只有 Regular（粗體會退回一般字） |
-| **GuanKiapTsingKhai-90** 原俠正楷 | 楷書·**偽直排** | 27,950 | 41 MB | 字形預先轉了 90 度，見下 |
-| IBMPlexSansTC | 黑體 | 27,950 | 84 MB | 保留的舊選項 |
-
-**五套都收了完整的中文字**——台語文、古文、人名的冷僻字以前會變黑框，現在都有字。
-2.0.1 又補上了電子書實際會用到的符號:圈圈數字 `① ㈠`、注音 `ㄅㄆㄇ`、
-**直排標點 `︿ ﹀ ﹃ ﹄`**、方框幾何 `─ ■ ○ ☆`，以及 CJK 擴充 A 整個區塊。
-⚠️ **2.0.1 之前下載過的請重新下載**，否則那些字仍然是方塊。
-
-### 看不清小字:大字版
-
-另外下載 `crossmosa-2.0.1-sd-fonts-large.zip`,裡面是黑體與明體的大字版，
-字級 **24 / 26 / 28**，裝法完全一樣。
-
-字太大反而不好讀——真正決定舒不舒服的是**一頁剩幾個字**:
-22pt 一頁約 138 字、28pt 剩 85 字（翻頁量 1.6 倍）。再往上翻頁會多到讓人分心，所以停在 28。
-
-**只裝一套也可以**——空間有限就先裝 `NotoSerifTC`。五套全裝約 340 MB，
-但**每個字級是獨立檔案**，只複製你要的那一個就好。
-不影響 RAM:字型是按需從 SD 讀的，不會整份載進記憶體。
-
-> **想直排讀中文（2.0.x 的作法）**:選 `GuanKiapTsingKhai-90`，再把螢幕轉成橫向，
-> 中文就會由上而下、由右而左排列。它的字形是**預先轉了 90 度**的，
-> 所以正常橫排時選它會整頁躺著——只在要直排時用。
->
-> ⚠️ **2.1 之後不要這樣做。** 2.1 有真正的直排（設定 → 閱讀器 → 文字設定 → 版面 → 文字方向），
-> 而真直排配上這套預轉 90 度的字型會讓**每個字躺著**。要楷書請選 `Iansui`（芫荽）——
-> 原俠正楷的主體本來就是芫荽。
-
-**SD 卡要求**:FAT32 或 exFAT。**字型資料夾名稱不可以有空格**（原版已知會 crash，用底線）。
-
-**順手做的步驟 2.5**:firmware zip 裡有一本《歡迎使用 CrossMosa》，把它一起複製進 SD 卡。
-十三章、約十分鐘，每一章結尾都叫你按一顆鍵，讀完這台機器就會用了（含電源鍵的五種本事與救援刷機）——刷完之後第一本就讀它。
-
-![X3 正在讀《歡迎使用 CrossMosa》](docs/promo/photo-guide.jpg)
-
-### 疑難排解:按了組合鍵，出現「更新中」，半分鐘後退回、沒有更新
-
-代表更新器有啟動，是後半段沒過。依序檢查:
-
-1. **檔案大小是否恰為 6,334,624 bytes、sha256 是否為 e1220b43f320b5b06192aa81d6f750da9423111fbddc0822677fa50c0af7c57a**（v2.0.1）——九成的問題在這:
-   下載不完整、瀏覽器存成 `update (1).bin`、Windows 隱藏副檔名變成
-   `update.bin.bin`、誤放整個 zip 沒解壓，**或 SD 卡上殘留著一顆舊的
-   `update.bin`**（更新器抓到的是舊檔——社群實例，換上正確的檔就成功了）。
-   檔案要放在 SD 卡**最外層**;**刷完建議把它刪掉**，免得日後誤刷舊版。
-2. 檔案正確仍失敗 → 接電腦走**網頁 flasher**（方法 B）。瀏覽器的序列裝置
-   選單看不到機器，先換 USB 埠、不要經 Hub、換 Chrome/Edge。
-3. 怎樣都看不到裝置 → 你的機器可能是**出廠鎖定批次**（部分第三方通路），
-   連 SD 更新器都只收原廠簽章的映像。正規解法:用官方的
-   [Xteink Unlocker](https://crosspointreader.com/unlock) 先裝上**官方 CrossPoint**,
-   再用它的「Settings → SD Card Firmware Update」選本專案的 `update.bin` 換裝——
-   CrossMosa 裝上後自帶 SD 救援模式，隨時能刷回官方 CrossPoint，退路完整。
-
-遇到第 3 種情況，請順手回報你的原廠韌體版本號（開一張 issue 即可）——
-我們在收集「哪些批次會擋 SD 首刷」的對照資料，幫到後面的人。
-
-### 日後更新（已刷過 CrossMosa 之後）
-
-從第二次起連讀卡機都可以免了。[Release](../../releases) 頁有**單獨一顆
-`update.bin`**（跟 zip 裡同一顆，免解壓）——手機直接下載，開瀏覽器連上
-機器的網頁傳輸上傳進 SD 卡（或照舊用讀卡機）→
-**設定 → 系統 → SD 卡韌體更新** → 選檔案。韌體會先完整驗證映像檔才寫入，
-比 USB 直刷更保險，USB 被鎖的機器也能用。
-萬一哪天機器開不了機:關機 → 按住左側「上一頁」鍵 → 按電源，直接進同一個
-SD 韌體選擇畫面（救援模式）——這條路只要機器上還是 CrossMosa 就永遠在。
-
-### 步驟 3:第一次開機
-
-1. **開機就是繁體中文**（要英文介面:**設定 → 系統 → 語言 → English**;從原版升級、之前選過英文的，設定會保留，同一路徑可切）。
-2. **選內文字型**:**設定 → 閱讀器 → 閱讀字型**，選剛剛複製的那套。
-   （沒看到就代表 SD 卡路徑不對，檢查是 `/.fonts/字型名/` 而不是 `/.fonts/`。）
-3. 選字級:**設定 → 閱讀器 → 閱讀字級**。清單上會出現你選的那套字型實際有的尺寸（標準包是 16/18/20/22，大字版是 24/26/28）。
-4. 裝置會在 SD 卡建 `/.crossmosa/` 放進度、書籤、Wi-Fi 憑證與快取。**不要刪它。**
-5. 版號顯示在**開機畫面**與**設定頁**，確認是 `2.0.1`。
-
-### 傳書進去
-
-- **拔 SD 卡**直接複製（最穩，大檔尤其）。
-- **網頁上傳**:主畫面 → 檔案傳輸 → 加入網路或開熱點 → 電腦瀏覽器開 `http://crossmosa.local`。
-- **OPDS**:設定好書庫伺服器後從裝置上瀏覽下載。
-- **Calibre 無線連線**:原版的流程原封保留。
-
-> 書的來源:請使用正版取得的 EPUB。本專案不提供、也不代找書籍內容。
-
-### 待機壁紙（選配）
-
-[Release](../../releases) 另附壁紙包：**50 張世界名畫**，
-全部取自 Wikimedia Commons 的公共領域作品，每一張都為 X3 這塊 4 階灰階面板挑過、裁過、調過。
-
-把 `.bmp` 複製到 SD 卡的 `/.sleep/`（**放兩張以上才會輪播**），
-然後 **設定 → 顯示 → 待機畫面 → 自訂**。
-
-> ⚠️ SD 根目錄不要放單獨一個 `/sleep.bmp` —— 它會優先、固定顯示、不輪播。
-
-轉檔工具、策展清單與「為什麼是這 50 張」都在 [`wallpapers/`](wallpapers/)，
-可以自己換成任何圖片。
-
----
-
-## UI 字型的字集限制（請先讀這段）
-
-這是本分支最需要事先講清楚的取捨。
-
-**內建 UI 字型涵蓋 7,973 個漢字**:BIG5 一級全部，加上掃描整個電子書庫挑出來的常用字。
-**不是全部的中文字。** 完整的 BIG5 有 13,060 字，Unicode 的中日韓統一表意文字更多。
-
-沒被涵蓋到的字，會在**選單、檔名、書名、OPDS 書目、章節目錄**顯示成方塊 □。
-
-### 還是會踩到的情況
-
-**罕用字，尤其是 BIG5 範圍外的**——很多台灣人名用字根本不在 BIG5 裡。
-
-2.0.1 補了 496 個字，挑法也換了:以前是照 BIG5 的字頻表挑，
-現在改成**掃整個電子書庫的內文**，看真正會出現在書名和檔名裡的是哪些字。
-但只要有人的書用到沒被掃到的字，還是會是方塊。**碰到就回報，補字是例行維護。**
-
-### 書的內文不受影響
-
-UI 字型與內文字型是**完全獨立的兩套**。書的內文走 SD 卡字型，
-而五套 SD 字型都收了 **27,950 個漢字**（含 CJK 擴充 A 整個區塊）——
-台語文、古文、BIG5 外的人名用字，內文都有字。
-
-也就是說:**書名在檔案清單上是方塊、打開之後內文正常**，是預期中的行為，不是 bug。
-缺口只在 UI（檔名／選單／書名），內文沒有。
-
-### 遇到方塊怎麼辦
-
-**回報**:開一個 [Issue](../../issues)，標題寫「缺字」，內容貼上**那個字本身**
-（直接打在 issue 裡就好）以及它出現的地方（選單 / 檔名 / 書名 / 內文）。
-字集是可重現的資料檔，補字是例行維護。
-
-**自己重產**:UI 字型的字集與選字工具都在這個 repo 裡，可完整重現。
-
-| 東西 | 路徑 |
+| | |
 |---|---|
-| 目前的 UI 字集（含完整出處與選字規則，寫在檔頭） | `fonts/charsets/charset-ui-v5.txt` |
-| 2.0.1 補的 496 個字（掃書庫挑出來的） | `fonts/charsets/charset-ui-v5-additions.txt` |
-| UI 字型重產腳本 | `fonts/regen-ui-fonts.sh` |
-| 二級字選字程式（候選池 + 字頻排序） | `fonts/pick-big5-l2-chars.py` |
-| SD 卡字型產生器 | `lib/EpdFont/scripts/fontconvert_sdcard.py`（加了 `tc-reading` 字集） |
-
-流程是:把字加進字集檔 → 跑重產腳本 → 重新編譯韌體 → 重刷。
-**UI 字型無法用 SD 卡替換，只能重編韌體。**
-
-> 字集檔的檔頭**必須全部是 ASCII**——整個檔案會餵給 `pyftsubset --text-file`，
-> 檔頭裡的任何一個中文字都會悄悄進到字型裡。重產腳本有 cmap 斷言擋這件事。
-
-### 為什麼不乾脆全部收進去
-
-全 BIG5 加進 UI 字型大約要多 2 MB，而 app 分割區只有 6.5 MB，目前已經用掉 96.4%
-（6,320,803 bytes，剩約 227 KB）。要放得下就得先重新分割 flash——有變磚風險。
-現在這 7,973 字，就是塞得進去的最大值。
+| [首次安裝](docs/install.md) | 完整步驟、三種刷機方法 |
+| [更新到新版](docs/update.md) | 已經在用 CrossMosa |
+| [螢幕停住了](docs/rescue.md) | 刷完畫面不動 |
+| [刷不進去怎麼辦](docs/flash-troubleshooting.md) | 出現「更新中」卻退回 |
+| [字型](docs/fonts.md) | 選哪一套、大字版、遇到方塊字 |
+| [把書放進去](docs/books.md) | 拔卡、瀏覽器、OPDS、Calibre |
+| [換待機壁紙](docs/wallpaper.md) | 50 張世界名畫 |
 
 ---
-
-<a id="screen-halted"></a>
-
-## 螢幕停住了？救援步驟
-
-刷完 1.x 之後畫面就不動了的，**看不到畫面也能直接刷成 2.0**，不必先刷回原廠韌體。
-順的話大約五到六分鐘。**全程看不到畫面，照秒數操作就好——寧可多等，不要提早按。**
-
-### 先把 SD 卡準備好
-
-1. SD 卡插到電腦上
-2. 卡裡的東西**全部刪掉**（不用格式化。想留書就先複製一份到電腦）
-3. 下載 **`update.bin`**（2.0.0 以上，建議用[最新版](https://github.com/anki630/crossmosa/releases/latest)）
-4. **原檔直接丟進卡的最外層**——不用解壓縮、不用改名
-5. 卡裡只剩這一個 `update.bin`
-6. 卡插回機器，**充飽電**
-
-⚠️ 最重要的是第 2 步。卡上如果還留著上次刷機的舊 `.bin`，盲按會選到它，而你完全看不出來。
-
-ℹ️ 寫到一半沒電**不會變磚**，只會開回原本的韌體，再來一次就好。
-
-<img src="docs/img/button-map.png" width="340" alt="X3 按鍵編號">
-
-| ① 左側邊 | ② 上緣左 | ③ 上緣右 | ⑥ 正面左2 |
-|---|---|---|---|
-| 上一頁 | 重置 | 電源 | 確認 |
-
-**只會用到 ① 和 ⑥。⑤⑦⑧（正面其餘三顆）一次都不要按。**
-
-1. 按 **②**
-2. 按住 **① ＋ ③** 四秒 → **先放 ③，再放 ①**
-3. 等 **2 秒**
-4. 按 **①**，再按 **⑥**
-5. 等 **90 秒** → 再做一次第 4 步（先 **①**，再 **⑥**）
-6. 等 **90 秒**
-7. 按 **⑥**
-8. **耐心等** —— 正在寫入，別碰機器、別拔卡。**成功的話它會自己開機**
-9. 等很久還是沒動靜，就從第 1 步重來
-
-**多試幾次。** 沒成功多半只是某一下沒按實——看不到畫面，按下去有沒有被機器收到，你完全感覺不出來。
-重來個幾輪通常就過了。（開機了但畫面還是黑的，按 **②** 再長按 **③**。）
-
-<details>
-<summary>細節：為什麼這樣按、每一步在等什麼</summary>
-
-**為什麼可以一直重複「先 ① 再 ⑥」**：因為這兩顆不管機器停在哪一頁，都不會把事情弄糟。
-
-| 當下畫面 | ① | ⑥ |
-|---|---|---|
-| 檔案清單 | 跳到你的 `.bin` | 選它 |
-| 「要更新韌體嗎？」 | 沒有作用 | 確認 |
-| 檢查中／寫入中 | 忽略 | 忽略 |
-
-所以不必知道自己在第幾步，不確定就再來一輪。第 5、7 步就是這個道理。
-**這兩顆是【一顆一顆按】，不是同時按住**——本文裡只有 **① ＋ ③**（進救援）和
-**③ ＋ ④**（截圖）這兩組才是要同時按住的。
-
-**為什麼 `.bin` 只放一個**：救援畫面的清單只會列出 `.bin`，而且資料夾一定排在前面，
-所以你那個 `.bin` 一定是最後一個。按 ① 會從第一個繞到最後一個，剛好就選到它。
-卡上有好幾個 `.bin` 的話，選到的會是檔名排最後的那個。
-
-**⛔ 為什麼不能按 ⑤⑦⑧**：在「要更新韌體嗎？」那個畫面上 ⑤⑦ 都是**取消**。
-⑦ 最容易中招——它在清單那一頁螢幕上標的是「上」，做的事跟 ① 一模一樣；
-可是到了問你要不要更新那一頁，它就變成取消，**而且螢幕上不會寫出來**。
-
-**每一步在等什麼**
-- 第 1 步：那組按鍵**只有在開機那一瞬間**才會被讀到。機器如果現在是「開著但沒畫面」，直接按沒有用。
-- 第 3 步：你剛剛放開的 ①，機器也會算成按了一下。等兩秒讓它過去。
-- 第 5 步：純粹是保險。第 4 步沒按實的話由它補上；已經成功的話這一輪會被忽略。兩種都沒差。
-- 第 6 步：機器在檢查這個檔案有沒有壞掉，整個約 6 MB 都要讀一遍（實測 30–60 秒）。
-  上面寫的等待時間都留了餘裕，**寧可多等**。
-- 第 8 步：正在寫入（實測 60–90 秒），寫完會自己重開機。
-  但那種重開**不會把螢幕晶片一起重來**，所以偶爾畫面還是黑的——按 ② 才會真的從頭開始。
-
-**卡在 2.0 的話**（目前沒人遇到）步驟完全一樣，只是機器裡面走的路不同：
-2.0 問你要不要更新那一頁有兩個選項、一開始停在「取消」上，① 會把它移到「確認」，⑥ 再按下去。
-
-**其他版本的做法**：社群另有一版（組合鍵約 7 秒、先刷回原廠韌體）——
-[CrossInk #479](https://github.com/uxjulia/CrossInk/discussions/479) ·
-[本專案 issue #2](https://github.com/anki630/crossmosa/issues/2)（@sk5s 回報）。上面這套行不通時可以試。
-
-**不知道自己走到哪了**：按 **③ ＋ ④**（電源 ＋ 右側邊那顆）拍一張截圖 —— 螢幕雖然沒更新，機器心裡還是知道
-「現在該顯示什麼」。把卡拔到電腦上打開 `screenshot-*.bmp` 就看得到。
-只有畫面停著不動的時候有效；第 6 步檢查中、第 8 步寫入中按了不會有反應。
-
-**不保證每台都救得回來。** 已經有使用者照著做仍然沒救回。
-
-</details>
 
 ## 自行建置
 
@@ -543,9 +205,9 @@ core 裡，不是本專案能改的)，兩次建置就會差幾十個位元組�
 
 **Jump to:**
 [**What's new**](CHANGELOG.md) ·
-[Install](#install--you-must-do-both-steps) ·
-[Character-set limits](#ui-character-set-limits-please-read) ·
-[Screen frozen?](#screen-stopped-updating-rescue) ·
+[Install](docs/install.md) ·
+[Fonts](docs/fonts.md) ·
+[Screen frozen?](docs/rescue.md) ·
 [Vs upstream](#relationship-to-upstream) ·
 [Download](https://github.com/anki630/crossmosa/releases/latest)
 
@@ -599,217 +261,27 @@ a reading-first memory policy, and X3-specific display tuning.
 Newer X3 units ship a different display controller. This build identifies it at boot, so both
 the newer and the older batches work. If your screen already updates normally, you do not need to flash.
 
-## Install — you must do BOTH steps
+## Install
 
-> ### ⚠️ Read this first
->
-> **Newer X3 batches ship a UC8279 display controller** (older batches use UC8253). Firmware 1.x
-> does not drive UC8279: after flashing, the screen stops updating — it may freeze on the
-> "update complete" page while the device is still running (a blank SD card still gets a data
-> directory written to it). Upstream added detection in
-> [#2707](https://github.com/crosspoint-reader/crosspoint-reader/pull/2707), shipped in 1.5.0;
-> this build includes it.
->
-> **If you want to try it, please do.** Chapter switches drop from ~10 s to a second or two,
-> page turns are smoother, images are more reliable, and clearing the cache can now keep your
-> reading positions. It is a pre-release, so read this section first — beyond that, go ahead.
+Three steps, about ten minutes.
 
->
-> **It is still not guaranteed to work on every device.** The panel controller is one known
-> cause, not the only one. **E-ink retains its last image, so "something is on screen" does not
-> mean the device is alive** — and conversely the firmware may still be running fine while the
-> panel never hears a command. Judge by **timestamps of files on the SD card, not by the
-> screen.** Upstream has a related unresolved report:
-> [#2183](https://github.com/crosspoint-reader/crosspoint-reader/issues/2183).
->
-> **Before you start:** back up the whole `/.crossmosa/` folder from your SD card (settings,
-> Wi-Fi credentials, OPDS config and every book's reading position live there and cannot be
-> recovered by reflashing); keep **only one** `.bin` in the SD card root (rescue may run with
-> no display at all, so you cannot see what you are selecting); and be sure you can live with
-> the worst case — **which is losing the device.** Users have bricked units, and **the rescue
-> procedure has failed for some of them too.** Rescue is a path that *may* work, not insurance.
-> Assume the device might not come back, and only proceed if you still accept that.
->
-> Already flashed 1.x and **the screen is frozen**? [Rescue steps below](#screen-stopped-updating-rescue).
-> About five to six minutes when it goes smoothly.
+1. **Flash the firmware** — put `update.bin` in the SD card root, power off, then hold the
+   left-edge "previous page" key **+** the power button.
+2. **Copy the fonts** — put the font folder into `/.fonts/` on the SD card. Without them,
+   Chinese books render as boxes.
+3. **Boot** — Settings → Reader → Reading Font, pick the family you just copied.
 
-Flashing the firmware only fixes the **menus**. **Book text needs fonts on the SD card.**
-The built-in fallback reader font is Latin-only, so **without the SD fonts every Chinese book
-renders as boxes (□□□□)**.
+**Read [Install](docs/install.md) before your first flash.** It covers the risks, the backup
+step, and all three flashing methods.
 
-> ### If the web flasher can't see your device — you don't need it
->
-> The stock firmware has its own SD update mode. **Method A below never connects the device
-> to a computer** (you only need to copy one file onto the SD card),
-> and community documentation confirms it works even on USB-locked units. Do not use the
-> Xteink Unlocker to flash this firmware (that tool officially supports only CrossPoint and
-> CrossInk). Escape hatch on locked units: CrossMosa keeps the full SD rescue mode — but
-> **do not treat it as a guarantee** — some users have followed the rescue procedure and still
-> did not get their device back. At least two known conditions defeat it (both hit by this
-> project in 2026-08), and there are further failures with no explanation yet:
-> (1) rescue mode only triggers on a **power-button wake**, so it is **unreachable once the
-> firmware is stuck in a boot loop** (a reset loop does not wake via the power button); you
-> must let the **battery drain completely** to break the loop first. (2) **on some X3 units the
-> USB port is charge-only with no data lines**, which makes Methods B and C unusable entirely. Full upstream text:
-> [`docs/UPSTREAM-README.md`](docs/UPSTREAM-README.md), "USB-locked devices".
+| | |
+|---|---|
+| [Install](docs/install.md) | Full steps, three flashing methods |
+| [Update](docs/update.md) | Already running CrossMosa |
+| [Screen stopped updating](docs/rescue.md) | Rescue procedure |
+| [Fonts](docs/fonts.md) | Which family, large print, missing glyphs |
 
-1. **Flash** (first install) — **Method A, recommended — the device never touches a computer**:
-   copy the zip's **`update.bin`** to the **root** of the SD
-   card (any card reader or phone adapter works), power off, then
-   hold the **left side button + power** until the loader screen appears; it flashes and
-   reboots in ~5 minutes (X3 only — the X4 stock firmware lacks this combo). Or use the web
-   flasher at https://crosspointreader.com/#flash-tools (X3 → Custom .bin), or
-   `esptool.py --chip esp32c3 write_flash 0x10000 update.bin`.
-   Later updates never need a computer: grab the standalone `update.bin` from Releases
-   (no unzip), upload it via the device's web transfer page, then
-   **Settings → System → SD Card Firmware Update** — or
-   the rescue combo (power off, hold the left side button, press power) straight into the
-   SD firmware picker.
-2. **Copy the fonts** from `crossmosa-2.0.1-sd-fonts.zip` into `/.fonts/` on the SD card,
-   keeping one folder per family (`/.fonts/NotoSerifTC/…`). One family is enough;
-   **NotoSerifTC** is the recommended first choice. All five carry **27,950 Han characters**,
-   including the whole CJK Extension A block, so rare characters no longer render as black
-   boxes. 2.0.1 also added the symbols Chinese ebooks actually use: circled numbers,
-   bopomofo, **vertical punctuation `︿ ﹀ ﹃ ﹄`**, box drawing.
-   **If you downloaded the fonts before 2.0.1, download them again** — otherwise those
-   characters are still boxes.
-   `GuanKiapTsingKhai-90` is a pre-rotated brush face: on 2.0.x, pick it and turn the screen
-   to landscape to read Chinese vertically. **Do not do this on 2.1** — 2.1 has real vertical
-   layout (Settings -> Reader -> Text Settings -> Layout -> Text Direction), and a pre-rotated
-   face there lays every character on its side. Pick `Iansui` for a brush face instead.
-   Folder names must not contain spaces.
-
-   **Can't read small text?** `crossmosa-2.0.1-sd-fonts-large.zip` has sans and serif at
-   **24 / 26 / 28** — same install, no reflash. It stops at 28 on purpose: what makes reading
-   comfortable is not how big the type is but how much text is left on a page. 22pt fits
-   about 138 characters, 28pt about 85. Past that you spend the evening turning pages.
-
-While you have the card out, also copy 《歡迎使用CrossMosa.epub》 from the firmware zip onto
-it — a thirteen-chapter guided tour (in Traditional Chinese) that teaches the device by making
-you press its keys. Read it first.
-
-First boot: the UI defaults to **Traditional Chinese** (this fork's whole point). To switch to English: **設定 → 系統 → 語言 → English** (= Settings → System → Language). Then
-**Settings → Reader → Reader Font Family** to pick the SD font. The device creates
-`/.crossmosa/` on the card for progress, bookmarks and Wi-Fi credentials — don't delete it.
-
-**Optional — sleep wallpapers.** `crossmosa-2.0.1-wallpapers.zip` holds **50 public-domain
-masterpieces** from Wikimedia Commons, each individually checked and tuned for this panel's
-4 grey levels. Copy the `.bmp` files to `/.sleep/` on the SD card (two or more to rotate),
-then **Settings → Display → Sleep Screen → Custom**. The converter, the curation manifest and
-the reasoning behind the selection are in [`wallpapers/`](wallpapers/).
-
-## UI character-set limits (please read)
-
-The built-in UI font covers **7,973 Han characters**, not all of Chinese. Characters outside
-that set render as boxes **in menus, filenames and titles only** — book *text* uses the SD
-font and is unaffected. All five SD families carry 27,950 Han characters.
-
-What still bites: rare characters, especially ones **outside BIG5 entirely** — plenty of
-Taiwanese given names are. 2.0.1 added 496 more and changed how they are chosen: instead of
-ranking BIG5 by frequency, it scans the text of whole ebook libraries and takes the
-characters that really show up in titles and filenames. Someone's book will still use one
-that was not in the scan. **Report it — adding characters is routine maintenance.**
-
-Report missing characters as a GitHub issue (paste the character itself and say where it
-appeared). To regenerate the UI fonts yourself: edit `fonts/charsets/charset-ui-v5.txt`
-(its ASCII header documents the exact sources and selection rule; the 2.0.1 additions are in
-`charset-ui-v5-additions.txt`), run `fonts/regen-ui-fonts.sh`, rebuild and reflash.
-UI fonts cannot be replaced from the SD card.
-
-Why not include everything: full BIG5 would add ~2 MB to a 6.5 MB app partition that is
-already 96.4% full.
-
-<a id="screen-halted-en"></a>
-
-## Screen stopped updating? Rescue
-
-If you flashed 1.x and the screen no longer updates, you can **blind-flash straight to 2.0** —
-no need to go back to stock firmware first. About five to six minutes when it goes smoothly.
-**You will see nothing the whole time — work by the clock, and err on the long side.**
-
-### Get the SD card ready first
-
-1. Put the SD card in a computer
-2. **Delete everything on it** (no formatting needed; copy your books off first if you want them)
-3. Download **`update.bin`** (2.0.0 or newer — use the [latest release](https://github.com/anki630/crossmosa/releases/latest))
-4. **Drop it in the card's root exactly as downloaded** — do not unzip, do not rename
-5. That one `update.bin` is the only thing left on the card
-6. Put the card back in the device and **charge it fully**
-
-⚠️ Step 2 is the one that matters. An old `.bin` left over from a previous update will be picked
-instead, and you cannot tell.
-
-ℹ️ Losing power mid-write **will not brick it** — it just boots the firmware you already had, so
-you start over.
-
-<img src="docs/img/button-map.png" width="340" alt="X3 button numbers">
-
-| ① left edge | ② top-left | ③ top-right | ⑥ front, 2nd |
-|---|---|---|---|
-| Previous page | Reset | Power | Confirm |
-
-**Only ① and ⑥ are used. Never press ⑤⑦⑧** (the other three on the front row).
-
-1. Press **②**
-2. Hold **① + ③** for 4 s → release **③ first, then ①**
-3. Wait **2 s**
-4. Press **①**, then **⑥**
-5. Wait **90 s** → do step 4 again (**①** first, then **⑥**)
-6. Wait **90 s**
-7. Press **⑥**
-8. **Be patient** — writing; do not touch the device or remove the card. **On success it reboots
-   by itself**
-9. If nothing has happened after a good while, start again from step 1
-
-**Try a few times.** Failures are usually just a press that did not register — you cannot see the
-screen, so there is no feedback either way. (If it boots but the screen stays blank, press **②**
-then hold **③**.)
-
-<details>
-<summary>Details: why these buttons, and what each wait is for</summary>
-
-**Why "① then ⑥" can be repeated safely** — neither can make things worse on any screen:
-
-| Screen | ① | ⑥ |
-|---|---|---|
-| File list | wraps selection to your `.bin` | selects it |
-| "Update firmware?" | does nothing | confirms |
-| Checking / writing | ignored | ignored |
-
-So you never need to know which step you are on. That is what steps 5 and 7 are for.
-**Press these one after the other, not together** — the only combinations you hold down at the
-same time are **① + ③** (entering rescue) and **③ + ④** (screenshot).
-
-**Why only one `.bin`** — the rescue list shows only `.bin` files and always sorts folders first,
-so your `.bin` is necessarily the last entry; ① wraps the selection from the first round to the
-last. With several, you get the one that sorts last by name.
-
-**⛔ Why not ⑤⑦⑧** — on the "Update firmware?" prompt, ⑤ and ⑦ both mean *cancel*. ⑦ is the
-trap: in the list the screen labels it "up" and it behaves exactly like ①, but on the prompt it
-cancels — **and the screen does not say so**.
-
-**What each wait is for** — step 1: the rescue combo is only read at the instant of boot, so if
-the device is already on with a dead screen the combo does nothing. Step 3: releasing the ① you
-were holding also counts as a press. Step 5: insurance — it covers step 4 not registering, and is
-ignored if step 4 already worked. Step 6: reading all ~6 MB to verify (measured 30–60 s).
-Step 8: writing (measured 60–90 s), then it restarts by itself — but that restart does **not**
-reset the screen chip, so occasionally the display stays blank until you press ②. All the waits
-above have margin built in; erring on the long side costs nothing.
-
-**Stuck on 2.0** (no reports so far): same steps. Different mechanism — 2.0's prompt has two
-options and starts on *Cancel*; ① moves it to *Confirm* and ⑥ selects.
-
-**Another community write-up** reports different timings (~7 s combo, stock firmware first):
-[CrossInk #479](https://github.com/uxjulia/CrossInk/discussions/479) ·
-[issue #2](https://github.com/anki630/crossmosa/issues/2) (by @sk5s). Try that if the above fails.
-
-**Lost track?** Press **③ + ④** (power + the right-edge button) for a screenshot — the panel is not updating, but the device still
-knows what *should* be on screen. Read `screenshot-*.bmp` from the card. Static screens only;
-nothing happens during the check or the write.
-
-**Not guaranteed** — some users have followed these steps and still not recovered.
-
-</details>
+---
 
 ## Building
 
