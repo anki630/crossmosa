@@ -107,6 +107,7 @@ SD 卡根目錄
     │   ├── NotoSerifTC_18.cpfont
     │   ├── NotoSerifTC_20.cpfont
     │   └── NotoSerifTC_22.cpfont
+    ├── RoundTC/              ← 圓體
     ├── NotoSansTC/           ← 黑體
     ├── Iansui/               ← 硬筆楷書
     └── GuanKiapTsingKhai-90/ ← 楷書·直排用
