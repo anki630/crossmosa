@@ -338,6 +338,11 @@ void ChapterHtmlSlimParser::flushPartWordBuffer() {
   partWordBufferIndex = 0;
   nextWordContinues = false;
   listItemBulletOnly = false;
+  // 注音：佇列裡等著被取出的漢字太多 → 現在就排一批（同字元回呼尾端那個軟性分批；hasOom 由那裡照常檢查）。
+  //   逐字詞看，不等回呼結束：一次回呼可以進好幾百個漢字（codex 整合複查 A2）。
+  //   ⚠️ ruby 裡面不排：rubyStartWordIndex 是「這一段目前的字詞序號」，排一批會把字詞吃掉、序號就指到別的字 →
+  //      出版社的注音掛到錯的字上；而且底字會在知道它有 ruby 之前就被取出、換上我們的注音。等 </ruby> 之後的下一個字詞。
+  if (!inRuby && currentTextBlock->zhuyinWantsFlush()) layoutCurrentBlock(false);
 }
 
 // start a new text block if needed
@@ -401,6 +406,10 @@ bool ChapterHtmlSlimParser::startNewTextBlock(const BlockStyle& blockStyle) {
     Page::noteAllocFail("ParsedText:startNewTextBlock", sizeof(ParsedText));
     latchBuildAborted();
     return false;
+  }
+  if (zhuyinAllowed_) {
+    currentTextBlock->enableZhuyin(fontId, zhuyinDocAnnotated_);
+    if (!currentTextBlock->zhuyinActive()) zhuyinDegraded_ = true;  // 允許卻開不起來：引擎中途不見或配不到
   }
   wordsExtractedInBlock = 0;
   listItemBulletOnly = false;
@@ -478,6 +487,22 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
   // 先取 local name：命名空間處理是關閉的，元素名帶前綴原樣進來（Python ElementTree
   // 重新序列化的書會是 <ns0:body>）。下面【所有】元素名比對都要用 element 而非 name。
   const char* const element = xmlLocalName(name);
+
+  // v342（B 路線）：預先標注的章節 —— <head> 裡的 <meta name="zhuyin-ivs" content="bpmfvs"/>（zy_preannotate.py 寫的）。
+  //   只認 <body> 之前的 meta（正文裡的不算）。⚠️ 第一個文字區塊在讀到任何標籤之前就建好了（beginParse），而空區塊
+  //   之後會被第一個段落重用、不會再 enableZhuyin（grok 複查抓到：否則每一章的第一段、整章只有一個區塊時整章都走解析器）
+  //   → 認到的當下補設給當前這一個；之後建立的區塊由 startNewTextBlock 帶上。
+  if (!self->insideBody && strcasecmp(element, "meta") == 0 && atts != nullptr) {
+    bool nameOk = false, contentOk = false;
+    for (int i = 0; atts[i]; i += 2) {
+      if (strcasecmp(atts[i], "name") == 0 && strcmp(atts[i + 1], "zhuyin-ivs") == 0) nameOk = true;
+      if (strcasecmp(atts[i], "content") == 0 && strcmp(atts[i + 1], "bpmfvs") == 0) contentOk = true;
+    }
+    if (nameOk && contentOk && !self->zhuyinDocAnnotated_) {
+      self->zhuyinDocAnnotated_ = true;
+      if (self->zhuyinAllowed_ && self->currentTextBlock) self->currentTextBlock->setZhuyinDocAnnotated(true);
+    }
+  }
 
   if (strcasecmp(element, "body") == 0) {
     // Case-insensitive to match ParagraphStreamer's tag matching (ProgressMapper). A case
@@ -1587,9 +1612,15 @@ void XMLCALL ChapterHtmlSlimParser::characterData(void* userData, const XML_Char
   // words, so flush earlier when embedded CSS is active. We still keep the
   // "exclude last line" behavior to preserve paragraph flow across chunks.
   const size_t blockWordCount = self->currentTextBlock->size();
-  const size_t softFlushThreshold =
+  size_t softFlushThreshold =
       self->embeddedStyle ? TEXT_BLOCK_SOFT_FLUSH_WORDS_WITH_CSS : TEXT_BLOCK_SOFT_FLUSH_WORDS;
-  if (blockWordCount > softFlushThreshold) {
+  // 注音：每批最多約 200 詞（分批小一點，峰值記憶體也小）。⚠️ 佇列不會滿不是靠這一行 —— 一個字詞可以有好幾個漢字、
+  //   一次回呼可以進好幾百個；真正的上界是 flushPartWordBuffer 逐字詞看佇列深度（ParsedText::kZhuyinFlushQueued）。
+  const bool zhuyinOn = self->currentTextBlock->zhuyinActive();
+  if (zhuyinOn) softFlushThreshold = std::min<size_t>(softFlushThreshold, 200);
+  // 注音：ruby 裡面不分批（理由同 flushPartWordBuffer）。非注音字型照舊（不變量：非注音的版面一個位元組都不動）——
+  //   ⚠️ 那邊其實有同一個既有缺陷（750／320 詞的分批剛好落在 ruby 裡 → 出版社的注音掛錯字），帳本記著、另外修。
+  if (blockWordCount > softFlushThreshold && !(zhuyinOn && self->inRuby)) {
     LOG_DBG("EHP", "Text block soft flush (%u words)", static_cast<unsigned>(blockWordCount));
     self->layoutCurrentBlock(false);
     // v149：addWord 的守衛可能在這個 block 進 token 時拒絕過（掉字）。
@@ -1871,6 +1902,7 @@ bool ChapterHtmlSlimParser::beginParse() {
   if (!startNewTextBlock(paragraphAlignmentBlockStyle)) return false;
 
   xmlParser_ = XML_ParserCreate(nullptr);
+  xmlFilter_ = XmlControlCharFilter{};  // v345：每份文件重新判斷是不是 UTF-16
   if (!xmlParser_) {
     LOG_ERR("EHP", "Couldn't allocate memory for parser");
     return false;
@@ -1918,7 +1950,9 @@ ChapterHtmlSlimParser::ParseStatus ChapterHtmlSlimParser::parseStep() {
   const int done = parseFile_.available() == 0;
 
   const int64_t xmlT0 = ParsedText::profNowUs();  // v252
-  const int parseStatus = XML_ParseBuffer(xmlParser_, static_cast<int>(len), done);
+  // v345（帳本 D14）：讀進 expat 緩衝區的這一塊先濾掉控制字元（len 本身不改：上面的讀取錯誤判斷用的是它）
+  const int parseStatus =
+      XML_ParseBuffer(xmlParser_, static_cast<int>(xmlFilter_.apply(static_cast<char*>(buf), len)), done);
   ParsedText::buildProf.xmlUs += static_cast<uint64_t>(ParsedText::profNowUs() - xmlT0);
   ParsedText::noteBuildProbe(5);  // v190：步尾；內層沒走到時這就是整步盲區
 
@@ -2211,6 +2245,13 @@ void ChapterHtmlSlimParser::addColumnToPage(std::shared_ptr<TextBlock> column, c
 //    只加在一個呼叫點）。同一個形狀在這裡是「只分派一處等於沒分派」。
 void ChapterHtmlSlimParser::layoutCurrentBlock(const bool includeLast) {
   if (!currentTextBlock) return;
+  // 注音：排完（橫排、直排、任何一條離開路徑）收集這一段有沒有因資源停止標注 —— RAII，不必數有幾個 return
+  struct ZhuyinDegradeWatch {
+    ChapterHtmlSlimParser* self;
+    ~ZhuyinDegradeWatch() {
+      if (self->currentTextBlock && self->currentTextBlock->zhuyinDegraded()) self->zhuyinDegraded_ = true;
+    }
+  } zhuyinWatch{this};
   const BlockStyle& bs = currentTextBlock->getBlockStyle();
 
   if (renderer.isVerticalLayout()) {

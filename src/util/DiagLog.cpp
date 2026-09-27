@@ -1,4 +1,5 @@
 #include "DiagLog.h"
+#include <BoardConfig.h>
 #include <BitmapHelpers.h>
 #include <Breadcrumb.h>
 #include <DataDir.h>
@@ -45,8 +46,25 @@ constexpr const char* SENTINEL_PATH = "/diag.on";
 
 // v186：BOOT 橫幅用的面板名。x3-8279 = 新批次 UC8279d；x3-8253 = 舊批次；x4。
 const char* panelName() {
-  if (!gpio.deviceIsX3()) return "x4";
-  return gpio.displayIsUc8279() ? "x3-8279" : "x3-8253";
+  if (gpio.deviceIsX3()) return gpio.displayIsUc8279() ? "x3-8279" : "x3-8253";
+  // v333：X4 帶上開機探測的實際晶片。原本只寫 "x4" —— 分不出 SSD1677／UC8179／UC8279，
+  //   而淺睡眠醒來發黑的根因只在 SSD1677（驅動沒 override requestResync，見 memory device-scope）。
+  switch (BoardConfig::ACTIVE.displayController) {
+    case BoardConfig::DisplayController::SSD1677: return "x4-ssd1677";
+    case BoardConfig::DisplayController::UC8179: return "x4-uc8179";
+    case BoardConfig::DisplayController::UC8279: return "x4-uc8279";
+    default: return "x4-?";
+  }
+}
+
+// v334：【哪一台】—— 出廠 MAC 的最後兩個 byte（＝路由器清單上那台 MAC 的最後四碼）。
+//   panel= 只分得出機型與晶片；維護者手上同時有 X3 與 X4（2026-09-23），之後也可能有第二台同型號的，
+//   而同一張 SD 卡還可能在兩台之間換來換去 → 同一份 diag.log 裡混著兩台的開機段。
+//   每次現算、不快取：沒有跨 task 的初始化競態；讀 eFuse 是暫存器讀取，不碰 SD。
+void formatUnitId(char (&out)[5]) {
+  const uint64_t mac = ESP.getEfuseMac();  // esp_efuse_mac_get_default 的順序：mac[0] 在最低位元組
+  snprintf(out, sizeof(out), "%02x%02x", static_cast<unsigned>((mac >> 32) & 0xFF),
+           static_cast<unsigned>((mac >> 40) & 0xFF));
 }
 
 const char* diagPath() {
@@ -66,6 +84,12 @@ const char* prevDiagPath() {
 // 一整個檔案傳輸 session 綽綽有餘的餘裕;逼近上限就輪替,而不是等真的撞到才發現。
 constexpr size_t FORCED_ROTATE_HEADROOM = 48 * 1024;
 
+// v334：真的輪替了（diag.log 從空白重新開始）→ 新檔的第一行要先寫身分（DIAGCONT，見 append()）。
+//   不分是誰觸發的輪替：begin()／setForced() 緊接著雖然會寫 BOOT，但別的 task 可能先插進一行（codex）。
+//   ⚠️ rotateIfNearCap() 的每個呼叫端都必須持 g_appendMutex —— 旗標只在鎖內讀寫，
+//   而 rename 也不能跟別的 task 的 append 同時發生（append() 本來就持；begin()／setForced() v334 起也持）。
+bool g_contHeaderPending = false;
+
 void rotateIfNearCap() {
   if (!Storage.ready()) return;
   size_t size = 0;
@@ -82,11 +106,13 @@ void rotateIfNearCap() {
   // 一步失敗都至少還留著【一代】證據;先刪再 rename 的話,rename 一失敗就兩代全沒。
   // 這是保存證據的程式碼,不該有把證據全毀的路徑。
   if (Storage.rename(diagPath(), prevDiagPath())) {
+    g_contHeaderPending = true;  // v334
     LOG_INF("DIAG", "rotated %s at %u bytes", diagPath(), (unsigned)size);
     return;
   }
   Storage.remove(prevDiagPath());
   if (Storage.rename(diagPath(), prevDiagPath())) {
+    g_contHeaderPending = true;  // v334
     LOG_INF("DIAG", "rotated %s at %u bytes (previous generation replaced)", diagPath(), (unsigned)size);
     return;
   }
@@ -186,8 +212,31 @@ bool append(const char* text) {
   //   ⚠️ 時間戳用**真正的 millis**，不是 0 —— 0 會被讀成時間倒退，甚至被誤認為開機邊界。
   // 緩衝區：通知 ≤48 ＋ 本文 ≤416（line() 的 buf 大小）＋ 換行 ＝ 465。
   // ⚠️ 堆疊預算：繪圖任務 8192 bytes，line() 的 384+416 加上這裡的 480 ＝ 約 1.3KB（16%）。
-  //    要再加欄位就先算這筆帳，不要無限長大。
+  //    要再加欄位就先算這筆帳，不要無限長大。（v334 的身分行借用同一塊 out，只多 5 bytes 的 unit。）
   char out[480];
+  // v334：輪替後的新檔，第一行先寫身分 —— 否則檔頭那一段在下一個 BOOT 之前完全無法歸屬
+  //   （實例：diag332.log 第一行就是 SEG，要去翻 diag-prev 的結尾才猜得到是哪一版、哪一台）。
+  //   ⚠️ 刻意【不用】`BOOT version=` 前綴：這不是開機邊界，用了會把一段開機切成兩段。
+  //   自己是一筆、一次 write。短寫 → 封口、這一筆本文【也不寫】（算丟掉）、旗標留著下一筆再補 ——
+  //   否則本文會搶在完整的身分行之前（codex）。寫到兩次也無害：兩次說的是同一件事。
+  if (g_contHeaderPending) {
+    char unit[5];
+    formatUnitId(unit);
+    const int n = snprintf(out, sizeof(out), "%lu DIAGCONT version=%s panel=%s unit=%s\n",
+                           static_cast<unsigned long>(millis()), CROSSPOINT_VERSION, panelName(), unit);
+    if (n > 0 && static_cast<size_t>(n) < sizeof(out)) {
+      const size_t w = f.write(reinterpret_cast<const uint8_t*>(out), static_cast<size_t>(n));
+      if (w != static_cast<size_t>(n)) {
+        if (w > 0 && out[w - 1] != '\n') f.write(reinterpret_cast<const uint8_t*>("\n"), 1);
+        f.flush();
+        ++g_droppedLines;
+        return false;
+      }
+      g_contHeaderPending = false;
+    } else {
+      g_contHeaderPending = false;  // 格式化失敗不會發生（全長 < 80）；真的發生也不要每一行重試
+    }
+  }
   size_t len = strlen(text);
   if (len > sizeof(out) - 2) len = sizeof(out) - 2;  // 減法形式：任何輸入都不可能溢位（複查第四輪）
   size_t noticeLen = 0;
@@ -266,14 +315,21 @@ void DiagLog::begin() {
   // 【永不輪替】，檔案撞 192KB 後每次開機都無聲拒寫（v163/v164 兩版的診斷因此全丟）。
   // 與 v151 的 CAPS 誤植同款：儀器要先證明自己會在【使用中的路徑】上執行（B-22）。
   // 必須在下面的 BOOT/CAPS 橫幅之前跑，橫幅才會落在新檔。
-  rotateIfNearCap();
+  {
+    const AppendLock lock;  // v334：rotateIfNearCap 的呼叫端一律持鎖（見它的註解）
+    rotateIfNearCap();
+  }
 
   // v151：版本橫幅【必須在 begin()】—— 沒有它，append-only 的 diag.log 無法按版本分段
   // （memory attribute-evidence-before-reasoning；v150 的 log 就是因此無法歸屬）。
   // v178：帶重置原因（esp_reset_reason；1=poweron 3=sw 4=panic 5=int_wdt 6=task_wdt 7=wdt 8=deepsleep
   //        9=brownout 12=jtag 15=cpu_lockup —— v185 更正：12 是 JTAG，cpu_lockup 是 15）
   // v186：帶面板控制器（雙面板 binary 的第一個證人——同一顆韌體在 UC8253 與 UC8279 上都要能跑）。
-  line("BOOT version=%s rst=%d panel=%s", CROSSPOINT_VERSION, static_cast<int>(esp_reset_reason()), panelName());
+  // v334：帶 unit（哪一台，見 formatUnitId）。加在行尾：分析腳本只比對 `BOOT version=` 開頭。
+  char unit[5];
+  formatUnitId(unit);
+  line("BOOT version=%s rst=%d panel=%s unit=%s", CROSSPOINT_VERSION, static_cast<int>(esp_reset_reason()),
+       panelName(), unit);
   // v186：資料目錄的決定是這台機器上唯一的 SD 格式變更；LOG_* 在 X3 上等於丟掉，所以寫進 log。
   line("DATADIR active=%s outcome=%s", DataDir::path(), DataDir::outcomeName());
   // v151：CAPS 探測 —— v150 誤植進 setForced()（codex 警告過，我確認錯了），整版沒取到證。
@@ -315,14 +371,20 @@ bool DiagLog::setForced(bool on, const char* reason) {
   // 輪替本來就是「保留一代」而不是丟棄,所以對「使用者正在做長期量測」這個
   // 情境也不是損失:上一代還在 diag-prev.log。用一個會讓機制在最需要它的時候
   // 無聲死掉的條件去保護那個情境,是錯的取捨。
-  rotateIfNearCap();
+  {
+    const AppendLock lock;  // v334：setForced 可能跟 render task 的 append 同時發生（codex）—— rename 要在鎖內
+    rotateIfNearCap();
+  }
   if (!enabled_) {
     LOG_INF("DIAG", "Instrumentation FORCED ON (no %s needed)", SENTINEL_PATH);
   }
   // 刻意用跟 main.cpp 開機那行一模一樣的 `BOOT version=` 前綴:同一個 grep 就能把
   // append-only 檔案切成版本段落,不論那一段是開機記的還是 setForced 記的。
 
-  line("BOOT version=%s forced=%s panel=%s", CROSSPOINT_VERSION, reason != nullptr ? reason : "forced", panelName());
+  char unit[5];
+  formatUnitId(unit);  // v334，同 begin()
+  line("BOOT version=%s forced=%s panel=%s unit=%s", CROSSPOINT_VERSION, reason != nullptr ? reason : "forced",
+       panelName(), unit);
   return previous;
 }
 

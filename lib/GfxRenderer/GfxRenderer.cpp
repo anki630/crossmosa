@@ -2476,12 +2476,22 @@ void GfxRenderer::drawTextRotated90CW(const int fontId, const int x, const int y
 //    二位數字走 ③（縦中横）。判準見 lib/Epub/Epub/VerticalText.h。
 void GfxRenderer::drawTextVerticalCW(const int fontId, const int x, const int y, const char* text, const bool black,
                                      const EpdFontFamily::Style style) const {
-  ++verticalRotCount;  // 證人：旋轉繪製確實執行（見 GfxRenderer.h 的 B-22 註解）
   if (text == nullptr || *text == '\0') {
     return;
   }
 
   const int resolvedFontId = resolveTextFontId(fontId, text, style);
+
+  // v344（帳本 D13）：預讀掃描（翻頁後 prefetchNextPage 的 scan 模式）只能記錄、不能畫 —— 跟 drawText 同一道閘門。
+  //   原本這裡沒有 → 下一頁的旋轉字（拉丁字母、數字、U+2500 破折號…）被真的畫進 framebuffer、疊在當前頁上。
+  //   翻頁會先清畫面所以看不到；休眠提示直接在現有 framebuffer 上畫再刷新 → 露出來（實機回報 v302、v34x）。
+  //   記錄下來也讓這些字形跟直立字一樣被預讀（原本旋轉字一律冷）。
+  if (fontCacheManager_ && fontCacheManager_->isScanning()) {
+    ++verticalRotScanCount;  // 證人：掃描時走到這裡（vscan=），而且沒有畫
+    fontCacheManager_->recordText(text, resolvedFontId, style);
+    return;
+  }
+  ++verticalRotCount;  // 證人：旋轉繪製確實執行（見 GfxRenderer.h 的 B-22 註解）；v344 起只數真的畫的
   const auto fontIt = fontMap.find(resolvedFontId);
   if (fontIt == fontMap.end()) {
     LOG_ERR("GFX", "Font %d not found", resolvedFontId);

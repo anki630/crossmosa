@@ -3,6 +3,8 @@
 
 #include <string>
 
+#include <XmlParserUtils.h>
+
 #include "expat.h"
 
 class ContainerParser final : public Print {
@@ -14,6 +16,7 @@ class ContainerParser final : public Print {
 
   size_t remainingSize;
   XML_Parser parser = nullptr;
+  XmlControlCharFilter xmlFilter_;  // v345（帳本 D14）：餵 expat 前濾掉 XML 不准的控制字元
   ParserState state = START;
 
   static void startElement(void* userData, const XML_Char* name, const XML_Char** atts);

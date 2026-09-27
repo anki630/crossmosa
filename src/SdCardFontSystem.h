@@ -33,6 +33,17 @@ class SdCardFontSystem {
   // v121/v161：診斷統計用（TXTPAGE 折算預取的 afail/dropped）。可能為 nullptr（未載入 SD 字型）。
   SdCardFont* currentReaderFont() const { return manager_.currentFontForStats(); }
 
+  // 注音（P2 I7）：記憶體不夠時引擎先退（「引擎讓記憶體，不是讓排版失敗」）。卸掉引擎（約 23 KB）、世代換掉 →
+  //   這一章之後的行都不換、章節提交時記成「沒注音」；下一次 ensureLoaded（進閱讀器、醒來）記憶體夠就再開。
+  //   不動字型本身：排版量寬用的是字型的 advance，卸字型會排出不同分頁（handleLowMemoryBuild 的註解）；引擎不影響量寬。
+  //   ⚠️ 只能在持 RenderLock 的地方呼叫（建置 tick、render）：TXT 的游標與 EPUB 的 session 在排版當中拿著引擎的暫存。
+  //   回 true ＝ 真的卸了（有印 ZY yield）。
+  bool yieldZhuyin(const char* why);
+
+  // 注音（P2）：fontId 是目前的閱讀字型、而且是注音字型（檔頭有標記）—— 不管引擎開了沒有。
+  // 漢字格一律 1.5 em，所以直排欄距（vtext::columnPitchPx）只看這個；章節身分（readerRenderSpec）也用同一個判斷。
+  bool isZhuyinFont(int fontId) const;
+
   /// Non-const access to the registry (for FontInstaller).
   SdCardFontRegistry& registry() { return registry_; }
 
@@ -71,8 +82,15 @@ class SdCardFontSystem {
   // No-op when no SD family is loaded. Safe to call repeatedly (sizes already
   // loaded are reused).
   void setupUiFallbacks(GfxRenderer& renderer);
+  // 注音（P2）：閱讀字型是注音字型、引擎還沒好 → 試著啟用（ensureLoaded 的每一個出口都呼叫；開機的 begin 不做，
+  // 開機路徑一行都不動）。資料或配對壞了 → 記住這個字型檔（內容雜湊）別再試；記憶體或堆疊不夠 → 下次進閱讀器再試。
+  void ensureZhuyin();
+  // readerRenderSpec 用：這個字型（必須是目前的閱讀字型）現在的注音身分、「引擎沒開」與「引擎開著」時的身分；非注音 → 0／0／0
+  void zhuyinIdentities(int fontId, uint32_t* current, uint32_t* off, uint32_t* on) const;
 
   SdCardFontRegistry registry_;
+  uint32_t zhuyinGaveUpHash_ = 0;
+  bool zhuyinOffLogged_ = false;
   SdCardFontManager manager_;
   std::atomic<bool> registryDirty_{false};
 };

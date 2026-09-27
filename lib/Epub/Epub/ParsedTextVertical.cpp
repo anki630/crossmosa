@@ -22,6 +22,8 @@
 #include <Utf8.h>
 
 #include "ParsedText.h"
+
+#include <ZhuyinActive.h>
 #include "VerticalColumns.h"
 #include "VerticalEm.h"
 #include "VerticalText.h"
@@ -254,6 +256,7 @@ void ParsedText::layoutAndExtractColumns(
   //      而且會在 diag.log 留下可歸因的一行。
   const auto consumeAllAndBail = [this](const char* why) {
     ParsedText::vertDiag("VERTBAIL %s words=%u", why, static_cast<unsigned>(words.size()));
+    zhuyinAbandon();  // 注音：這些字已經送進 session、卻不會有任何一欄去取 → 這一段之後不標
     const size_t n = words.size();
     words.clear();
     wordStyles.clear();
@@ -748,6 +751,11 @@ void ParsedText::layoutAndExtractColumns(
 
   size_t columnCount = includeLast ? breaks.starts.size()
                                    : (breaks.starts.size() > 1 ? breaks.starts.size() - 1 : 0);
+  // 注音（同橫排）：段落結束 → 全部送出；還沒結束 → 只取出漢字都已經定案的欄（下面的欄界調整只會再往前退）
+  if (zhuyinPrepareBatch(includeLast)) {
+    columnCount = zhuyinCoveredColumns(unitSrcWord, unitByteBegin, unitByteLen, breaks.starts, columnCount,
+                                       units.size());
+  }
 
   // ⭐⭐ **欄界必須落在 token 邊界上。**（複查抓到：soft flush 時文字會重複一段）
   //
@@ -799,6 +807,23 @@ void ParsedText::layoutAndExtractColumns(
     colAlong.reserve(n);
     colStyles.reserve(n);
     colCross.reserve(n);
+    // 注音：每一格來自哪個 token（ruby 判斷用；一個 token 可以吐出好幾格）。
+    //   ⚠️ nothrow 配置（codex 整合複查 A4）：這是只有注音才多出來的配置，配不到就讓這一段停止標注（降級），不是 abort。
+    //   格數的上界是 n（每個 unit 至少一格；直立的 unit 逐碼位拆，上界是位元組數）→ 配 unit 位元組總數。
+    bool zyCells = zhuyinActive();  // 停了就不再為它配任何東西（codex 整合複查第二輪）
+    size_t colSrcCap = 0;
+    if (zyCells) {
+      for (size_t i = begin; i < end; ++i) colSrcCap += unitByteLen[i] > 0 ? unitByteLen[i] : 1;
+    }
+    std::unique_ptr<uint16_t[]> colSrcBuf(zyCells ? new (std::nothrow) uint16_t[colSrcCap > 0 ? colSrcCap : 1] : nullptr);
+    if (zyCells && !colSrcBuf) {
+      zhuyinStop(true);
+      zyCells = false;
+    }
+    size_t colSrcN = 0;
+    const auto pushSrc = [&](const size_t w) {
+      if (zyCells && colSrcN < colSrcCap) colSrcBuf[colSrcN++] = static_cast<uint16_t>(w);
+    };
 
     for (size_t i = begin; i < end; ++i) {
       const size_t w = unitSrcWord[i];
@@ -808,6 +833,7 @@ void ParsedText::layoutAndExtractColumns(
       if (units[i].kind == vtext::UnitKind::Rotated) {
         // 旋轉：整串一次畫（drawTextVerticalCW 自己沿欄推進）。不換字形。
         colWords.push_back(raw);
+        pushSrc(w);
         colAlong.push_back(static_cast<int16_t>(breaks.alongOff[i] + 0.5f));
         colStyles.push_back(
             static_cast<EpdFontFamily::Style>(static_cast<uint8_t>(st) | vtext::STYLE_BIT_ROTATED));
@@ -826,6 +852,7 @@ void ParsedText::layoutAndExtractColumns(
         // drawText 內部會 +ascender，所以這裡先扣掉；淨效果是基線落在 cellAscent。
         const float tcyAlong = breaks.alongOff[i] + em * vtext::CELL_ASCENT_FACTOR - ascender;
         colWords.push_back(raw);
+        pushSrc(w);
         colAlong.push_back(static_cast<int16_t>(tcyAlong + 0.5f));
         colStyles.push_back(st);
         colCross.push_back(static_cast<uint16_t>(units[i].crossOff + 0.5f));
@@ -859,6 +886,7 @@ void ParsedText::layoutAndExtractColumns(
         std::string one;
         utf8AppendCodepoint(drawCp, one);
         colWords.push_back(std::move(one));
+        pushSrc(w);
 
         const float cellTop = breaks.alongOff[i] + static_cast<float>(k) * em;
         // 這一格是不是「掛出去的那一個」？（ぶら下げ 的定義就是超出欄長，不是異常，
@@ -946,8 +974,29 @@ void ParsedText::layoutAndExtractColumns(
     const uint32_t visibleOffset = visibleOffsetAt(unitSrcWord[begin]);
     // ⚠️ ruby 在直排【刻意不做】，而且必須顯式不傳 —— 只要 rubyTexts 非空，
     //    TextBlock::render 就會用橫排座標亂畫三處（不是靜默不畫）。實測未見真正的注音 ruby。
+    // 注音：直排不畫 ruby，但出版社標注過的字（ruby 的底字）照樣不換
+    struct SrcView {
+      const ParsedText* self;
+      const uint16_t* src;
+      size_t n;
+    } view{this, colSrcBuf.get(), colSrcN};
+    const uint32_t zyOomBefore = zhuyin::swapStats().listOom;
+    const zhuyin::SwapBatch zb =
+        zyCells ? zhuyinLineSwaps(
+                      colWords,
+                      [](const void* c, const size_t k) {
+                        const auto* v = static_cast<const SrcView*>(c);
+                        if (k >= v->n) return false;
+                        const size_t w = v->src[k];
+                        return (w < v->self->rubyTexts.size() && !v->self->rubyTexts[w].empty()) ||
+                               (w < v->self->wordStyles.size() &&
+                                (v->self->wordStyles[w] & EpdFontFamily::RUBY_CONTINUE) != 0);
+                      },
+                      &view)
+                : zhuyin::SwapBatch{};
     auto block = std::make_shared<TextBlock>(colWords, colAlong, colStyles, colBoundary, colCross, blockStyle,
-                                             std::vector<std::string>{});
+                                             std::vector<std::string>{}, zb);
+    zhuyinNoteBuilt(zb, zyOomBefore);
     if (!block->valid()) {
       LOG_ERR("PTV", "Dropping column: TextBlock arena allocation failed");
       continue;

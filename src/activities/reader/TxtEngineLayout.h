@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "Epub/blocks/TextBlock.h"
+#include "ZhuyinTxtCursor.h"
 
 class GfxRenderer;
 
@@ -64,6 +65,10 @@ struct Params {
   // 只回報單位總數與最後 collectKeep 個單位的起點。maxUnits 被忽略。
   bool collectOnly = false;
   size_t collectKeep = 0;
+  // 注音（P2 設計 2c）：這一頁的讀音來源（呼叫端建好、begin 過）。nullptr ＝ 不標。收集模式一律不用。
+  // generation ＝ 建游標時引擎的世代（每一段接上游標前 ParsedText 都核對）。
+  zhuyin::ZhuyinTxtCursor* zhuyinCursor = nullptr;
+  uint32_t zhuyinGeneration = 0;
 };
 
 struct Result {
@@ -98,6 +103,29 @@ struct Result {
   // 收集模式的輸出。
   size_t unitCount = 0;
   std::vector<size_t> lastStarts;
+  // 注音：餵進了不合法的 UTF-8 而作廢游標（0 或 1）。
+  uint16_t zhuyinUnsafe = 0;
+};
+
+// 注音游標的讀檔來源：要的範圍整段落在這一頁已經讀進記憶體的那塊裡就從記憶體拿，否則交給 readExact（讀卡）。
+// ⚠️ readExact 必須讀滿才算成功（Txt::readContentExact）—— 上下文少了幾個位元組，解析器就可能選錯讀音。
+class ChunkSource final : public zhuyin::ByteSource {
+ public:
+  using ReadExactFn = bool (*)(void* ctx, size_t offset, uint8_t* dst, size_t len);
+  ChunkSource(const uint8_t* chunk, size_t chunkStart, size_t chunkLen, size_t fileSize, ReadExactFn readExact,
+              void* ctx)
+      : chunk_(chunk), chunkStart_(chunkStart), chunkLen_(chunkLen), fileSize_(fileSize), readExact_(readExact),
+        ctx_(ctx) {}
+  size_t size() const override { return fileSize_; }
+  bool read(size_t offset, uint8_t* dst, size_t len) override;
+  uint16_t cardReads() const { return cardReads_; }
+
+ private:
+  const uint8_t* chunk_;
+  size_t chunkStart_, chunkLen_, fileSize_;
+  ReadExactFn readExact_;
+  void* ctx_;
+  uint16_t cardReads_ = 0;
 };
 
 // `chunk` 是從當前頁起點讀進來的一塊原文（不必以行邊界結束）。

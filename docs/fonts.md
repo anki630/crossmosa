@@ -48,6 +48,15 @@ CrossMosa 的中文分成兩套字型，各有各的地盤：
 
 ![X3 正在讀《歡迎使用 CrossMosa》](promo/photo-guide.jpg)
 
+## 注音字型
+
+每個字旁都有注音，給剛開始自己讀書的孩子。在 [`zhuyin-2026-09`](https://github.com/anki630/crossmosa/releases/tag/zhuyin-2026-09) 下載，
+字級 26／28／30／32，裝法跟其他字型一樣。
+
+需要 2.1.0-beta.5 或更新的韌體。在沒看過的書上實測，注音引擎每千字平均約 4 字讀錯。
+
+破音字判斷只在 ZhuyinKai 上有效，自己轉的注音字型會照字型本身的預設讀音顯示。
+
 
 ---
 

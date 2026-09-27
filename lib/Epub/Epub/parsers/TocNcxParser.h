@@ -1,5 +1,6 @@
 #pragma once
 #include <Print.h>
+#include <XmlParserUtils.h>
 #include <expat.h>
 
 #include <string>
@@ -12,6 +13,7 @@ class TocNcxParser final : public Print {
   const std::string& baseContentPath;
   size_t remainingSize;
   XML_Parser parser = nullptr;
+  XmlControlCharFilter xmlFilter_;  // v345（帳本 D14）：餵 expat 前濾掉 XML 不准的控制字元
   ParserState state = START;
   BookMetadataCache* cache;
 

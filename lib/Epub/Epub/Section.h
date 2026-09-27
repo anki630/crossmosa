@@ -70,6 +70,15 @@ class Section {
   // 這輪建置是不是直排（來自 spec，startBuild 時記下）。跨 tick 的增量建置每一步都要重設
   // renderer 的旗標 —— 中間會回到主迴圈跑別的畫面，而那些畫面會把旗標改掉。
   bool buildVertical_ = false;
+  // 注音（P2，codex 修訂 2）：章節檔頭的身分寫這次建置【實際】用的模式。
+  //   zyHeaderOn_   ＝ 檔頭一開始寫的是「開」的身分（spec 說引擎開著）
+  //   zyBuildOn_    ＝ 建置開始時引擎真的可用、就是這個字型的 → 解析器允許注音
+  //   提交時：檔頭寫「開」但建置沒開，或途中降級（有段落因資源停、或引擎世代變了）→ 補成 zyOffIdentity_
+  bool zyHeaderOn_ = false;
+  bool zyBuildOn_ = false;
+  bool zyPatchedOff_ = false;  // 提交時檔頭補成了「沒注音」（ZYBUILD 證人）
+  uint32_t zyGenAtStart_ = 0;
+  int zyOffIdentity_ = 0;
   // v187：最近一次 loadSectionFile 丟掉快取的原因（0 無／1 版號／2 參數／3 CSS 截斷重排／4 partial 尾段壞）。
   uint8_t lastLoadReject_ = 0;
   // v309：最近一次比對時，【存檔裡】記的 em。配上現場量到的那個，就能一次分辨
@@ -149,6 +158,16 @@ class Section {
   static uint32_t buildStepMaxMs;   // 最長一步（含收尾那一步），ms
   static uint32_t buildStepTotalUs;  // 累計，µs（millis 解析度會把 <1ms 的步算成 0）
   static uint32_t buildStepCount;
+  // 注音（P2 I6）：每一步之後量到的最低 free，與那一刻的最大連續塊（同上：lib 記、活動讀；buildMinFree 歸零成 UINT32_MAX）。
+  //   引擎常駐約 23 KB → 同一本書注音字型與一般字型對照，看建置的谷底低了多少、有沒有逼近 lowmem。
+  static uint32_t buildMinFree;
+  static uint32_t buildLargestAtMinFree;
+  // 這次（或上一次）建置的注音模式：0 不是注音字型、1 開、2 沒開（建置開始時引擎不可用）、3 途中降級（提交時補成「沒注音」）
+  uint8_t zhuyinBuildMode() const {
+    if (!zyHeaderOn_) return 0;
+    if (!zyBuildOn_) return 2;
+    return zyPatchedOff_ ? 3 : 1;
+  }
   // Best-known total page count: the exact pageCount once finalized, or a smoothed byte-based
   // estimate (pages so far scaled by totalBytes/bytesConsumed, damped by an EMA) while a giant spine
   // is still building, so "page X of Y" / progress don't read off the small build watermark.

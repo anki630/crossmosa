@@ -402,3 +402,13 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
   }
   return v;
 }
+
+// v337：這一項只在「有時鐘晶片」的機型上有意義（X3 有 DS3231；X4 沒有，SDK 板子設定 NO_SENSORS）。
+//   裝置上的狀態列設定頁本來就依 halClock.isAvailable() 把時鐘四項藏起來；網頁版設定頁照清單全列，
+//   在 X4 上就多出四個設了沒作用的項目（帳本 D11）。
+//   ⚠️ 只給【顯示／套用】那一層用：不要拿它從 getSettingsList() 移除條目 —— 存讀 settings.json 的泛用迴圈
+//      也走這份清單，移掉的話 X4 存檔就不寫這四個鍵，SD 卡插回 X3 時時區等設定會被重設（CLAUDE.md A-1）。
+inline bool isClockSetting(const SettingInfo& s) {
+  return s.nameId == StrId::STR_CLOCK || s.nameId == StrId::STR_CLOCK_UTC_OFFSET ||
+         s.nameId == StrId::STR_CLOCK_FORMAT || s.nameId == StrId::STR_CLOCK_SYNCED;
+}

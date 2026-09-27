@@ -11,6 +11,7 @@
 #include "CrossPointSettings.h"
 #include "MappedInputManager.h"
 #include "SilentRestart.h"
+#include "util/DiagLog.h"
 #include "activities/network/WifiSelectionActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
@@ -64,7 +65,14 @@ void ClockSyncActivity::runSync() {
     return;
   }
 
+  uint16_t clkYear = 0;
+  const HalClock::State clkState = halClock.probe(&clkYear);
+  const unsigned long ntpT0 = millis();
   const bool ok = halClock.syncFromNTP();
+  // v343（帳本 B12）：手動校時的證人（校之前的狀態、結果）
+  DiagLog::line("CLK manual ok=%d took=%lu st=%s year=%u", static_cast<int>(ok),
+                static_cast<unsigned long>(millis() - ntpT0), HalClock::stateName(clkState),
+                static_cast<unsigned>(clkYear));
   if (!ok) {
     state = FAILED;
     requestUpdate();

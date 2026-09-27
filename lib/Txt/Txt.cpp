@@ -6,6 +6,9 @@
 
 Txt::Txt(std::string path, std::string cacheBasePath)
     : filepath(std::move(path)), cacheBasePath(std::move(cacheBasePath)) {
+  // 共用檔柄的序列鎖（見 Txt.h）。在建構時建：第一次用時才建的話，兩個任務同時第一次進來會各建一次、蓋掉同一塊靜態儲存。
+  // 物件不搬（unique_ptr 或區域變數），靜態儲存留在物件裡是安全的。
+  fileMutex_ = xSemaphoreCreateRecursiveMutexStatic(&fileMutexStorage_);
   // Generate cache path from file path hash
   const size_t hash = std::hash<std::string>{}(filepath);
   cachePath = this->cacheBasePath + "/txt_" + std::to_string(hash);
@@ -170,7 +173,7 @@ bool Txt::clearCache() const {
   return true;
 }
 
-bool Txt::readContent(uint8_t* buffer, size_t offset, size_t length) const {
+bool Txt::seekShared(const size_t offset) const {
   if (!loaded) {
     return false;
   }
@@ -196,8 +199,37 @@ bool Txt::readContent(uint8_t* buffer, size_t offset, size_t length) const {
       return false;
     }
   }
+  return true;
+}
 
+struct Txt::FileLock {
+  SemaphoreHandle_t m;
+  explicit FileLock(const Txt& t) : m(t.fileMutex_) {
+    if (m) xSemaphoreTakeRecursive(m, portMAX_DELAY);
+  }
+  ~FileLock() {
+    if (m) xSemaphoreGiveRecursive(m);
+  }
+  FileLock(const FileLock&) = delete;
+  FileLock& operator=(const FileLock&) = delete;
+};
+
+bool Txt::readContent(uint8_t* buffer, size_t offset, size_t length) const {
+  const FileLock lock(*this);
+  if (!seekShared(offset)) {
+    return false;
+  }
   return sharedFile_.read(buffer, length) > 0;
+}
+
+bool Txt::readContentExact(uint8_t* buffer, const size_t offset, const size_t length) const {
+  if (length == 0) return true;
+  const FileLock lock(*this);
+  if (!seekShared(offset)) {
+    return false;
+  }
+  const int n = sharedFile_.read(buffer, length);
+  return n >= 0 && static_cast<size_t>(n) == length;
 }
 
 Txt::~Txt() {

@@ -20,6 +20,10 @@
 #include <I18n.h>
 #include <Serialization.h>
 #include <Utf8.h>
+#include <ZhuyinActive.h>
+#include <ZhuyinEngine.h>
+
+#include <cstdio>
 
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
@@ -58,6 +62,11 @@ constexpr size_t PROGRESS_SIZE = 12;
 constexpr size_t LEGACY_INDEX_HEADER_V3 = 30;
 constexpr size_t LEGACY_INDEX_HEADER_V4 = 35;
 constexpr uint32_t LEGACY_INDEX_MAGIC = 0x54585449;  // "TXTI"
+
+// 注音游標讀卡（這一頁記憶體裡那塊以外的上下文）：一定要讀滿（見 Txt::readContentExact）
+bool readTxtExact(void* ctx, const size_t offset, uint8_t* dst, const size_t len) {
+  return static_cast<const Txt*>(ctx)->readContentExact(dst, offset, len);
+}
 
 // v116 索引節奏常數。
 // 讓步改成「以時間為準」而非以頁數為準:舊條件是 pageOffsets.size() % 20,而整章不換行的
@@ -173,7 +182,8 @@ bool TxtReaderActivity::loadPageAtOffset(const size_t offset, std::vector<std::s
   }
 
   const uint32_t readStartMs = millis();
-  if (!txt->readContent(reinterpret_cast<uint8_t*>(buffer), readFrom, want)) {
+  // 讀滿才算（codex 整合複查 B1）：短讀的話緩衝區後段是沒寫過的記憶體 —— 排版會把它畫成字、注音游標會把它當成上下文
+  if (!txt->readContentExact(reinterpret_cast<uint8_t*>(buffer), readFrom, want)) {
     free(buffer);
     return false;
   }
@@ -202,11 +212,43 @@ bool TxtReaderActivity::loadPageAtOffset(const size_t offset, std::vector<std::s
   //    （txt 要不要吃「粗體內文」設定是之後的產品決定，帳本記著。）
   ParsedText::setBoldBodyText(false);
 
+  // 注音（P2 設計 2c）：這一頁的讀音來源。游標是【檔案位元組＋頁起點】的純函式 —— 往後翻、往前翻、跳頁、預取
+  // 排出來的讀音都一樣。上下文先從這一頁已經讀進來的那塊拿，不夠才讀卡。引擎沒開就不建：排版與沒有注音時逐位元組相同。
+  // ⚠️ 游標與來源都指著 buffer —— 在 free(buffer) 之前放掉。
+  txtengine::ChunkSource zySrc(reinterpret_cast<const uint8_t*>(buffer), readFrom, want, fileSize, &readTxtExact,
+                               txt.get());
+  std::unique_ptr<zhuyin::ZhuyinTxtCursor> zyCursor;
+  diagZyState_ = sdFontSystem.isZhuyinFont(cachedFontId) ? 1 : 0;
+  diagZyFail_ = 0;
+  diagZyBehind_ = 0;
+  diagZySwaps_ = 0;
+  diagZyCard_ = 0;
+  const zhuyin::ActiveEngine zyEngine = zhuyin::activeEngine();
+  if (diagZyState_ != 0 && zhuyin::engineUsable(zyEngine) && zyEngine.engine && zyEngine.fontId == cachedFontId) {
+    zyCursor.reset(new (std::nothrow)
+                       zhuyin::ZhuyinTxtCursor(zyEngine.engine->data(), zyEngine.engine->scratch(), zySrc));
+    diagZyState_ = zyCursor ? 3 : 2;
+    if (zyCursor && zyCursor->begin(readFrom + skip)) {
+      tp.zhuyinCursor = zyCursor.get();
+      tp.zhuyinGeneration = zyEngine.generation;
+    }
+  }
+
   const uint32_t wrapStartMs = millis();
   txtengine::Result r = txtengine::layoutPage(buffer + skip, want - skip, readFrom + want >= fileSize, midParagraph,
                                               renderer, tp);
   segWrapMs_ = millis() - wrapStartMs;
+  if (zyCursor) {
+    diagZyFail_ = static_cast<uint8_t>(zyCursor->failReason());
+    diagZyBehind_ = static_cast<uint16_t>(std::min<size_t>(zyCursor->lookBehind(), UINT16_MAX));
+    diagZyCard_ = zySrc.cardReads();
+    zyCursor.reset();
+  }
+  diagZyUnsafe_ = static_cast<uint8_t>(r.zhuyinUnsafe);
   free(buffer);
+  // 注音（P2 I7）：排版因低記憶體被拒絕 → 引擎先退（游標已經放掉；這一頁已排好的行畫的時候閘門關著、畫原字）。
+  //   這一頁照常在拒絕處截斷、下一頁從那裡重來 —— 但多了約 23 KB。
+  if (r.oom) sdFontSystem.yieldZhuyin("txt-oom");
 
   diagRemapMiss_ = r.remapMiss;
   diagVerifyMiss_ = r.verifyMiss;
@@ -217,6 +259,9 @@ bool TxtReaderActivity::loadPageAtOffset(const size_t offset, std::vector<std::s
   diagGlue_ = static_cast<uint16_t>(r.glueMoved + r.glueForced * 100);
 
   outUnits = std::move(r.units);
+  for (const auto& unit : outUnits) {
+    if (unit) diagZySwaps_ = static_cast<uint16_t>(diagZySwaps_ + unit->swapCount());
+  }
   nextOffset = readFrom + skip + r.nextOffset;
   return !outUnits.empty();
 }
@@ -396,7 +441,7 @@ size_t TxtReaderActivity::findPreviousPageOffset(const size_t offset, BackStats&
       st.oom = true;
       return best;
     }
-    if (!txt->readContent(reinterpret_cast<uint8_t*>(buffer), readFrom, want)) {
+    if (!txt->readContentExact(reinterpret_cast<uint8_t*>(buffer), readFrom, want)) {  // 同 loadPageAtOffset：讀滿才算
       free(buffer);
       return best;
     }
@@ -635,7 +680,8 @@ void TxtReaderActivity::recomputeGeometry() {
   vertical_ = SETTINGS.documentIsVertical();
   if (vertical_) {
     const float em = static_cast<float>(vtext::probeEmFP(renderer, cachedFontId)) / 16.0f;
-    const int pitch = static_cast<int>(em * vtext::columnPitchForTier(SETTINGS.readerColumnPitch) + 0.5f);
+    // 注音字型的漢字格是 1.5 em（注音在字的右邊）→ 欄距多 0.5 em，與 EPUB 同一個函式
+    const int pitch = vtext::columnPitchPx(em, SETTINGS.readerColumnPitch, sdFontSystem.isZhuyinFont(cachedFontId));
     columnPitch_ = pitch > 0 ? pitch : 1;
     unitsPerPage_ = viewportWidth / columnPitch_;
     if (unitsPerPage_ < 1) unitsPerPage_ = 1;
@@ -789,14 +835,29 @@ void TxtReaderActivity::render(RenderLock&&) {
   const bool pressValid = pressMs != 0 && static_cast<uint32_t>(renderStartMs - pressMs) < 10000;
   const uint32_t latWait = pressValid ? renderStartMs - pressMs : 0;
   const uint32_t latTotal = pressValid && dispDoneMs_ != 0 ? dispDoneMs_ - pressMs : 0;
-  DiagLog::line("TXTPAGE off=%u next=%u layout=%u rd=%u fnt=%u wrp=%u prewarm=%u bw=%u disp=%u aa=%u save=%u warm=%u afail=%u dropped=%u lines=%u est=%d/%d eng=2 remap=%u vmiss=%u flush=%u words=%u eoom=%u cut=%u glue=%u vert=%u pitch=%u rescue=%u wait=%u lat=%u dlog=%u nvs=%d",
+  // 注音（P2）：zy=- 不是注音字型｜off 引擎沒開｜nomem 游標配不到｜失敗原因.上下文位元組.注音字形數.讀卡次數.不安全塊
+  //   失敗原因 0 ＝ 沒失敗；4（Mismatch）應該永遠不出現 —— 出現了就是「排版交出每一個漢字」的推理有洞。
+  char zyDiag[40];
+  if (diagZyState_ == 0) {
+    snprintf(zyDiag, sizeof(zyDiag), "-");
+  } else if (diagZyState_ == 1) {
+    snprintf(zyDiag, sizeof(zyDiag), "off");
+  } else if (diagZyState_ == 2) {
+    snprintf(zyDiag, sizeof(zyDiag), "nomem");
+  } else {
+    snprintf(zyDiag, sizeof(zyDiag), "%u.%u.%u.%u.%u", static_cast<unsigned>(diagZyFail_),
+             static_cast<unsigned>(diagZyBehind_), static_cast<unsigned>(diagZySwaps_),
+             static_cast<unsigned>(diagZyCard_), static_cast<unsigned>(diagZyUnsafe_));
+  }
+  DiagLog::line("TXTPAGE off=%u next=%u layout=%u rd=%u fnt=%u wrp=%u prewarm=%u bw=%u disp=%u aa=%u save=%u warm=%u afail=%u dropped=%u lines=%u est=%d/%d eng=2 remap=%u vmiss=%u flush=%u words=%u eoom=%u cut=%u glue=%u vert=%u pitch=%u rescue=%u wait=%u lat=%u dlog=%u nvs=%d zy=%s shwm=%u",
                 static_cast<unsigned>(pageOffset), static_cast<unsigned>(nextOffset), layoutMs, segReadMs_, segFontMs_, segWrapMs_, segPrewarmMs_,
                 segBwMs_, segDispMs_, segAaMs_, saveMs, diagWarmHit_, diagAllocFail_, diagDropped_,
                 static_cast<unsigned>(currentPageLines.size()),
                 estimatedCurrentPage(), estimatedTotalPages(), diagRemapMiss_, diagVerifyMiss_, diagFlushes_, diagWords_, diagEngOom_,
                 diagChunkCut_, diagGlue_, vertical_ ? 1u : 0u, static_cast<unsigned>(columnPitch_),
                 diagRescue_, static_cast<unsigned>(latWait), static_cast<unsigned>(latTotal),
-                static_cast<unsigned>(prevDlogMs), static_cast<int>(prevNvsUs));
+                static_cast<unsigned>(prevDlogMs), static_cast<int>(prevNvsUs), zyDiag,
+                static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr)));  // 繪製任務（排版在這裡跑）的堆疊高水位
   // v240：txt 也寫 SDCFFAIL（EPUB 閱讀器一直有寫）。v239 看得到 afail 卻不知道差多少位元組，
   // 分不出是新引擎把記憶體切碎、還是某頁剛好用到比較多字。預取的失敗會出現在【下一頁】的這一行之後。
   DiagLog::crumb("SDCFFAIL", SdCardFont::lastAllocFail, sizeof(SdCardFont::lastAllocFail));

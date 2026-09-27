@@ -430,18 +430,30 @@ void WifiSelectionActivity::checkConnectionStatus() {
             WiFi.RSSI());
 #endif
 
-    // Sync RTC from NTP on the first successful WiFi connection only. The DS3231
+    // Sync RTC from NTP on the first successful WiFi connection. The DS3231
     // drifts ~2 ppm so one sync is enough; users can force a re-sync from
     // Settings > Customise Status Bar > Sync clock now.
-    if (halClock.isAvailable() && !SETTINGS.clockHasBeenSynced) {
+    // v343（帳本 B12）：另外，只要時間不可信（讀不到、年份早於 2025）就校 —— 不只第一次。以前 RTC 被歸零之後
+    //   設定仍寫著「校時完成」→ 狀態列永遠 08:00、不會自己好（實機 2026-09-26）。時間可信時照舊一次都不校。
+    //   退避（codex v343 兩輪）：校時失敗了（RTC 真的壞了、或這個網路出不去）→ 一小時內「不可信」那條不再試，
+    //   不讓每次連線都多等幾秒；任何一次校時成功（包括手動）就清掉（HalClock::syncRetryDue，只在 RAM）。
+    //   「從沒校過」那條照舊每次連線都試（上游行為）。同一次連線只會走到這裡一次（之後狀態就離開 connected）。
+    uint16_t clkYear = 0;
+    const HalClock::State clkState = halClock.isAvailable() ? halClock.probe(&clkYear) : HalClock::State::Absent;
+    const bool untrustedDue = clkState != HalClock::State::Ok && halClock.syncRetryDue();
+    if (halClock.isAvailable() && (!SETTINGS.clockHasBeenSynced || untrustedDue)) {
       // 這一步是阻塞的 DNS＋UDP，夾在 connected 與 done 之間，正是 v77/v111 DNS 鎖當機的鄰居。
       const unsigned long ntpT0 = millis();
       const bool ntpOk = halClock.syncFromNTP();
-      DiagLog::line("WIFI ntp ok=%d took=%lu", static_cast<int>(ntpOk), static_cast<unsigned long>(millis() - ntpT0));
-      if (ntpOk) {
+      DiagLog::line("WIFI ntp ok=%d took=%lu why=%s st=%s year=%u", static_cast<int>(ntpOk),
+                    static_cast<unsigned long>(millis() - ntpT0), SETTINGS.clockHasBeenSynced ? "untrusted" : "first",
+                    HalClock::stateName(clkState), static_cast<unsigned>(clkYear));
+      if (ntpOk && !SETTINGS.clockHasBeenSynced) {  // 旗標沒變就不寫卡（每次存設定都可能停頓約 1 秒）
         SETTINGS.clockHasBeenSynced = 1;
         SETTINGS.saveToFile();
       }
+    } else if (halClock.isAvailable() && clkState != HalClock::State::Ok) {
+      DiagLog::line("WIFI ntp skip=backoff st=%s year=%u", HalClock::stateName(clkState), static_cast<unsigned>(clkYear));
     }
 
     // Save this as the last connected network - SD card operations need lock as

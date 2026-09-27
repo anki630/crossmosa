@@ -16,6 +16,12 @@ enum PageElementTag : uint8_t {
   TAG_PageHorizontalRule = 3,
 };
 
+// 章節檔裡的【序列】標籤 4：帶注音替換清單的 PageLine（P2 ③）。邏輯型別仍是 TAG_PageLine（getTag() 照回 1），
+// 所以「是不是一行」的判斷都不必改。格式：u16 筆數、u16 筆數的補數、TextBlock 本體（與標籤 1 相同）、每一筆＋CRC。
+// 舊韌體讀到它是「不認得的標籤」→ 這一頁安全失敗（而章節身分早在那之前就對不上、整章重排）。
+// 非注音的行永遠寫標籤 1 → 格式逐位元組不變（test/zhuyin_cache 的黃金檔）。
+constexpr uint8_t SERIAL_TAG_PAGE_LINE_ZHUYIN = 4;
+
 // represents something that has been added to a page
 class PageElement {
  public:
@@ -26,6 +32,11 @@ class PageElement {
   virtual void render(GfxRenderer& renderer, int fontId, int xOffset, int yOffset) = 0;
   virtual bool serialize(HalFile& file) = 0;
   virtual PageElementTag getTag() const = 0;  // Add type identification
+  // 寫進章節檔的標籤（通常就是 getTag()；帶注音清單的行是 SERIAL_TAG_PAGE_LINE_ZHUYIN）。查詢用。
+  virtual uint8_t serialTag() const { return static_cast<uint8_t>(getTag()); }
+  // Page::serialize 用這個：標籤＋內容，由元素自己【判一次】（codex 複查 ③ F4：標籤與內容不能各判各的）。
+  // place ＝ 這一頁在章節裡的位置（注音清單的綁定帶著它）。
+  virtual bool serializeTagged(HalFile& file, const zhuyin::PagePlace& place);
 };
 
 // a line from a block element
@@ -37,9 +48,22 @@ class PageLine final : public PageElement {
       : PageElement(xPos, yPos), block(std::move(block)) {}
   const std::shared_ptr<TextBlock>& getBlock() const { return block; }
   void render(GfxRenderer& renderer, int fontId, int xOffset, int yOffset) override;
+  // 永遠寫標籤 1 的內容（沒有清單）：只有 serializeTagged 會寫標籤 4 —— 舊的「getTag() 再 serialize()」寫法
+  // 因此不可能寫出「標籤 1 ＋ 標籤 4 的內容」（codex 複查 ③ 第二輪 F7）。
   bool serialize(HalFile& file) override;
   PageElementTag getTag() const override { return TAG_PageLine; }
-  static std::unique_ptr<PageLine> deserialize(HalFile& file);
+  // 查詢用：清單現在還有效（引擎可用、世代相同）→ serializeTagged 會寫標籤 4
+  uint8_t serialTag() const override {
+    return block->swapsPersistable() ? SERIAL_TAG_PAGE_LINE_ZHUYIN : static_cast<uint8_t>(TAG_PageLine);
+  }
+  bool serializeTagged(HalFile& file, const zhuyin::PagePlace& place) override;
+  // withSwaps ＝ 章節檔的標籤是 SERIAL_TAG_PAGE_LINE_ZHUYIN（由 Page::deserialize 明確告知，不讓底層猜）；
+  // place ＝ 要載入的是哪一頁（綁定要跟它相同）
+  static std::unique_ptr<PageLine> deserialize(HalFile& file, bool withSwaps = false,
+                                               const zhuyin::PagePlace& place = {});
+
+ private:
+  bool serializeBody(HalFile& file, const uint8_t* binding);  // binding ＝ nullptr → 標籤 1 的內容
 };
 
 // New PageImage class
@@ -101,8 +125,9 @@ class Page {
   void render(GfxRenderer& renderer, int fontId, int xOffset, int yOffset) const;
   void renderImages(GfxRenderer& renderer, int fontId, int xOffset, int yOffset) const;
   void renderWithImagePlaceholders(GfxRenderer& renderer, int fontId, int xOffset, int yOffset) const;
-  bool serialize(HalFile& file) const;
-  static std::unique_ptr<Page> deserialize(HalFile& file);
+  // place ＝ 這一頁在章節裡的位置（Section 給：spine ＋ 頁序號）；帶注音清單的行綁著它，載入時要相同才換。
+  bool serialize(HalFile& file, const zhuyin::PagePlace& place = {}) const;
+  static std::unique_ptr<Page> deserialize(HalFile& file, const zhuyin::PagePlace& place = {});
 
   // Check if page contains any images (used to force full refresh)
   bool hasImages() const {

@@ -64,6 +64,8 @@ class GfxRenderer {
   // 所以分開數兩件事：直排頁畫過幾次（vdraw）、其中旋轉繪製幾次（vrot）。
   mutable uint16_t verticalDrawCount = 0;
   mutable uint16_t verticalRotCount = 0;
+  // v344（帳本 D13）：預讀掃描時旋轉字只記錄不畫 —— 這個數的是「掃描走到旋轉字」幾次（vscan），證明新閘門有被跑到。
+  mutable uint16_t verticalRotScanCount = 0;
 
   // Mutable because ensureSdCardFontReady() is const (called from layout code
   // that holds a const GfxRenderer&) but triggers SD card reads and heap
@@ -174,6 +176,11 @@ class GfxRenderer {
   uint16_t takeVerticalRotCount() const {
     const uint16_t n = verticalRotCount;
     verticalRotCount = 0;
+    return n;
+  }
+  uint16_t takeVerticalRotScanCount() const {
+    const uint16_t n = verticalRotScanCount;
+    verticalRotScanCount = 0;
     return n;
   }
 

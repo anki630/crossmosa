@@ -7,6 +7,7 @@
 #include <HalStorage.h>
 #include <I18n.h>
 #include <Memory.h>
+#include <XmlParserUtils.h>
 
 #include <optional>
 
@@ -70,6 +71,7 @@ std::unique_ptr<Epub> ReaderActivity::loadEpub(const std::string& path) {
     // activity follows redraws the full screen anyway.
     std::optional<GfxRenderer::FrameBufferLoan> loan;
     if (uncached) loan.emplace(renderer);
+    takeXmlControlDrops();  // v345：歸零 → 下面 BOOKOPEN 的 xmlfix 只算這次開書
     loaded = epub->load(true, SETTINGS.embeddedStyle == 0);
   }
   // load() only reports that the metadata cache is readable; it says nothing about
@@ -79,10 +81,12 @@ std::unique_ptr<Epub> ReaderActivity::loadEpub(const std::string& path) {
   // here so the failure is reported as a failure.
   const unsigned long openTLoad = millis();
   // ⚠️ 不印路徑或書名（隱私）；`spine=` 是章節數，判讀時用得上。
-  DiagLog::line("BOOKOPEN exists=%lu ctor=%lu load=%lu total=%lu cached=%d spine=%d",
+  // v345（帳本 D14）：xmlfix＝這次開書時 XML 解析器濾掉幾個控制字元（> 0 ＝ 這本書的描述檔本來會被拒收）。
+  DiagLog::line("BOOKOPEN exists=%lu ctor=%lu load=%lu total=%lu cached=%d spine=%d xmlfix=%lu",
                 static_cast<unsigned long>(openT0 - existsT0), static_cast<unsigned long>(openTCtor - openT0),
                 static_cast<unsigned long>(openTLoad - openTCtor), static_cast<unsigned long>(openTLoad - existsT0),
-                uncached ? 0 : 1, loaded ? static_cast<int>(epub->getSpineItemsCount()) : -1);
+                uncached ? 0 : 1, loaded ? static_cast<int>(epub->getSpineItemsCount()) : -1,
+                static_cast<unsigned long>(takeXmlControlDrops()));
   if (loaded && epub->getSpineItemsCount() > 0) {
     return epub;
   }

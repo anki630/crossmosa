@@ -122,6 +122,13 @@ class TxtReaderActivity final : public Activity {
   uint8_t diagEngOom_ = 0;
   uint8_t diagChunkCut_ = 0;
   uint16_t diagGlue_ = 0;  // 整組移頁次數；百位數以上是「整頁一組只能推一碼位」的次數
+  // 注音（P2）的證人：TXTPAGE 的 zy=（格式見 formatZhuyinDiag）
+  uint8_t diagZyState_ = 0;    // 0 ＝ 不是注音字型、1 ＝ 注音字型但引擎沒開、2 ＝ 游標配不到、3 ＝ 有游標
+  uint8_t diagZyFail_ = 0;     // zhuyin::TxtCursorFail
+  uint16_t diagZyBehind_ = 0;  // 往前讀了幾個位元組的上下文
+  uint16_t diagZySwaps_ = 0;   // 這一頁會畫出來的注音字形數
+  uint16_t diagZyCard_ = 0;    // 游標讀卡次數（其餘從這一頁的記憶體拿）
+  uint8_t diagZyUnsafe_ = 0;   // 餵進不安全的塊而作廢
   // v243 證人
   uint32_t diagRescue_ = 0;  // mini-bitmap 取整成長配不到、但仍不必降級的次數（SdCardFont::Stats::bitmapExactRescues）
   uint32_t prefetchRescue_ = 0;

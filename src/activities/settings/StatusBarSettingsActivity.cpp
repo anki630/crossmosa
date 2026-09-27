@@ -89,6 +89,8 @@ void StatusBarSettingsActivity::onEnter() {
 
   selectedIndex = 0;
   visibleItemCount = halClock.isAvailable() ? FULL_MENU_ITEMS : BASE_MENU_ITEMS;
+  // v343（帳本 B12）：「時鐘校時」標籤要知道現在的時間可不可信 —— 在這裡（主任務）探測一次，render 只讀結果（不在 render 裡打 I2C）
+  clockTrusted = halClock.isAvailable() && halClock.probe() == HalClock::State::Ok;
 
   // Clamp statusBarProgressBar and statusBarTitle in case of corrupt/migrated data
   if (SETTINGS.statusBarProgressBar >= PROGRESS_BAR_ITEMS) {
@@ -224,7 +226,10 @@ void StatusBarSettingsActivity::handleSelection() {
       startActivityForResult(std::make_unique<ClockOffsetActivity>(renderer, mappedInput), nullptr);
       return;
     case ITEM_CLOCK_SYNC:
-      startActivityForResult(std::make_unique<ClockSyncActivity>(renderer, mappedInput), nullptr);
+      startActivityForResult(std::make_unique<ClockSyncActivity>(renderer, mappedInput), [this](const ActivityResult&) {
+        clockTrusted = halClock.probe() == HalClock::State::Ok;  // v343：校完回來重探一次，標籤才會跟著變
+        requestUpdate();
+      });
       return;
     default:
       return;
@@ -248,7 +253,7 @@ void StatusBarSettingsActivity::render(RenderLock&&) {
   GUI.drawList(
       renderer, Rect{0, contentTop, pageWidth, contentHeight}, visibleItemCount, static_cast<int>(selectedIndex),
       [](int index) { return std::string(I18N.get(menuNames[index])); }, nullptr, nullptr,
-      [](int index) -> std::string {
+      [trusted = clockTrusted](int index) -> std::string {
         switch (index) {
           case ITEM_CHAPTER_PAGE_COUNT:
             return SETTINGS.statusBarChapterPageCount ? tr(STR_SHOW) : tr(STR_HIDE);
@@ -273,7 +278,8 @@ void StatusBarSettingsActivity::render(RenderLock&&) {
           case ITEM_CLOCK_UTC_OFFSET:
             return formatUtcOffset(SETTINGS.clockUtcOffsetQ);
           case ITEM_CLOCK_SYNC:
-            return SETTINGS.clockHasBeenSynced ? tr(STR_CLOCK_SYNCED) : tr(STR_NOT_SET);
+            // v343（帳本 B12）：校過、但現在的時間不可信（RTC 被歸零）→ 未設定，不說「校時完成」
+            return SETTINGS.clockHasBeenSynced && trusted ? tr(STR_CLOCK_SYNCED) : tr(STR_NOT_SET);
           default:
             return tr(STR_HIDE);
         }

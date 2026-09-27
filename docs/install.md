@@ -55,12 +55,14 @@
 1. 把 zip 裡的 `update.bin` 複製到 SD 卡**根目錄**(檔名已預先改好——
    這顆就是其他教學裡說要改名的 firmware.bin;注意瀏覽器重複下載會變
    `update (1).bin`，那樣不行)。
-2. 關機 → **按住左側「上一頁」鍵 + 電源鍵**，看到載入畫面就放手。
+2. 關機，按住下面兩顆鍵，看到載入畫面就放手：
+   - **X3**：左側「上一頁」鍵 + 電源鍵
+   - **X4**：右側上面那顆鍵 + 電源鍵。沒有反應的話，接上 USB 電源再試一次。
 3. 等它刷完自己開機，約五分鐘。**刷完建議把 `update.bin` 從卡上刪掉**
    （避免日後誤刷舊版）。失敗的話長按電源 5–10 秒強制重開，
    重新下載檔案再試（多半是檔案沒抓完整）。
 
-這條路是 **X3 限定**（X4 原廠韌體沒有這個組合鍵），而且**不需要電腦偵測得到機器**——
+這條路**不需要電腦偵測得到機器**——
 線材、Hub、驅動有問題、甚至 USB 被鎖，都不影響。社群文件記載它**連 USB-locked
 的機器也適用**。維護者自己的第一次就是這樣刷的（Mac 的 Hub 一直偵測不到機器）。
 
@@ -68,7 +70,7 @@
 
 1. USB-C 接電腦，喚醒裝置。
 2. 開 https://crosspointreader.com/#flash-tools,選 **X3**，點 **Custom .bin**,
-   上傳 zip 裡的 `update.bin`。
+   上傳 zip 裡的 `update.bin`。用 X4 的話，改選 **X4**。
 3. 瀏覽器的序列裝置選單看不到機器?換一個 USB 埠、不要經過 Hub、換一個支援
    WebSerial 的瀏覽器(Chrome/Edge)。還是不行就回方法 A，不用糾結。
 
@@ -94,6 +96,11 @@ esptool.py --chip esp32c3 --port /dev/ttyACM0 --baud 921600 \
 > ②**部分 X3 的 USB 只有充電、沒有資料傳輸**，那種機器上方法 B 與方法 C 完全不可用。
 > 除此之外還有目前無法解釋的失敗案例。**沒有任何一條路能保證把機器救回來。**
 > 上游完整原文:[`docs/UPSTREAM-README.md`](UPSTREAM-README.md) "USB-locked devices"。
+
+**用 X4 的話**
+
+- X4 的硬體不支援時鐘和傾斜翻頁。
+- 救援步驟目前只適用 X3。X4 的救援步驟還在整理。
 
 ## 步驟 2:複製 SD 卡字型
 
@@ -191,9 +198,9 @@ renders as boxes (□□□□)**.
 1. **Flash** (first install) — **Method A, recommended — the device never touches a computer**:
    copy the zip's **`update.bin`** to the **root** of the SD
    card (any card reader or phone adapter works), power off, then
-   hold the **left side button + power** until the loader screen appears; it flashes and
-   reboots in ~5 minutes (X3 only — the X4 stock firmware lacks this combo). Or use the web
-   flasher at https://crosspointreader.com/#flash-tools (X3 → Custom .bin), or
+   hold the **left side button + power** (X3) or the **upper right side button + power** (X4)
+   until the loader screen appears; it flashes and reboots in ~5 minutes. Or use the web
+   flasher at https://crosspointreader.com/#flash-tools (X3 or X4 → Custom .bin), or
    `esptool.py --chip esp32c3 write_flash 0x10000 update.bin`.
    Later updates never need a computer: grab the standalone `update.bin` from Releases
    (no unzip), upload it via the device's web transfer page, then

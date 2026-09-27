@@ -8,6 +8,7 @@
 
 bool TocNavParser::setup() {
   parser = XML_ParserCreate(nullptr);
+  xmlFilter_ = XmlControlCharFilter{};  // v345：每份文件重新判斷是不是 UTF-16
   if (!parser) {
     LOG_DBG("NAV", "Couldn't allocate memory for parser");
     return false;
@@ -39,8 +40,9 @@ size_t TocNavParser::write(const uint8_t* buffer, const size_t size) {
 
     const auto toRead = remainingInBuffer < 1024 ? remainingInBuffer : 1024;
     memcpy(buf, currentBufferPos, toRead);
+    // v345（帳本 D14）：交給 expat 的是濾掉控制字元之後的長度；下面的剩餘量照原始長度算
 
-    if (XML_ParseBuffer(parser, static_cast<int>(toRead), remainingSize == toRead) == XML_STATUS_ERROR) {
+    if (XML_ParseBuffer(parser, static_cast<int>(xmlFilter_.apply(static_cast<char*>(buf), toRead)), remainingSize == toRead) == XML_STATUS_ERROR) {
       LOG_DBG("NAV", "Parse error at line %lu: %s", XML_GetCurrentLineNumber(parser),
               XML_ErrorString(XML_GetErrorCode(parser)));
       destroyXmlParser(parser);

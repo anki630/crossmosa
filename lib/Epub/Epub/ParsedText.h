@@ -11,6 +11,10 @@
 #include "blocks/BlockStyle.h"
 #include "blocks/TextBlock.h"
 
+namespace zhuyin {
+class ZhuyinTxtCursor;
+}  // namespace zhuyin
+
 class GfxRenderer;
 
 class ParsedText {
@@ -87,6 +91,29 @@ class ParsedText {
                                                   std::vector<bool>& noSpaceBeforeVec);
   bool hyphenateWordAtIndex(size_t wordIndex, int availableWidth, const GfxRenderer& renderer, int fontId,
                             std::vector<uint16_t>& wordWidths, bool allowFallbackBreaks);
+  // ---- 注音（見 public 的 enableZhuyin）----
+  struct ZhuyinState;
+  std::unique_ptr<ZhuyinState> zy_;
+  bool zhuyinLive();
+  void zhuyinStop(bool degraded);
+  void zhuyinFeed(const std::string& word, bool attachToPrevious);
+  size_t zhuyinCoveredUnits(const std::vector<size_t>& breaks, size_t count);
+  // 直排：段落結束 → 全部送出、回 false；還沒結束而注音在跑 → 回 true（呼叫端要用 zhuyinCoveredColumns 限制欄數）
+  bool zhuyinPrepareBatch(bool final);
+  size_t zhuyinCoveredColumns(const std::vector<uint16_t>& unitSrcWord, const std::vector<uint16_t>& unitByteBegin,
+                              const std::vector<uint16_t>& unitByteLen, const std::vector<uint16_t>& columnStarts,
+                              size_t columnCount, size_t unitCount);
+  void zhuyinAbandon();  // 字詞被整批丟掉（直排的 bail）：佇列裡那些字不會再有人取 → 這一段之後不標
+  // 一行要了清單、TextBlock 卻因為配不到而沒掛上（SwapStats::listOom 在建構時加一）→ 這一段記成降級（章節提交成「沒注音」、
+  // 之後記憶體夠時重排），但不停止：後面的行照常標（codex 整合複查 A1：否則那一行在「開」的快取裡永遠沒有注音）。
+  void zhuyinNoteBuilt(const zhuyin::SwapBatch& requested, uint32_t listOomBefore);
+  bool zhuyinTake(uint32_t cp, uint16_t* out);
+  // 一行（或一欄）照順序的每個漢字拿讀音、組清單（放在引擎的緩衝裡，建 TextBlock 之前用完）。
+  // annotated(ctx, i) ＝ 第 i 個字詞是出版社標注的（ruby）→ 讀音照拿（保持對齊）但不換。
+  using ZhuyinAnnotatedFn = bool (*)(const void* ctx, size_t wordIndex);
+  zhuyin::SwapBatch zhuyinLineSwaps(const std::vector<std::string>& lineWords, ZhuyinAnnotatedFn annotated,
+                                    const void* ctx);
+
   void extractLine(size_t breakIndex, int pageWidth, const std::vector<uint16_t>& wordWidths,
                    const std::vector<bool>& continuesVec, const std::vector<bool>& noSpaceBeforeVec,
                    const std::vector<size_t>& lineBreakIndices,
@@ -95,15 +122,32 @@ class ParsedText {
   std::vector<uint16_t> calculateWordWidths(const GfxRenderer& renderer, int fontId);
 
  public:
-  explicit ParsedText(const bool extraParagraphSpacing, const bool hyphenationEnabled = false,
-                      const bool focusReadingEnabled = false, const BlockStyle& blockStyle = BlockStyle())
-      : blockStyle(blockStyle),
-        extraParagraphSpacing(extraParagraphSpacing),
-        hyphenationEnabled(hyphenationEnabled),
-        focusReadingEnabled(focusReadingEnabled),
-        isNaturalAlign(false),
-        hasRtlWord(false) {}
-  ~ParsedText() = default;
+  // 建構與解構都在 .cpp：注音狀態（ZhuyinState）在這裡是不完整型別
+  explicit ParsedText(bool extraParagraphSpacing, bool hyphenationEnabled = false, bool focusReadingEnabled = false,
+                      const BlockStyle& blockStyle = BlockStyle());
+  ~ParsedText();
+
+  // 注音（P2 設計第 2 節）：這一段的破音字要不要換成注音字形。在第一個 addWord 之前呼叫；
+  // fontId ＝ 排版與繪製用的字型，必須就是引擎登記的那一個（否則不開）。
+  //   - EPUB：enableZhuyin —— 字詞進來時餵給 session，取出行時照漢字順序拿讀音；
+  //   - TXT：useZhuyinCursor —— 讀音來源是整頁共用的游標（它自己往前、往後讀檔），不餵、也不必等。
+  //     generation ＝ 建游標時引擎的世代（游標拿的是那個引擎的資料與暫存）。⚠️ 游標只核對碼位，所以這一段只要有
+  //     任何一個漢字不會交給它（接不上、中途停止標注）就讓整個游標作廢 —— 否則下一段的字會對到這一段剩下的讀音。
+  // 任何失敗都只讓這一段之後不標（v2 字型下＝破音字不標）；資源或 I/O 的失敗另外記成降級（SwapStats::degradedEvents）。
+  // docAnnotated（v342，B 路線）：這一段屬於預先標注的章節（<head> 有 zhuyin-ivs 標記）→ 沒有 bpmfvs 選擇符號的破音字
+  //   用第一個讀音、不採用解析器的判斷（ZhuyinSession::setDocumentAnnotated）。
+  void enableZhuyin(int fontId, bool docAnnotated = false);
+  // v342：這一段屬於預先標注的章節（章節 <head> 的 bpmfvs 標記）。解析器在讀到任何標籤之前就建好第一個區塊
+  //   （beginParse），空區塊之後會被第一個段落重用、不會再 enableZhuyin → 認到標記的當下要補設給當前這一個。
+  void setZhuyinDocAnnotated(bool on);
+  void useZhuyinCursor(zhuyin::ZhuyinTxtCursor* cursor, int fontId, uint32_t generation);
+  bool zhuyinActive() const;  // 這一段還在標注（排版端用它把軟性分批壓到 200 詞）
+  bool zhuyinDegraded() const;  // 這一段因資源或 I/O 停止標注、或有一行的清單配不到（章節身分要寫「沒注音」）
+  // 排版端每加一個字詞問一次：session 佇列裡等著被取出的漢字超過這個數 → 現在就排一批（軟性分批，不含最後一行）。
+  // 真正的上界靠這個，不靠字詞數：一個字詞可以有好幾個漢字、一次字元回呼可以進好幾百個（codex 整合複查 A2）。
+  // 佇列 512 ＋ 窗口 128 才會失敗；這裡 256 ＋ 一個字詞（≤ 200 B ＝ 66 字）＋ 留下的最後一行，離那裡很遠。
+  static constexpr size_t kZhuyinFlushQueued = 256;
+  bool zhuyinWantsFlush() const;
 
   void addWord(std::string word, EpdFontFamily::Style fontStyle, bool underline = false, bool attachToPrevious = false,
                uint32_t visibleTextOffset = 0);

@@ -6,6 +6,7 @@
 #include <freertos/task.h>
 #include <cstdint>
 #include <deque>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -23,6 +24,11 @@
 // bumped manually when the firmware is updated to support a new format.
 // Reader enforcement: SdCardFont::load().
 #define CPFONT_VERSION 4
+
+namespace zhuyin {
+class ZhuyinEngine;
+class BufferedSource;
+}  // namespace zhuyin
 
 class SdCardFont {
  public:
@@ -76,6 +82,41 @@ class SdCardFont {
   // Supports v4 (multi-style) format.
   // Returns true on success.
   bool load(const char* path);
+
+  // ---- 注音（P2 設計第 4 節）----
+  // cpfont 檔頭的注音標記（zy_pack.py 寫在保留位元組 13–31：'ZY'、格式 1、區塊位移、資料集 ID、'ZYE1'）：
+  // 這是注音字型 —— 漢字與全形標點的字形是 1.5 em 的注音格（直排欄距要跟著放寬，見 vtext::columnPitchPx）。
+  bool hasZhuyinMarker() const { return zyMarker_; }
+  uint64_t zhuyinMarkerDataset() const { return zyDataset_; }
+  enum class ZhuyinEnable : uint8_t { Ready, NotZhuyin, LowStack, LowMemory, BadMarker, NoMemory, LoadFailed, PairMismatch };
+  struct ZhuyinEnableResult {
+    ZhuyinEnable status = ZhuyinEnable::NotZhuyin;
+    uint8_t load = 0;         // zhuyin::LoadStatus（LoadFailed 時）
+    uint16_t failedCase = 0;  // 自我測試第一句不同的序號
+    uint32_t ms = 0;
+    uint32_t reads = 0;
+    uint32_t resident = 0;
+    uint32_t stackFree = 0;   // 開始前：目前位置到堆疊底（不是歷史高水位）
+    uint32_t hwmBefore = 0, hwmAfter = 0;
+    uint32_t freeBefore = 0, freeAfter = 0, maxBefore = 0, maxAfter = 0;
+    // v339 讀卡證人（`ZY loadio`）：載入時間花在哪一段、哪一種讀卡上
+    uint32_t window = 0;           // 結構載入借的堆疊窗口（位元組；0 ＝ 直接讀）
+    uint32_t whole = 0;            // 自我測試用上了整塊緩衝（位元組；0 ＝ 沒借到或讀不到 → 直接讀）
+    uint32_t structMs = 0;         // 結構載入（CRC 掃描＋各節）
+    uint32_t preMs = 0;            // 整塊預讀（含讀卡）；自我測試 ＝ ms − structMs − preMs（含收尾）
+    uint32_t calls = 0;            // 載入對讀取層的呼叫次數（v338 ＝ 全部讀卡）
+    uint32_t cardStruct = 0, cardTest = 0;  // 真的讀卡的次數：結構段、之後（含整塊那一次）
+    uint32_t cardBytes = 0, cardFails = 0;  // 讀卡成功的位元組、失敗次數（經過緩衝的失敗之後改直接讀）
+    uint32_t waitUs = 0, seekUs = 0, readUs = 0;  // 讀卡時間（見 ZyBlockSource 的註解：外層鎖／開檔＋seek／read）
+    uint32_t backSeeks = 0;        // 目標在檔柄目前位置之前的讀卡次數
+  };
+  // 啟用引擎：只對閱讀字級那一個字型呼叫（SdCardFontSystem 決定），在字型載入的時機、主任務上
+  // （自我測試約 1.9 KB 堆疊）。先看堆疊與記憶體夠不夠 → 載入＋自我測試 → 配對檢查（檔頭與區塊的資料集相同、
+  // 字型涵蓋區塊宣告的每一個 PUA）→ 登記。任何一步不過：不啟用（破音字不標，v2 字型保證安全）。
+  ZhuyinEnableResult enableZhuyin(int fontId);
+  void disableZhuyin();
+  bool zhuyinReady() const;
+  zhuyin::ZhuyinEngine* zhuyinEngine() { return zyEngine_.get(); }
 
   // Pre-read glyphs needed for the given UTF-8 text from SD card.
   // styleMask: bitmask of styles to prewarm (bit 0=regular, 1=bold, 2=italic, 3=bolditalic).
@@ -403,6 +444,18 @@ class SdCardFont {
   Stats stats_;
   uint32_t contentHash_ = 0;
   bool loaded_ = false;
+
+  // 注音（見 public 的 enableZhuyin）。引擎在 freeAll 關檔之前拆掉（它的讀卡走 sharedFile_）。
+  bool zyMarker_ = false;
+  uint32_t zyBlockOffset_ = 0;
+  uint32_t zyFileSize_ = 0;
+  uint64_t zyDataset_ = 0;
+  struct ZyBlockSource;
+  std::unique_ptr<ZyBlockSource> zySource_;
+  std::unique_ptr<zhuyin::BufferedSource> zyBuffered_;  // 包在 zySource_ 外面（v339）；資料留著它的指標做執行期查詢
+  std::unique_ptr<zhuyin::ZhuyinEngine> zyEngine_;
+  bool prepareZhuyinEngine(ZhuyinEnableResult& r, bool stackWindow);  // 載入＋自我測試、不公開；true ＝ Ok（r.load 記原因）
+  bool coversAll(uint32_t first, uint32_t last) const;
 
   // Per-style helpers
   void freeStyleMiniData(PerStyle& s);

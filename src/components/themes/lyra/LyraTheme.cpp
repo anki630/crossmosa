@@ -15,6 +15,7 @@
 
 #include "RecentBooksStore.h"
 #include "components/UITheme.h"
+#include "components/themes/HintPillLayout.h"
 #include "components/icons/book.h"
 #include "components/icons/book24.h"
 #include "components/icons/bookmark.h"
@@ -203,9 +204,26 @@ void LyraTheme::drawSubHeader(const GfxRenderer& renderer, Rect rect, const char
   renderer.drawLine(rect.x, rect.y + rect.height - 1, rect.x + rect.width - 1, rect.y + rect.height - 1, true);
 }
 
+// v335：見 LyraTheme.h。寬度公式與 drawTabBar 的 x 佈局逐項相同（每個頁籤＝字寬＋左右 hPaddingInSelection，
+//   頁籤間 tabSpacing）；Formosa Pro 的外框再往兩側各伸出 4px，所以「左右各留 contentSidePadding」對兩個主題
+//   都代表外框不出螢幕、左右留白對稱。UI_10 也放不下的語言目前不存在（只有英文與繁中）——真的出現就會超出，
+//   那時再加截斷。
+int LyraTheme::tabBarFontId(const GfxRenderer& renderer, const Rect rect, const std::vector<TabInfo>& tabs) {
+  const int maxW = rect.width - 2 * LyraMetrics::values.contentSidePadding;
+  int totalW = 0;
+  for (size_t i = 0; i < tabs.size(); i++) {
+    totalW += renderer.getTextWidth(UI_12_FONT_ID, tabs[i].label, EpdFontFamily::REGULAR) + 2 * hPaddingInSelection;
+    if (i + 1 < tabs.size()) totalW += LyraMetrics::values.tabSpacing;
+  }
+  return totalW <= maxW ? UI_12_FONT_ID : UI_10_FONT_ID;
+}
+
+int LyraTheme::tabBarTextY(const Rect rect, const int fontId) { return rect.y + (fontId == UI_12_FONT_ID ? 3 : 8); }
+
 void LyraTheme::drawTabBar(const GfxRenderer& renderer, Rect rect, const std::vector<TabInfo>& tabs,
                            bool selected) const {
   int currentX = rect.x + LyraMetrics::values.contentSidePadding;
+  const int fontId = tabBarFontId(renderer, rect, tabs);  // v335
 
   // v51(Formosa 頁籤形,維護者拍板):現行分頁=真頁籤——上緣圓角、兩側落到底、
   // 【底邊不畫】且整條分隔線在開口處斷開(與內容相連的頁籤語意);底線標示退役。
@@ -216,7 +234,7 @@ void LyraTheme::drawTabBar(const GfxRenderer& renderer, Rect rect, const std::ve
   for (const auto& tab : tabs) {
     // v83:量寬與繪字必須同一個 font id——這裡算出的 textWidth 決定頁籤外框寬與下一個
     // 頁籤的起點,兩處分開就會外框與文字對不上。
-    const int textWidth = renderer.getTextWidth(UI_12_FONT_ID, tab.label, EpdFontFamily::REGULAR);
+    const int textWidth = renderer.getTextWidth(fontId, tab.label, EpdFontFamily::REGULAR);
     const int tabW = textWidth + 2 * hPaddingInSelection;
 
     if (tab.selected) {
@@ -254,7 +272,9 @@ void LyraTheme::drawTabBar(const GfxRenderer& renderer, Rect rect, const std::ve
     // 寬度已逐字量過(解 ubuntu_14 glyph 表):繁中四頁籤右緣 370px、英文 508px,
     // 直向寬 528px → 英文右邊留 20px,與左內距對稱。⚠️ 目前只有 English 與 繁中 兩種
     // 語言(v26 移除 29 個),故無截斷邏輯;日後加語言或改分類名稱必須重算這條。
-    renderer.drawText(UI_12_FONT_ID, currentX + hPaddingInSelection, rect.y + 3, tab.label, true,
+    // ⚠️ v335：上面那筆帳【只算了 X3】。X4 直向 480px，英文右緣 508 → 超出（2026-09-23 實機）
+    //   → 放不下就整列退回 UI_10（tabBarFontId），X3 與中文不觸發。
+    renderer.drawText(fontId, currentX + hPaddingInSelection, tabBarTextY(rect, fontId), tab.label, true,
                       EpdFontFamily::REGULAR);
 
     currentX += textWidth + LyraMetrics::values.tabSpacing + 2 * hPaddingInSelection;
@@ -414,10 +434,11 @@ bool LyraTheme::tabIndexFromPoint(const GfxRenderer& renderer, const Rect rect, 
   }
 
   int currentX = rect.x + LyraMetrics::values.contentSidePadding;
+  const int fontId = tabBarFontId(renderer, rect, tabs);  // v335：與 drawTabBar 同一個判斷
   for (size_t i = 0; i < tabs.size(); i++) {
-    // ⚠️ v156：與 drawTabBar 同一個 font id（UI_12）—— 頁籤畫多寬、點擊區就多寬，
+    // ⚠️ v156：與 drawTabBar 同一個 font id —— 頁籤畫多寬、點擊區就多寬，
     //    兩處分開就會點 A 選到 B（v83 教訓的觸控版）。
-    const int textWidth = renderer.getTextWidth(UI_12_FONT_ID, tabs[i].label, EpdFontFamily::REGULAR);
+    const int textWidth = renderer.getTextWidth(fontId, tabs[i].label, EpdFontFamily::REGULAR);
     const int tabWidth = textWidth + 2 * hPaddingInSelection;
     const int left = (i == 0) ? rect.x : currentX - LyraMetrics::values.tabSpacing / 2;
     const int right = currentX + tabWidth + LyraMetrics::values.tabSpacing / 2;
@@ -567,16 +588,40 @@ void LyraTheme::drawButtonHints(GfxRenderer& renderer, const char* btn1, const c
   const int* buttonPositions = gpio.deviceIsX3() ? x3ButtonPositions : x4ButtonPositions;
   const char* labels[] = {btn1, btn2, btn3, btn4};
 
+  // v335：字放不下就讓膠囊往旁邊的空位長，再放不下才截斷（HintPillLayout.h）。
+  //   Lyra 沒字的鍵也畫一個小膠囊 → 四格全部算「佔位」，長出去的膠囊不會壓到它。
+  int nominalX[HintPillLayout::kCount];
+  int textWidths[HintPillLayout::kCount] = {};
+  int need[HintPillLayout::kCount] = {};
+  bool occupied[HintPillLayout::kCount];
+  for (int i = 0; i < HintPillLayout::kCount; i++) {
+    nominalX[i] = buttonPositions[i];
+    occupied[i] = true;
+    if (labels[i] != nullptr && labels[i][0] != '\0') {
+      textWidths[i] = renderer.getTextWidth(UI_10_FONT_ID, labels[i]);
+      need[i] = textWidths[i] + 2 * HintPillLayout::kTextPad;
+    }
+  }
+  HintPillLayout::Pill pills[HintPillLayout::kCount];
+  HintPillLayout::layout(nominalX, buttonWidth, renderer.getScreenWidth(), need, occupied, pills);
+
   for (int i = 0; i < 4; i++) {
-    const int x = buttonPositions[i];
+    const int x = pills[i].x;
+    const int w = pills[i].w;
     if (labels[i] != nullptr && labels[i][0] != '\0') {
       // Draw the filled background and border for a FULL-sized button
-      renderer.fillRoundedRect(x, pageHeight - buttonY, buttonWidth, buttonHeight, cornerRadius, Color::White);
-      renderer.drawRoundedRect(x, pageHeight - buttonY, buttonWidth, buttonHeight, 1, cornerRadius, true, true, false,
-                               false, true);
-      const int textWidth = renderer.getTextWidth(UI_10_FONT_ID, labels[i]);
-      const int textX = x + (buttonWidth - 1 - textWidth) / 2;
-      renderer.drawText(UI_10_FONT_ID, textX, pageHeight - buttonY + textYOffset, labels[i]);
+      renderer.fillRoundedRect(x, pageHeight - buttonY, w, buttonHeight, cornerRadius, Color::White);
+      renderer.drawRoundedRect(x, pageHeight - buttonY, w, buttonHeight, 1, cornerRadius, true, true, false, false,
+                               true);
+      const int maxText = w - 2 * HintPillLayout::kTextPad;
+      if (textWidths[i] > maxText) {
+        const std::string fitted = renderer.truncatedText(UI_10_FONT_ID, labels[i], maxText);
+        const int fittedW = renderer.getTextWidth(UI_10_FONT_ID, fitted.c_str());
+        renderer.drawText(UI_10_FONT_ID, x + (w - 1 - fittedW) / 2, pageHeight - buttonY + textYOffset, fitted.c_str());
+      } else {
+        renderer.drawText(UI_10_FONT_ID, x + (w - 1 - textWidths[i]) / 2, pageHeight - buttonY + textYOffset,
+                          labels[i]);
+      }
     } else {
       // Draw the filled background and border for a SMALL-sized button
       renderer.fillRoundedRect(x, pageHeight - smallButtonHeight, buttonWidth, smallButtonHeight, cornerRadius,

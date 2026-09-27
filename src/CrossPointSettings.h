@@ -360,6 +360,11 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   using SdFontIdResolver = int (*)(void* ctx, const char* familyName, uint8_t fontSize);
   SdFontIdResolver sdFontIdResolver = nullptr;
   void* sdFontResolverCtx = nullptr;
+  // 注音（P2）：字型系統在 begin() 登記；readerRenderSpec() 用它填 zhuyinIdentity／zhuyinOffIdentity／zhuyinOnIdentity
+  // （跟 sdFontIdResolver 同一個理由：設定不直接依賴字型系統）。
+  using ZhuyinSpecResolver = void (*)(void* ctx, int fontId, uint32_t* current, uint32_t* off, uint32_t* on);
+  ZhuyinSpecResolver zhuyinSpecResolver = nullptr;
+  void* zhuyinSpecCtx = nullptr;
 
   uint16_t getPowerButtonDuration() const {
     return (shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::SLEEP) ? 10 : 400;

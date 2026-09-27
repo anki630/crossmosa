@@ -118,4 +118,12 @@ class LyraTheme : public BaseTheme {
   bool showsFileIcons() const override { return true; }
   // v179：圖示查表開放給子主題（Formosa Pro）。
   static const uint8_t* iconForName(UIIcon icon, int size);
+
+  // v335：頁籤的字級 —— UI_12，放不下（左右各留 contentSidePadding）就退回 UI_10（上游原本的字級）。
+  //   實機：X4 直向只有 480px，英文四頁籤在 UI_12 約 488px；X3 528px、中文都放得下 → 不觸發、外觀不變。
+  //   ⚠️ drawTabBar（Lyra 與 Formosa Pro）與 tabIndexFromPoint 必須全部問這一個（v156：量寬與繪字同一個 font id，
+  //      點擊區才對得上）。
+  static int tabBarFontId(const GfxRenderer& renderer, Rect rect, const std::vector<TabInfo>& tabs);
+  // 頁籤文字的 y：行框在 40px 帶裡置中（UI_12 行框 34 → +3；UI_10 行框 24 → +8）。
+  static int tabBarTextY(Rect rect, int fontId);
 };

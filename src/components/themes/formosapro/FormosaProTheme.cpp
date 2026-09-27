@@ -15,6 +15,8 @@
 #include "CrossPointSettings.h"
 #include "RecentBooksStore.h"
 #include "components/UITheme.h"
+#include "components/themes/HintPillLayout.h"
+#include "components/themes/TabSegmentLayout.h"
 #include "fontIds.h"
 
 namespace {
@@ -118,36 +120,88 @@ void FormosaProTheme::drawTextField(const GfxRenderer& renderer, Rect rect, cons
   renderer.drawSmoothRoundedRect(boxX, boxY, boxW, boxH, cursorMode ? 2 : 1, innerR(4), N, true);
 }
 
-// segmented control：外框一個膠囊，選中的分段反白。x 佈局與 Lyra 完全相同（tabIndexFromPoint 沿用）。
+namespace {
+// v336：分頁列的分段幾何 —— drawTabBar 與 tabIndexFromPoint 共用這一份（v156：畫多寬、點多寬）。
+//   字級問 LyraTheme::tabBarFontId（v335，放不下就整列 UI_10）；寬度交給 TabSegmentLayout（填滿、放得下就平分）。
+//   段數超過上限（兩個分頁畫面都是 4 段，不會發生）→ n＝0，呼叫端退回 Lyra 的畫法與點擊區（兩邊一致）。
+struct TabSegments {
+  int n = 0;
+  int fontId = UI_12_FONT_ID;
+  int textW[TabSegmentLayout::kMaxSegments] = {};
+  int x[TabSegmentLayout::kMaxSegments] = {};  // 螢幕座標
+  int w[TabSegmentLayout::kMaxSegments] = {};
+  int areaX = 0;
+  int usedW = 0;  // 填滿時 ＝ 可用寬
+};
+
+TabSegments layoutTabSegments(const GfxRenderer& renderer, const Rect rect, const std::vector<TabInfo>& tabs) {
+  TabSegments s;
+  const int n = static_cast<int>(tabs.size());
+  if (n <= 0 || n > TabSegmentLayout::kMaxSegments) return s;
+  const auto& m = FormosaProMetrics::values;
+  s.fontId = LyraTheme::tabBarFontId(renderer, rect, tabs);
+  int natural[TabSegmentLayout::kMaxSegments];
+  for (int i = 0; i < n; i++) {
+    s.textW[i] = renderer.getTextWidth(s.fontId, tabs[i].label, EpdFontFamily::REGULAR);
+    natural[i] = s.textW[i] + 2 * hPaddingInSelection;
+  }
+  s.areaX = rect.x + m.contentSidePadding;
+  int relX[TabSegmentLayout::kMaxSegments];
+  TabSegmentLayout::layout(natural, n, rect.width - 2 * m.contentSidePadding, m.tabSpacing, relX, s.w);
+  for (int i = 0; i < n; i++) s.x[i] = s.areaX + relX[i];
+  s.usedW = relX[n - 1] + s.w[n - 1];
+  s.n = n;
+  return s;
+}
+}  // namespace
+
+// segmented control：外框一個膠囊，選中的分段反白。
+// v336：外框撐滿整個寬度（左右各留 contentSidePadding − 4 ＝ 16px），各段平分；最長的字放不下平分寬時
+//   改成「各段字寬＋剩餘平分」—— 仍然填滿（TabSegmentLayout.h）。字在段裡置中。
+//   維護者 2026-09-23：「將整個寬度填滿比較好看」（原本 X3 中文、X4 英文都靠左、右邊留空）。
 void FormosaProTheme::drawTabBar(const GfxRenderer& renderer, Rect rect, const std::vector<TabInfo>& tabs,
                                  bool selected) const {
-  const auto& m = FormosaProMetrics::values;
-  int currentX = rect.x + m.contentSidePadding;
+  const TabSegments s = layoutTabSegments(renderer, rect, tabs);
+  if (s.n == 0) {
+    if (!tabs.empty()) LyraTheme::drawTabBar(renderer, rect, tabs, selected);
+    return;
+  }
   const int segY = rect.y + 4;
   const int segH = rect.height - 8;
   const int segR = innerR(4);
-  // 先算總寬畫外框
-  int totalW = 0;
-  for (size_t i = 0; i < tabs.size(); i++) {
-    totalW += renderer.getTextWidth(UI_12_FONT_ID, tabs[i].label, EpdFontFamily::REGULAR) + 2 * hPaddingInSelection;
-    if (i + 1 < tabs.size()) totalW += m.tabSpacing;
-  }
-  renderer.drawSmoothRoundedRect(currentX - 4, segY, totalW + 8, segH, 1, segR, N, true);
-  for (const auto& tab : tabs) {
-    const int textWidth = renderer.getTextWidth(UI_12_FONT_ID, tab.label, EpdFontFamily::REGULAR);
-    const int tabW = textWidth + 2 * hPaddingInSelection;
+  renderer.drawSmoothRoundedRect(s.areaX - 4, segY, s.usedW + 8, segH, 1, segR, N, true);
+  for (int i = 0; i < s.n; i++) {
+    const auto& tab = tabs[i];
     const bool inverted = tab.selected && selected;
     if (tab.selected) {
       if (inverted) {
-        renderer.fillSmoothRoundedRect(currentX, segY + 2, tabW, segH - 4, innerR(6), N, Color::Black);
+        renderer.fillSmoothRoundedRect(s.x[i], segY + 2, s.w[i], segH - 4, innerR(6), N, Color::Black);
       } else {
-        renderer.drawSmoothRoundedRect(currentX, segY + 2, tabW, segH - 4, 1, innerR(6), N, true);
+        renderer.drawSmoothRoundedRect(s.x[i], segY + 2, s.w[i], segH - 4, 1, innerR(6), N, true);
       }
     }
-    renderer.drawText(UI_12_FONT_ID, currentX + hPaddingInSelection, rect.y + 3, tab.label, !inverted,
+    renderer.drawText(s.fontId, s.x[i] + (s.w[i] - s.textW[i]) / 2, tabBarTextY(rect, s.fontId), tab.label, !inverted,
                       EpdFontFamily::REGULAR);
-    currentX += tabW + m.tabSpacing;
   }
+}
+
+// v336：點擊區＝每段自己的範圍，段與段之間的空隙對半分；最左段延伸到 rect 左緣、最右段延伸到右緣。
+bool FormosaProTheme::tabIndexFromPoint(const GfxRenderer& renderer, const Rect rect,
+                                        const std::vector<TabInfo>& tabs, const int x, const int y,
+                                        int& index) const {
+  if (tabs.empty() || y < rect.y || y >= rect.y + rect.height) return false;
+  const TabSegments s = layoutTabSegments(renderer, rect, tabs);
+  if (s.n == 0) return LyraTheme::tabIndexFromPoint(renderer, rect, tabs, x, y, index);
+  const int halfGap = FormosaProMetrics::values.tabSpacing / 2;
+  for (int i = 0; i < s.n; i++) {
+    const int left = (i == 0) ? rect.x : s.x[i] - halfGap;
+    const int right = (i == s.n - 1) ? rect.x + rect.width : s.x[i] + s.w[i] + halfGap;
+    if (x >= left && x < right) {
+      index = i;
+      return true;
+    }
+  }
+  return false;
 }
 
 // 分組內縮卡的列：髮絲線、圖示、標題／副標、值、›，選取＝左豎條＋粗體。
@@ -276,27 +330,51 @@ void FormosaProTheme::drawButtonHints(GfxRenderer& renderer, const char* btn1, c
   const char* labels[] = {btn1, btn2, btn3, btn4};
   const int y = pageHeight - tabH;
   const int r = innerR(6);
+  // v335：字放不下就讓舌片往旁邊的空位長，再放不下才截斷（HintPillLayout.h）。
+  //   這個主題沒字的鍵不畫 → 那一格是空位，隔壁可以長進去。
+  int nominalX[HintPillLayout::kCount];
+  int textWidths[HintPillLayout::kCount] = {};
+  int need[HintPillLayout::kCount] = {};
+  const bool occupied[HintPillLayout::kCount] = {};
+  for (int i = 0; i < HintPillLayout::kCount; i++) {
+    nominalX[i] = pos[i];
+    if (labels[i] != nullptr && labels[i][0] != '\0') {
+      textWidths[i] = renderer.getTextWidth(UI_10_FONT_ID, labels[i]);
+      need[i] = textWidths[i] + 2 * HintPillLayout::kTextPad;
+    }
+  }
+  HintPillLayout::Pill pills[HintPillLayout::kCount];
+  HintPillLayout::layout(nominalX, buttonWidth, renderer.getScreenWidth(), need, occupied, pills);
   for (int i = 0; i < 4; i++) {
     if (labels[i] == nullptr || labels[i][0] == '\0') continue;
-    const int x = pos[i];
-    renderer.fillRect(x, y, buttonWidth, tabH, false);
+    const int x = pills[i].x;
+    const int w = pills[i].w;
+    renderer.fillRect(x, y, w, tabH, false);
     for (int j = 0; j < tabH; j++) {
+      // maxP 刻意維持 buttonWidth / 2（不是 w / 2）：圓角只影響約 16 列，遠小於 40 → 表的內容一樣，
+      //   但 w 會變 → 用 w / 2 會讓 GfxRenderer 那個 4 格的圓角表快取換鍵、每畫一次就重算。
       const int io = renderer.smoothCornerInset(j, r, N, buttonWidth / 2);
       if (io > 0 || j == 0) {
         // 圓角段：這一列的邊界到相鄰列的邊界之間都畫（8-連通）
         const int prev = j > 0 ? renderer.smoothCornerInset(j - 1, r, N, buttonWidth / 2) : io;
         const int nxt = renderer.smoothCornerInset(j + 1, r, N, buttonWidth / 2);
         int runEnd = std::max({io + 1, prev, nxt});
-        if (j == 0) runEnd = buttonWidth - io;  // 最上列：整段頂線
+        if (j == 0) runEnd = w - io;  // 最上列：整段頂線
         renderer.fillRect(x + io, y + j, runEnd - io, 1, true);
-        renderer.fillRect(x + buttonWidth - runEnd, y + j, runEnd - io, 1, true);
+        renderer.fillRect(x + w - runEnd, y + j, runEnd - io, 1, true);
       } else {
         renderer.drawPixel(x, y + j, true);
-        renderer.drawPixel(x + buttonWidth - 1, y + j, true);
+        renderer.drawPixel(x + w - 1, y + j, true);
       }
     }
-    const int tw = renderer.getTextWidth(UI_10_FONT_ID, labels[i]);
-    renderer.drawText(UI_10_FONT_ID, x + (buttonWidth - 1 - tw) / 2, y + 7, labels[i]);
+    const int maxText = w - 2 * HintPillLayout::kTextPad;
+    if (textWidths[i] > maxText) {
+      const std::string fitted = renderer.truncatedText(UI_10_FONT_ID, labels[i], maxText);
+      const int fittedW = renderer.getTextWidth(UI_10_FONT_ID, fitted.c_str());
+      renderer.drawText(UI_10_FONT_ID, x + (w - 1 - fittedW) / 2, y + 7, fitted.c_str());
+    } else {
+      renderer.drawText(UI_10_FONT_ID, x + (w - 1 - textWidths[i]) / 2, y + 7, labels[i]);
+    }
   }
   renderer.setOrientation(orig);
 }

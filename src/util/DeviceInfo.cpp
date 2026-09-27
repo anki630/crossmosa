@@ -1,5 +1,6 @@
 #include "DeviceInfo.h"
 
+#include <BoardConfig.h>
 #include <HalGPIO.h>
 #include <esp_efuse.h>
 #include <esp_efuse_table.h>
@@ -36,6 +37,15 @@ bool deviceSerial(char* out, size_t outLen) {
 }
 
 const char* displayControllerName() {
-  // v196：與 main.cpp 開機 log 的 displayIsUc8279() 分支一致。
-  return gpio.displayIsUc8279() ? "UC8279" : "UC8253";
+  // v333：讀開機探測實際填好的控制器（HalGPIO::begin 的 applyXteinkDisplayController）。
+  //   原本 `displayIsUc8279() ? "UC8279" : "UC8253"` 只分辨 X3 的兩種，X4 不管實際是哪顆一律落到 "UC8253" ——
+  //   而 X4 只會是 SSD1677／UC8179／UC8279(800×480)，UC8253 只存在於 X3。X3 不變：設定檔 XTEINK_X3＝UC8253、
+  //   XTEINK_X3_UC8279＝UC8279，跟原本顯示的一模一樣。
+  switch (BoardConfig::ACTIVE.displayController) {
+    case BoardConfig::DisplayController::SSD1677: return "SSD1677";
+    case BoardConfig::DisplayController::UC8253: return "UC8253";
+    case BoardConfig::DisplayController::UC8279: return "UC8279";
+    case BoardConfig::DisplayController::UC8179: return "UC8179";
+    default: return "?";
+  }
 }

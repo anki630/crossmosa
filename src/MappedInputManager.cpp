@@ -77,9 +77,16 @@ MappedInputManager::Button MappedInputManager::mapScreenDirection(const Button b
 bool MappedInputManager::bookTurnsRightToLeft() { return SETTINGS.documentIsVertical(); }
 
 // 側鍵的路由。明選的偏好【優先】，沒明選（依版面）才跟著書走。
+// ⭐ v335：「跟著書走」的依據是 X3 的兩顆側鍵分在【左右兩側】（上面那段）。
+//    X4 的兩顆都在【右側邊、上下排】（維護者 2026-09-23 持機）—— 沒有左右可言，
+//    「上＝上一頁、下＝下一頁」是肌肉記憶，不隨書的方向改 ⇒ X4 的「依版面」一律 PREV_NEXT。
+//    只動側鍵：前排左右鍵與觸控區仍跟書走（bookTurnsRightToLeft 不變）。他只回報了側鍵；
+//    X4 前排的實體位置沒有持機確認過（memory device-scope），直排時前排對不對要他在 X4 上看。
+//    `gpio` 在這個 static 函式裡會解析成成員（編不過），所以明寫全域的 `::gpio`。
 uint8_t MappedInputManager::resolveSideLayout() {
   const uint8_t configured = SETTINGS.sideButtonLayout;
   if (configured != CrossPointSettings::FOLLOW_LAYOUT) return configured;
+  if (!::gpio.deviceIsX3()) return CrossPointSettings::PREV_NEXT;
   return bookTurnsRightToLeft() ? CrossPointSettings::NEXT_PREV : CrossPointSettings::PREV_NEXT;
 }
 

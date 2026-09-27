@@ -23,7 +23,10 @@ constexpr size_t kMaxPieceBytes = 200;
 constexpr size_t kFlushBytes = 512;
 
 inline bool isCont(const unsigned char b) { return (b & 0xC0) == 0x80; }
-inline bool isSpace(const char c) { return c == ' ' || c == '\t'; }
+// ⚠️ NUL 也是分隔（當空白）：ParsedText 裡好幾個 `while (p < end) utf8NextCodepoint(&p)` 迴圈遇到 NUL 不會前進
+//    （utf8NextCodepoint 把 NUL 當字串結尾：回 0、不動指標）→ 字詞裡夾一個 NUL 閱讀器就永遠卡住
+//    （實測：「字。」＋補零的檔尾，切出來的尾巴「。\0\0」交給 countCodepoints）。UTF-16 存的 txt 滿是 NUL。
+inline bool isSpace(const char c) { return c == ' ' || c == '\t' || c == '\0'; }
 
 CssTextAlign toCssAlign(const uint8_t align) {
   // 與 TextSettingsPreview.cpp 同一個對映 —— 刻意重複：那邊是設定頁預覽、這邊是閱讀器，
@@ -384,7 +387,7 @@ void PageBuilder::streamParagraph(const size_t start, const size_t end, const bo
   size_t i = start;
   int spaces = 0;
   while (i < end && isSpace(chunk_[i])) {
-    spaces += chunk_[i] == '\t' ? 4 : 1;
+    spaces += chunk_[i] == '\t' ? 4 : chunk_[i] == ' ' ? 1 : 0;  // NUL 不算縮排
     ++i;
   }
   if (!continuation && spaces > 0) {
@@ -404,6 +407,9 @@ void PageBuilder::streamParagraph(const size_t start, const size_t end, const bo
   // v240：橫排改 greedy（不斷字）。理由寫在 ParsedText::setGreedyLineBreaks —— 分頁要唯一，
   // 往前翻頁才對得準。直排走 layoutAndExtractColumns，不看這個旗標。
   parsed.setGreedyLineBreaks(true);
+  // 注音：每一段接上整頁共用的游標（收集模式不排畫面，不用）。
+  zhuyin::ZhuyinTxtCursor* const zyCursor = collect_ ? nullptr : params_.zhuyinCursor;
+  if (zyCursor) parsed.useZhuyinCursor(zyCursor, params_.fontId, params_.zhuyinGeneration);
   anchors_.clear();
   lastAnchorIdx_ = 0;
   paraStartByte_ = start;
@@ -448,8 +454,18 @@ void PageBuilder::streamParagraph(const size_t start, const size_t end, const bo
       for (const char ch : composed) {
         if (!isCont(static_cast<unsigned char>(ch))) ++nfcCps;
       }
-      const bool exact = composed == piece && isValidUtf8(piece.data(), piece.size());
+      const bool validUtf8 = isValidUtf8(piece.data(), piece.size());
+      const bool exact = composed == piece && validUtf8;
       anchors_.push_back({cp, static_cast<uint32_t>(k), static_cast<uint32_t>(cut - k), exact});
+      // 注音：游標只核對碼位，所以排版交給它的漢字必須就是檔案裡的漢字、照順序、一個不少。合法 UTF-8 的塊保證這件事。
+      // 不合法的塊不保證：extractLine 剝掉軟連字號之後，前後的壞位元組可能拼成一個檔案裡沒有的漢字
+      // （E4 C2AD B8 80 → 「一」），而下一個字剛好也是「一」時核對照樣通過。（其餘的轉換都不會多出或少掉漢字：
+      // utf8NextCodepoint 拒絕過長編碼與代理、不會吞掉首位元組，所以跟嚴格解碼認得的漢字相同；NFC 只合併拉丁字母與
+      // 附加符號；NUL 到不了這裡，上面當分隔。）→ 不合法的塊一律先作廢游標：這一頁從這裡起不標，但不會標錯。
+      if (zyCursor && !zyCursor->failed() && !validUtf8) {
+        zyCursor->abandon();
+        ++out_.zhuyinUnsafe;
+      }
       // 已經是 NFC 了；`addWord` 會再做一次，那是冪等的。
       parsed.addWord(std::move(composed), EpdFontFamily::REGULAR, false, attach, cp);
       ++out_.words;
@@ -540,6 +556,16 @@ void PageBuilder::run(const bool startsMidParagraph) {
 }
 
 }  // namespace
+
+bool ChunkSource::read(const size_t offset, uint8_t* dst, const size_t len) {
+  if (offset > fileSize_ || len > fileSize_ - offset) return false;
+  if (offset >= chunkStart_ && offset - chunkStart_ <= chunkLen_ && len <= chunkLen_ - (offset - chunkStart_)) {
+    std::memcpy(dst, chunk_ + (offset - chunkStart_), len);
+    return true;
+  }
+  if (cardReads_ < UINT16_MAX) ++cardReads_;
+  return readExact_ && readExact_(ctx_, offset, dst, len);
+}
 
 Result layoutPage(const char* chunk, const size_t chunkLen, const bool atEof, const bool startsMidParagraph,
                   const GfxRenderer& renderer, const Params& params) {

@@ -10,8 +10,14 @@
 #include <GfxRenderer.h>
 #include <Logging.h>
 #include <Utf8.h>
+#include <ZhuyinActive.h>
+#include <ZhuyinEngine.h>
+#include <ZhuyinSession.h>
+#include <ZhuyinTxtCursor.h>
+#include <ZhuyinUtf8.h>
 
 #include <algorithm>
+#include <cstring>
 #include <cmath>
 #include <functional>
 #include <limits>
@@ -138,6 +144,48 @@ uint32_t lastCodepoint(const std::string& word) {
 }
 
 bool containsSoftHyphen(const std::string& word) { return word.find(SOFT_HYPHEN_UTF8) != std::string::npos; }
+
+// v342：變體選擇符號不畫 —— 字型沒有它們，查不到會畫成替代字形（每個預先標注的破音字後面多一個 �）。
+// 先用位元組粗篩（EF B8 ＝ U+FE00–FE3F、F3 A0 ＝ U+E0000–E0FFF），真的有才逐字解碼。
+bool mayContainVariationSelector(const std::string& s) {
+  for (size_t i = 0; i + 1 < s.size(); i++) {
+    const auto a = static_cast<uint8_t>(s[i]), b = static_cast<uint8_t>(s[i + 1]);
+    if ((a == 0xEF && b == 0xB8) || (a == 0xF3 && b == 0xA0)) return true;
+  }
+  return false;
+}
+
+// 拿掉選擇符號：原地、不配記憶體（-fno-exceptions 下每個配置都是一個 abort 點，而預先標注的書幾乎每個字詞都會走到這裡）。
+// removedAt[i] ＝ 第 i 個拿掉的選擇符號前面留下了幾個碼位（遞增）；碼位照 utf8NextCodepoint 數，與 countCodepoints 同一把尺。
+// 留在原處不拿的（照舊畫成替代字形，等同 v341）：記不下的（字詞最多 200 位元組、選擇符號至少 3 位元組 → 最多 66 個，碰不到）、
+// 後面緊跟續位元組的（拿掉會讓前面一個斷掉的 UTF-8 序列跟後面的位元組接成一個原文沒有的字）。呼叫端保證沒有 NUL。
+constexpr size_t kMaxRemovedSelectors = 80;
+size_t stripVariationSelectorsInPlace(std::string& s, uint16_t* removedAt) {
+  const auto* const base = reinterpret_cast<const unsigned char*>(s.c_str());
+  const auto* p = base;
+  size_t w = 0, n = 0;
+  uint16_t kept = 0;
+  while (*p) {
+    const auto* const start = p;
+    const uint32_t cp = utf8NextCodepoint(&p);
+    const size_t len = static_cast<size_t>(p - start);
+    if (len == 0) {  // 不會發生（非 NUL 一定前進）；保險：剩下的原樣留著、結束（codex 第二輪）
+      const size_t rest = std::strlen(reinterpret_cast<const char*>(start));
+      std::memmove(&s[w], start, rest);
+      w += rest;
+      break;
+    }
+    if (utf8IsVariationSelector(cp) && n < kMaxRemovedSelectors && (*p & 0xC0) != 0x80) {
+      removedAt[n++] = kept;
+      continue;
+    }
+    if (w != static_cast<size_t>(start - base)) std::memmove(&s[w], start, len);  // 只往前搬：寫的位置永遠不超過讀的位置
+    w += len;
+    if (kept < UINT16_MAX) kept++;
+  }
+  s.resize(w);
+  return n;
+}
 
 // v118/v161：CJK 禁則四函式移至 lib/Utf8/Utf8.h 共用（txt 閱讀器與 wrappedText 同一份）。
 // 移除前逐 case 比對過與本檔原複本完全相同 —— 排版結果不變。
@@ -430,9 +478,255 @@ bool g_boldBodyText = false;
 
 void ParsedText::setBoldBodyText(const bool enabled) { g_boldBodyText = enabled; }
 
+// ---- 注音（P2 設計第 2 節）----
+// 讀音的來源：EPUB 是這一段自己的 session（字詞進來就餵），TXT 是整頁共用的游標。
+// 每一步都先核對「引擎還是當初那一個」（世代、字型）：引擎被換掉或撤銷 → session 的暫存可能已經放掉 → 一個位元組都不碰。
+struct ParsedText::ZhuyinState {
+  zhuyin::ZhuyinEngine* engine = nullptr;
+  std::unique_ptr<zhuyin::ZhuyinSession> session;  // EPUB
+  zhuyin::ZhuyinTxtCursor* cursor = nullptr;       // TXT（頁擁有）
+  uint32_t generation = 0;
+  int fontId = 0;
+  bool fedAny = false;
+  bool final = false;     // 段落結束了（session 已 finish）
+  bool stopped = false;   // 這一段之後都不標
+  bool degraded = false;  // 停的原因是資源或 I/O
+};
+
+ParsedText::ParsedText(const bool extraParagraphSpacing, const bool hyphenationEnabled, const bool focusReadingEnabled,
+                       const BlockStyle& blockStyle)
+    : blockStyle(blockStyle),
+      extraParagraphSpacing(extraParagraphSpacing),
+      hyphenationEnabled(hyphenationEnabled),
+      focusReadingEnabled(focusReadingEnabled),
+      isNaturalAlign(false),
+      hasRtlWord(false) {}
+
+ParsedText::~ParsedText() = default;
+
+void ParsedText::enableZhuyin(const int fontId, const bool docAnnotated) {
+  zy_.reset();
+  const zhuyin::ActiveEngine e = zhuyin::activeEngine();
+  if (!zhuyin::engineUsable(e) || e.fontId != fontId || !e.engine) return;
+  std::unique_ptr<ZhuyinState> st(new (std::nothrow) ZhuyinState());
+  if (st) st->session.reset(new (std::nothrow) zhuyin::ZhuyinSession(e.engine->data(), e.engine->scratch()));
+  if (!st || !st->session) {
+    zhuyin::swapStats().degradedEvents++;  // 配不到：這一段沒有注音 → 章節要寫「沒注音」
+    return;
+  }
+  st->engine = e.engine;
+  st->generation = e.generation;
+  st->fontId = fontId;
+  st->session->setDocumentAnnotated(docAnnotated);
+  st->session->begin();
+  zy_ = std::move(st);
+  zhuyin::swapStats().paragraphs++;
+  if (docAnnotated) zhuyin::swapStats().annotatedParagraphs++;  // 證人：章節標記認到了
+}
+
+void ParsedText::setZhuyinDocAnnotated(const bool on) {
+  if (!zy_ || !zy_->session) return;
+  zy_->session->setDocumentAnnotated(on);  // session 送出時才看這個旗標（outFor）→ 還沒送出的字都照新的規則
+  if (on) zhuyin::swapStats().annotatedParagraphs++;
+}
+
+void ParsedText::useZhuyinCursor(zhuyin::ZhuyinTxtCursor* cursor, const int fontId, const uint32_t generation) {
+  zy_.reset();
+  if (!cursor || cursor->failed()) return;
+  const zhuyin::ActiveEngine e = zhuyin::activeEngine();
+  // 引擎換過（世代不同）＝ 游標的資料與暫存可能已經放掉：作廢、一個位元組都不碰
+  if (!zhuyin::engineUsable(e) || e.fontId != fontId || !e.engine || e.generation != generation) {
+    cursor->abandon();
+    return;
+  }
+  std::unique_ptr<ZhuyinState> st(new (std::nothrow) ZhuyinState());
+  if (!st) {
+    cursor->abandon();  // 這一段的漢字不會交給游標 → 下一段不能接著用
+    zhuyin::swapStats().degradedEvents++;
+    return;
+  }
+  st->engine = e.engine;
+  st->cursor = cursor;
+  st->generation = e.generation;
+  st->fontId = fontId;
+  zy_ = std::move(st);
+  zhuyin::swapStats().paragraphs++;
+}
+
+void ParsedText::zhuyinStop(const bool degraded) {
+  if (!zy_ || zy_->stopped) return;
+  zy_->stopped = true;
+  zy_->degraded = degraded;
+  // TXT：這一段剩下的漢字不會交給游標了 → 游標整個作廢（它只核對碼位，錯位時剛好同字就會通過）
+  if (zy_->cursor) zy_->cursor->abandon();
+  if (degraded) {
+    zhuyin::swapStats().degradedEvents++;
+  } else {
+    zhuyin::swapStats().contentStops++;
+  }
+}
+
+bool ParsedText::zhuyinLive() {
+  if (!zy_ || zy_->stopped) return false;
+  const zhuyin::ActiveEngine e = zhuyin::activeEngine();
+  if (e.generation != zy_->generation || e.engine != zy_->engine || !zhuyin::engineUsable(e)) {
+    zhuyinStop(true);  // 引擎被換掉或撤銷：暫存可能已經放掉，不碰
+    return false;
+  }
+  return true;
+}
+
+void ParsedText::zhuyinFeed(const std::string& word, const bool attachToPrevious) {
+  if (!zy_ || !zy_->session || !zhuyinLive()) return;
+  // 畫面上兩個字詞之間有空白（來源裡有空白分開）→ 解析器也要看到一個硬邊界：「解析的字」＝「畫出來的字」
+  bool ok = true;
+  if (zy_->fedAny && !attachToPrevious) ok = zy_->session->addWord(" ", 1);
+  if (ok) ok = zy_->session->addWord(word.data(), word.size());
+  zy_->fedAny = true;
+  if (!ok) zhuyinStop(zy_->session->degraded());
+  const auto q = static_cast<uint32_t>(zy_->session->available());
+  if (q > zhuyin::swapStats().queueMax) zhuyin::swapStats().queueMax = q;  // 證人：佇列離容量多遠
+}
+
+// 還沒定案的行留到下一批：只取出「每個漢字都已經在 session 佇列裡」的前幾行（段落結束那一批不限制）
+size_t ParsedText::zhuyinCoveredUnits(const std::vector<size_t>& breaks, const size_t count) {
+  if (!zy_ || !zy_->session || zy_->final || !zhuyinLive()) return count;
+  const size_t avail = zy_->session->available();
+  size_t used = 0, start = 0, k = 0;
+  for (; k < count; k++) {
+    size_t han = 0;
+    for (size_t w = start; w < breaks[k] && w < words.size(); w++) {
+      const auto* p = reinterpret_cast<const uint8_t*>(words[w].data());
+      const auto* end = p + words[w].size();
+      while (p < end) han += zhuyin::isIdeograph(zhuyin::decodeUtf8(p, end)) ? 1 : 0;
+    }
+    if (used + han > avail) break;
+    used += han;
+    start = breaks[k];
+  }
+  if (k < count) zhuyin::swapStats().heldLines += static_cast<uint32_t>(count - k);
+  return k;
+}
+
+// ⚠️ 前提：呼叫端（zhuyinLineSwaps）在這一行開始時已經 zhuyinLive() 過，而這一行取讀音的迴圈裡沒有任何配置、讀卡以外的
+//    讓路點 —— 引擎只會在持 RenderLock 的建置 tick／render 裡被拿走（SdCardFontSystem::yieldZhuyin），不會在這裡面。
+bool ParsedText::zhuyinTake(const uint32_t cp, uint16_t* out) {
+  if (zy_->cursor) {
+    if (zy_->cursor->next(cp, out)) return true;
+    zhuyinStop(false);  // 游標自己失敗（核對不符、讀卡）→ 這一頁之後都不標（TXT 沒有快取、不必記降級；原因在 failReason）
+    return false;
+  }
+  zhuyin::ZhuyinSession& s = *zy_->session;
+  // 段落結束那一批：佇列滿了會分次送 → 取空了、還沒送完就再送一次
+  while (zy_->final && s.available() == 0 && !s.done()) {
+    if (!s.finish()) {
+      zhuyinStop(s.degraded());
+      return false;
+    }
+  }
+  if (s.take(cp, out)) return true;
+  zhuyinStop(s.degraded());
+  return false;
+}
+
+bool ParsedText::zhuyinActive() const { return zy_ && !zy_->stopped; }
+bool ParsedText::zhuyinDegraded() const { return zy_ && zy_->degraded; }
+bool ParsedText::zhuyinWantsFlush() const {
+  return zy_ && zy_->session && !zy_->stopped && !zy_->final && zy_->session->available() > kZhuyinFlushQueued;
+}
+
+void ParsedText::zhuyinNoteBuilt(const zhuyin::SwapBatch& requested, const uint32_t listOomBefore) {
+  if (!zy_ || requested.count == 0 || zhuyin::swapStats().listOom == listOomBefore) return;
+  if (!zy_->degraded) zhuyin::swapStats().degradedEvents++;
+  zy_->degraded = true;
+}
+
+void ParsedText::zhuyinAbandon() {
+  if (zy_) zhuyinStop(false);
+}
+
+bool ParsedText::zhuyinPrepareBatch(const bool final) {
+  if (!zy_ || !zy_->session || zy_->stopped || zy_->final || !zhuyinLive()) return false;
+  if (final) {
+    if (!zy_->session->finish()) zhuyinStop(zy_->session->degraded());
+    zy_->final = true;
+    return false;
+  }
+  return true;
+}
+
+size_t ParsedText::zhuyinCoveredColumns(const std::vector<uint16_t>& unitSrcWord,
+                                        const std::vector<uint16_t>& unitByteBegin,
+                                        const std::vector<uint16_t>& unitByteLen,
+                                        const std::vector<uint16_t>& columnStarts, const size_t columnCount,
+                                        const size_t unitCount) {
+  // 呼叫端剛由 zhuyinPrepareBatch 核對過；這裡自己再核一次，不賭兩個呼叫之間不會有人把引擎拿走（codex 整合複查 A6）
+  if (!zy_ || !zy_->session || !zhuyinLive()) return columnCount;
+  const size_t avail = zy_->session->available();
+  size_t used = 0, c = 0;
+  for (; c < columnCount; c++) {
+    const size_t begin = columnStarts[c];
+    const size_t end = (c + 1 < columnStarts.size()) ? columnStarts[c + 1] : unitCount;
+    size_t han = 0;
+    for (size_t i = begin; i < end && i < unitSrcWord.size(); i++) {
+      const size_t w = unitSrcWord[i];
+      if (w >= words.size()) continue;
+      const std::string& word = words[w];
+      const size_t b = std::min<size_t>(unitByteBegin[i], word.size());
+      const size_t e = std::min<size_t>(b + unitByteLen[i], word.size());
+      const auto* p = reinterpret_cast<const uint8_t*>(word.data()) + b;
+      const auto* q = reinterpret_cast<const uint8_t*>(word.data()) + e;
+      while (p < q) han += zhuyin::isIdeograph(zhuyin::decodeUtf8(p, q)) ? 1 : 0;
+    }
+    if (used + han > avail) break;
+    used += han;
+  }
+  if (c < columnCount) zhuyin::swapStats().heldLines += static_cast<uint32_t>(columnCount - c);
+  return c;
+}
+
+zhuyin::SwapBatch ParsedText::zhuyinLineSwaps(const std::vector<std::string>& lineWords, const ZhuyinAnnotatedFn annotated,
+                                              const void* ctx) {
+  zhuyin::SwapBatch b;
+  if (!zy_ || !zhuyinLive()) return b;
+  zhuyin::Swap* buf = zy_->engine->lineSwaps();
+  uint16_t n = 0;
+  bool overflow = false;
+  for (size_t i = 0; i < lineWords.size(); i++) {
+    const bool skip = annotated && annotated(ctx, i);
+    const auto* p = reinterpret_cast<const uint8_t*>(lineWords[i].data());
+    const auto* end = p + lineWords[i].size();
+    for (size_t k = 0; p < end; k++) {
+      const uint32_t cp = zhuyin::decodeUtf8(p, end);
+      if (!zhuyin::isIdeograph(cp)) continue;
+      uint16_t o = 0;
+      if (!zhuyinTake(cp, &o)) return zhuyin::SwapBatch{};  // 停了：這一行也不換
+      if (o == 0 || skip) continue;                         // 單音字、出版社標注：讀音照拿（保持對齊）但不換
+      if (n >= zhuyin::ZhuyinEngine::kLineSwapsCap) {
+        overflow = true;
+        continue;
+      }
+      if (zhuyin::makeSwap(i, k, o, &buf[n])) n++;
+    }
+  }
+  if (overflow) {
+    zhuyin::swapStats().lineOverflow++;
+    return zhuyin::SwapBatch{};  // 這一行不換（由版面決定、每次一樣）
+  }
+  b.list = buf;
+  b.count = n;
+  b.generation = zy_->generation;
+  b.fontId = zy_->fontId;
+  return b;
+}
+
 void ParsedText::addWord(std::string word, const EpdFontFamily::Style fontStyle, const bool underline,
                          const bool attachToPrevious, const uint32_t visibleTextOffset) {
   if (word.empty()) return;
+  // ⚠️ 字詞裡不准有 NUL：這個檔好幾個 `while (p < end) utf8NextCodepoint(&p)` 迴圈遇到 NUL 不會前進（它把 NUL 當字串結尾）
+  //    → 永遠卡住。EPUB 碰不到（XML 不准有 U+0000）；TXT 在餵入層就當成分隔（TxtEngineLayout 的 isSpace）。
+  //    這裡是最後一道：換成空白（一個位元組換一個位元組，碼位數與位移都不變）。
+  if (std::memchr(word.data(), 0, word.size()) != nullptr) std::replace(word.begin(), word.end(), '\0', ' ');
   buildProf.words++;  // v252（只計數，不在每個字上計時）
 
   // The device fonts carry no combining-mark positioning, so EPUB text stored in NFD
@@ -442,6 +736,25 @@ void ParsedText::addWord(std::string word, const EpdFontFamily::Style fontStyle,
   // precomposed glyph is used instead. This runs once per word at layout time (the
   // result is cached in the section file) and is a cheap no-op for mark-free text.
   word = utf8ComposeNfc(word);
+  // 注音：整個字詞原樣送進 session（token 都是它依序切出來的子字串；session 是串流，切在哪裡不影響結果）
+  if (zy_) zhuyinFeed(word, attachToPrevious);
+  // v342：變體選擇符號只給注音 session 看（bpmfvs 的讀音寫在這裡），排版之前拿掉 → 切詞、斷行、量寬、畫字看到的
+  //   跟不帶選擇符號的原文完全一樣（字型沒有它們，留著會畫成替代字形 �）。位移照原文算（originalOffset）→
+  //   進度位置與 TXT 的位元組對照不變。只剩選擇符號的字詞（切在字與選擇符號之間）＝ 什麼都不排。
+  uint16_t removedAt[kMaxRemovedSelectors];
+  size_t removedCount = 0;
+  if (mayContainVariationSelector(word)) {
+    removedCount = stripVariationSelectorsInPlace(word, removedAt);
+    zhuyin::swapStats().selectors += static_cast<uint32_t>(removedCount);  // 證人
+    if (word.empty()) return;
+  }
+  const auto originalOffset = [&](const uint32_t offset) {
+    // offset ＝ visibleTextOffset ＋ 拿掉之後的第幾個碼位；前面（含同一點）被拿掉幾個就往後加幾個（removedAt 遞增）
+    const uint32_t k = offset - visibleTextOffset;
+    uint32_t before = 0;
+    while (before < removedCount && removedAt[before] <= k) before++;
+    return offset + before;
+  };
 
   // 粗體閱讀：所有內文字升成粗體（已粗的標題不變）。放在 focus reading 判斷之前——內文全粗時
   // focus reading 自然無事可做（下面「已粗就整字粗」那條會接手）。
@@ -522,7 +835,7 @@ void ParsedText::addWord(std::string word, const EpdFontFamily::Style fontStyle,
     wordContinues.push_back(continues);
     wordNoSpaceBefore.push_back(noSpaceBefore);
     wordIsFocusSuffix.push_back(isFocusSuffix);
-    pushVisibleOffset(tokenOffset);
+    pushVisibleOffset(originalOffset(tokenOffset));
     if (!rubyTexts.empty()) {
       rubyTexts.push_back("");
     }
@@ -659,7 +972,7 @@ void ParsedText::addWord(std::string word, const EpdFontFamily::Style fontStyle,
       wordContinues.push_back(attach);
       wordNoSpaceBefore.push_back(noSpaceBefore);
       wordIsFocusSuffix.push_back(false);
-      pushVisibleOffset(segmentOffset);
+      pushVisibleOffset(originalOffset(segmentOffset));
     } else {
       size_t charCount = 0;
       const unsigned char* countPtr = reinterpret_cast<const unsigned char*>(segment.data());
@@ -682,7 +995,7 @@ void ParsedText::addWord(std::string word, const EpdFontFamily::Style fontStyle,
         wordContinues.push_back(attach);
         wordNoSpaceBefore.push_back(noSpaceBefore);
         wordIsFocusSuffix.push_back(false);
-        pushVisibleOffset(segmentOffset);
+        pushVisibleOffset(originalOffset(segmentOffset));
       } else {
         countPtr = reinterpret_cast<const unsigned char*>(segment.data());
         for (size_t i = 0; i < targetBoldChars; ++i) {
@@ -696,7 +1009,7 @@ void ParsedText::addWord(std::string word, const EpdFontFamily::Style fontStyle,
         wordContinues.push_back(attach);
         wordNoSpaceBefore.push_back(noSpaceBefore);
         wordIsFocusSuffix.push_back(false);
-        pushVisibleOffset(segmentOffset);
+        pushVisibleOffset(originalOffset(segmentOffset));
 
         // Regular suffix - marked so extractLine can merge it back into single TextBlock entry
         words.emplace_back(segment.substr(splitByteOffset));
@@ -704,7 +1017,7 @@ void ParsedText::addWord(std::string word, const EpdFontFamily::Style fontStyle,
         wordContinues.push_back(true);
         wordNoSpaceBefore.push_back(false);
         wordIsFocusSuffix.push_back(true);
-        pushVisibleOffset(segmentOffset + static_cast<uint32_t>(targetBoldChars));
+        pushVisibleOffset(originalOffset(segmentOffset + static_cast<uint32_t>(targetBoldChars)));
       }
     }
   };
@@ -877,7 +1190,16 @@ void ParsedText::layoutAndExtractLines(const GfxRenderer& renderer, const int fo
   } else {
     lineBreakIndices = computeLineBreaks(renderer, fontId, pageWidth, wordWidths, wordContinues, wordNoSpaceBefore);
   }
-  const size_t lineCount = includeLastLine ? lineBreakIndices.size() : lineBreakIndices.size() - 1;
+  size_t lineCount = includeLastLine ? lineBreakIndices.size() : lineBreakIndices.size() - 1;
+  // 注音：段落結束 → 全部送出；還沒結束 → 只取出漢字都已經定案的行（其餘留到下一批，codex 修訂 5）
+  if (zy_ && zy_->session && !zy_->stopped && zhuyinLive()) {
+    if (includeLastLine) {
+      if (!zy_->session->finish()) zhuyinStop(zy_->session->degraded());
+      zy_->final = true;
+    } else {
+      lineCount = zhuyinCoveredUnits(lineBreakIndices, lineCount);
+    }
+  }
 
   for (size_t i = 0; i < lineCount; ++i) {
     extractLine(i, pageWidth, wordWidths, wordContinues, wordNoSpaceBefore, lineBreakIndices, processLine, renderer,
@@ -1902,10 +2224,32 @@ void ParsedText::extractLine(const size_t breakIndex, const int pageWidth, const
     }
   }
 
+  // 注音：雙向重排過的行是視覺順序 → 從這一行起這一段不標（內容決定，不算降級）
+  if (zy_ && willReorder && !zy_->stopped) {
+    zhuyin::swapStats().bidiStops++;
+    zhuyinStop(false);
+  }
+
   if (!lineHasFocusSplit) {
     // TextBlock flattens the vectors into its arena; they stay owned here and die at return.
+    struct RubyView {
+      const std::vector<std::string>* ruby;
+      const std::vector<EpdFontFamily::Style>* styles;
+    } view{&lineRubyTexts, &lineWordStyles};
+    const uint32_t zyOomBefore = zhuyin::swapStats().listOom;
+    const zhuyin::SwapBatch zb =
+        zy_ ? zhuyinLineSwaps(
+                  lineWords,
+                  [](const void* c, const size_t k) {
+                    const auto* v = static_cast<const RubyView*>(c);
+                    return (k < v->ruby->size() && !(*v->ruby)[k].empty()) ||
+                           (k < v->styles->size() && ((*v->styles)[k] & EpdFontFamily::RUBY_CONTINUE) != 0);
+                  },
+                  &view)
+            : zhuyin::SwapBatch{};
     auto block = std::make_shared<TextBlock>(lineWords, lineXPos, lineWordStyles, std::vector<uint8_t>{},
-                                             std::vector<uint16_t>{}, blockStyle, std::move(lineRubyTexts));
+                                             std::vector<uint16_t>{}, blockStyle, std::move(lineRubyTexts), zb);
+    zhuyinNoteBuilt(zb, zyOomBefore);
     if (!block->valid()) {
       LOG_ERR("PTX", "Dropping line: TextBlock arena allocation failed");
       return;
@@ -1958,8 +2302,24 @@ void ParsedText::extractLine(const size_t breakIndex, const int pageWidth, const
     }
   }
 
+  struct RubyView {
+    const std::vector<std::string>* ruby;
+    const std::vector<EpdFontFamily::Style>* styles;
+  } view{&outRubyTexts, &outStyles};
+  const uint32_t zyOomBefore = zhuyin::swapStats().listOom;
+  const zhuyin::SwapBatch zb =
+      zy_ ? zhuyinLineSwaps(
+                outWords,
+                [](const void* c, const size_t k) {
+                  const auto* v = static_cast<const RubyView*>(c);
+                  return (k < v->ruby->size() && !(*v->ruby)[k].empty()) ||
+                         (k < v->styles->size() && ((*v->styles)[k] & EpdFontFamily::RUBY_CONTINUE) != 0);
+                },
+                &view)
+          : zhuyin::SwapBatch{};
   auto block = std::make_shared<TextBlock>(outWords, outXPos, outStyles, outBoundaries, outSuffixX, blockStyle,
-                                           std::move(outRubyTexts));
+                                           std::move(outRubyTexts), zb);
+  zhuyinNoteBuilt(zb, zyOomBefore);
   if (!block->valid()) {
     LOG_ERR("PTX", "Dropping line: TextBlock arena allocation failed");
     return;

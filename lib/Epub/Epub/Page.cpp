@@ -5,6 +5,7 @@
 #include <GfxRenderer.h>
 #include <Logging.h>
 #include <Serialization.h>
+#include <ZhuyinActive.h>
 
 #include <esp_heap_caps.h>
 
@@ -54,21 +55,60 @@ void PageLine::render(GfxRenderer& renderer, const int fontId, const int xOffset
   block->render(renderer, fontId, xPos + xOffset, yPos + yOffset);
 }
 
-bool PageLine::serialize(HalFile& file) {
-  serialization::writePod(file, xPos);
-  serialization::writePod(file, yPos);
-
-  // serialize TextBlock pointed to by PageLine
-  return block->serialize(file);
+bool PageElement::serializeTagged(HalFile& file, const zhuyin::PagePlace&) {
+  return serialization::writePodChecked(file, static_cast<uint8_t>(getTag())) && serialize(file);
 }
 
-std::unique_ptr<PageLine> PageLine::deserialize(HalFile& file) {
-  int16_t xPos;
-  int16_t yPos;
-  serialization::readPod(file, xPos);
-  serialization::readPod(file, yPos);
+bool PageLine::serializeTagged(HalFile& file, const zhuyin::PagePlace& place) {
+  // 引擎快照只取一次：判斷、綁定都用它（codex 複查 ③ 第二輪 F6）
+  const zhuyin::ActiveEngine eng = zhuyin::activeEngine();
+  if (!block->swapsPersistable(eng)) {
+    return serialization::writePodChecked(file, static_cast<uint8_t>(TAG_PageLine)) && serializeBody(file, nullptr);
+  }
+  uint8_t binding[zhuyin::kSwapBindingBytes];
+  zhuyin::encodeBinding(zhuyin::bindingOf(eng, place), binding);
+  return serialization::writePodChecked(file, SERIAL_TAG_PAGE_LINE_ZHUYIN) && serializeBody(file, binding);
+}
 
-  auto tb = TextBlock::deserialize(file);
+bool PageLine::serialize(HalFile& file) { return serializeBody(file, nullptr); }
+
+bool PageLine::serializeBody(HalFile& file, const uint8_t* binding) {
+  if (!serialization::writePodChecked(file, xPos) || !serialization::writePodChecked(file, yPos)) return false;
+
+  // 標籤 4：筆數、補數、綁定寫在本體之前 —— 讀的一端先驗過筆數，才能一次配好 arena＋清單、也才敢相信後面的串流；
+  // 筆數壞了就整頁壞（不能猜後面有幾個位元組）。綁定由 serializeTagged 算一次，前後兩段共用。
+  if (binding && !block->serializeSwapHeader(file, binding)) return false;
+
+  // serialize TextBlock pointed to by PageLine
+  if (!block->serialize(file)) return false;
+  return !binding || block->serializeSwaps(file, binding);
+}
+
+std::unique_ptr<PageLine> PageLine::deserialize(HalFile& file, const bool withSwaps, const zhuyin::PagePlace& place) {
+  int16_t xPos = 0;
+  int16_t yPos = 0;
+  if (!serialization::readPodChecked(file, xPos) || !serialization::readPodChecked(file, yPos)) {
+    LOG_ERR("PGE", "Deserialization failed: truncated line position");
+    return nullptr;
+  }
+
+  uint16_t swaps = 0;
+  uint8_t binding[zhuyin::kSwapBindingBytes] = {};
+  if (withSwaps) {
+    uint16_t check = 0;
+    // 只擋完整性（0、補數不符、讀不到）；過大的筆數是語意失敗，交給 TextBlock 讀完、驗 CRC 再丟（第二輪 F2）
+    if (!serialization::readPodChecked(file, swaps) || !serialization::readPodChecked(file, check) || swaps == 0 ||
+        check != static_cast<uint16_t>(~swaps)) {
+      LOG_ERR("PGE", "Deserialization failed: bad zhuyin swap count %u/%u", swaps, check);
+      return nullptr;
+    }
+    if (file.read(binding, sizeof(binding)) != static_cast<int>(sizeof(binding))) {
+      LOG_ERR("PGE", "Deserialization failed: truncated zhuyin binding");
+      return nullptr;
+    }
+  }
+
+  auto tb = TextBlock::deserialize(file, swaps, withSwaps ? binding : nullptr, place);
   if (!tb) {
     LOG_ERR("PGE", "Deserialization failed: null TextBlock");
     return nullptr;
@@ -93,18 +133,19 @@ void PageImage::renderPlaceholder(GfxRenderer& renderer, const int xOffset, cons
 }
 
 bool PageImage::serialize(HalFile& file) {
-  serialization::writePod(file, xPos);
-  serialization::writePod(file, yPos);
+  if (!serialization::writePodChecked(file, xPos) || !serialization::writePodChecked(file, yPos)) return false;
 
   // serialize ImageBlock
   return imageBlock->serialize(file);
 }
 
 std::unique_ptr<PageImage> PageImage::deserialize(HalFile& file) {
-  int16_t xPos;
-  int16_t yPos;
-  serialization::readPod(file, xPos);
-  serialization::readPod(file, yPos);
+  int16_t xPos = 0;
+  int16_t yPos = 0;
+  if (!serialization::readPodChecked(file, xPos) || !serialization::readPodChecked(file, yPos)) {
+    ImageBlock::noteFailure("pageimage-truncated");
+    return nullptr;
+  }
 
   auto ib = ImageBlock::deserialize(file);
   if (!ib) {
@@ -131,11 +172,8 @@ void PageHorizontalRule::render(GfxRenderer& renderer, const int fontId, const i
 }
 
 bool PageHorizontalRule::serialize(HalFile& file) {
-  serialization::writePod(file, xPos);
-  serialization::writePod(file, yPos);
-  serialization::writePod(file, width);
-  serialization::writePod(file, thickness);
-  return true;
+  return serialization::writePodChecked(file, xPos) && serialization::writePodChecked(file, yPos) &&
+         serialization::writePodChecked(file, width) && serialization::writePodChecked(file, thickness);
 }
 
 std::unique_ptr<PageHorizontalRule> PageHorizontalRule::deserialize(HalFile& file) {
@@ -143,10 +181,11 @@ std::unique_ptr<PageHorizontalRule> PageHorizontalRule::deserialize(HalFile& fil
   int16_t yPos = 0;
   uint16_t width = 0;
   uint8_t thickness = 0;
-  serialization::readPod(file, xPos);
-  serialization::readPod(file, yPos);
-  serialization::readPod(file, width);
-  serialization::readPod(file, thickness);
+  if (!serialization::readPodChecked(file, xPos) || !serialization::readPodChecked(file, yPos) ||
+      !serialization::readPodChecked(file, width) || !serialization::readPodChecked(file, thickness)) {
+    LOG_ERR("PGE", "Deserialization failed: truncated horizontal rule");
+    return nullptr;
+  }
 
   if (width == 0 || thickness == 0) {
     LOG_ERR("PGE", "Deserialization failed: invalid horizontal rule metadata (width=%u thickness=%u)", width,
@@ -183,22 +222,20 @@ void Page::renderWithImagePlaceholders(GfxRenderer& renderer, const int fontId, 
   }
 }
 
-bool Page::serialize(HalFile& file) const {
+bool Page::serialize(HalFile& file, const zhuyin::PagePlace& place) const {
   const uint16_t count = elements.size();
-  serialization::writePod(file, count);
+  if (!serialization::writePodChecked(file, count)) return false;
 
   for (const auto& el : elements) {
-    // Use getTag() method to determine type
-    serialization::writePod(file, static_cast<uint8_t>(el->getTag()));
-
-    if (!el->serialize(file)) {
+    // 標籤＋內容由元素自己判一次（帶注音清單的行寫 SERIAL_TAG_PAGE_LINE_ZHUYIN）
+    if (!el->serializeTagged(file, place)) {
       return false;
     }
   }
 
   // Serialize footnotes (clamp to MAX_FOOTNOTES_PER_PAGE to match addFootnote/deserialize limits)
   const uint16_t fnCount = std::min<uint16_t>(footnotes.size(), MAX_FOOTNOTES_PER_PAGE);
-  serialization::writePod(file, fnCount);
+  if (!serialization::writePodChecked(file, fnCount)) return false;
   for (uint16_t i = 0; i < fnCount; i++) {
     const auto& fn = footnotes[i];
     if (file.write(fn.number, sizeof(fn.number)) != sizeof(fn.number) ||
@@ -211,7 +248,7 @@ bool Page::serialize(HalFile& file) const {
   return true;
 }
 
-std::unique_ptr<Page> Page::deserialize(HalFile& file) {
+std::unique_ptr<Page> Page::deserialize(HalFile& file, const zhuyin::PagePlace& place) {
   // v194：載入路徑配不到 Page 就回 nullptr，呼叫端走 PAGELOAD deferred／維持上一頁。
   auto page = std::unique_ptr<Page>(new (std::nothrow) Page());
   if (!page) {
@@ -219,8 +256,11 @@ std::unique_ptr<Page> Page::deserialize(HalFile& file) {
     return nullptr;
   }
 
-  uint16_t count;
-  serialization::readPod(file, count);
+  uint16_t count = 0;
+  if (!serialization::readPodChecked(file, count)) {
+    LOG_ERR("PGE", "Deserialization failed: truncated element count");
+    return nullptr;
+  }
 
   // Reserve up front so a page load costs one allocation for the element vector
   // instead of a grow-copy-free cycle every doubling. `count` is untrusted (it
@@ -233,11 +273,14 @@ std::unique_ptr<Page> Page::deserialize(HalFile& file) {
   page->elements.reserve(std::min(count, RESERVE_CAP));
 
   for (uint16_t i = 0; i < count; i++) {
-    uint8_t tag;
-    serialization::readPod(file, tag);
+    uint8_t tag = 0;
+    if (!serialization::readPodChecked(file, tag)) {
+      LOG_ERR("PGE", "Deserialization failed: truncated element tag");
+      return nullptr;
+    }
 
-    if (tag == TAG_PageLine) {
-      auto pl = PageLine::deserialize(file);
+    if (tag == TAG_PageLine || tag == SERIAL_TAG_PAGE_LINE_ZHUYIN) {
+      auto pl = PageLine::deserialize(file, tag == SERIAL_TAG_PAGE_LINE_ZHUYIN, place);
       if (!pl) {
         return nullptr;
       }
@@ -261,8 +304,11 @@ std::unique_ptr<Page> Page::deserialize(HalFile& file) {
   }
 
   // Deserialize footnotes
-  uint16_t fnCount;
-  serialization::readPod(file, fnCount);
+  uint16_t fnCount = 0;
+  if (!serialization::readPodChecked(file, fnCount)) {
+    LOG_ERR("PGE", "Deserialization failed: truncated footnote count");
+    return nullptr;
+  }
   if (fnCount > MAX_FOOTNOTES_PER_PAGE) {
     LOG_ERR("PGE", "Invalid footnote count %u", fnCount);
     return nullptr;

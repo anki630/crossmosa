@@ -25,6 +25,7 @@ class StatusBarSettingsActivity final : public Activity {
   int selectedIndex = 0;
   // Decided in onEnter() based on halClock.isAvailable() so clock entries are hidden on X4.
   int visibleItemCount = 0;
+  bool clockTrusted = false;  // v343：onEnter／校時回來時探測（HalClock::probe），render 只讀
 
   void handleSelection();
 };

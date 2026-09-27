@@ -7,8 +7,10 @@
 #include <Logging.h>
 #include <Memory.h>
 #include <Serialization.h>
+#include <ZhuyinActive.h>
 
 #include <cstring>
+#include <new>
 
 #include "../../../../src/fontIds.h"
 
@@ -43,7 +45,7 @@ void TextBlock::bindArenaPointers() {
 TextBlock::TextBlock(const std::vector<std::string>& words, const std::vector<int16_t>& wordXpos,
                      const std::vector<EpdFontFamily::Style>& wordStyles, const std::vector<uint8_t>& focusBoundary,
                      const std::vector<uint16_t>& focusSuffixX, const BlockStyle& blockStyle,
-                     std::vector<std::string> rubyTexts)
+                     std::vector<std::string> rubyTexts, const zhuyin::SwapBatch& swaps)
     : blockStyle(blockStyle), rubyTexts(std::move(rubyTexts)) {
   // Same invariant as deserialize(): a block never holds an all-empty rubyTexts, so a
   // ruby-less line costs nothing beyond its arena. The layout engine hands one over for
@@ -69,6 +71,7 @@ TextBlock::TextBlock(const std::vector<std::string>& words, const std::vector<in
   numWords = static_cast<uint16_t>(words.size());
   focusPresent = hasFocus;
   if (numWords == 0) {
+    if (swaps.count > 0) zhuyin::swapStats().dropCheck++;  // 空行不會有替換（排版端的錯）
     return;  // valid empty block, no arena
   }
 
@@ -86,7 +89,28 @@ TextBlock::TextBlock(const std::vector<std::string>& words, const std::vector<in
   textBytes = static_cast<uint16_t>(totalText);
 
   const size_t size = arenaSize(numWords, focusPresent, textBytes);
-  arena = makeUniqueNoThrow<uint8_t[]>(size);
+  // 注音：先決定清單能不能掛（引擎、世代、字型、大小），才知道要配多大 —— 仍然只有一次配置。
+  // 配不到 arena＋清單就退回只配本體、這一行不換（引擎讓記憶體，codex 複查 ③ F6）。
+  uint16_t keep = 0;
+  if (swaps.count > 0) {
+    const auto eng = zhuyin::activeEngine();
+    if (!zhuyin::engineUsable(eng) || eng.generation != swaps.generation || eng.fontId != swaps.fontId) {
+      zhuyin::swapStats().dropStale++;
+    } else if (swaps.count > zhuyin::kMaxLineSwaps ||
+               swapTailOffset(size) + swapTailBytes(swaps.count) > zhuyin::kMaxLineArenaBytes) {
+      zhuyin::swapStats().dropSize++;
+    } else {
+      keep = swaps.count;
+    }
+  }
+  if (keep > 0) {
+    arena = makeUniqueNoThrow<uint8_t[]>(swapTailOffset(size) + swapTailBytes(keep));
+    if (!arena) {
+      zhuyin::swapStats().listOom++;
+      keep = 0;
+    }
+  }
+  if (!arena) arena = makeUniqueNoThrow<uint8_t[]>(size);
   if (!arena) {
     LOG_ERR("TXB", "OOM: arena %u bytes", static_cast<uint32_t>(size));
     numWords = 0;
@@ -119,6 +143,72 @@ TextBlock::TextBlock(const std::vector<std::string>& words, const std::vector<in
       boundary[i] = focusBoundary[i];
     }
   }
+  if (keep > 0 && attachSwaps(size, swaps.list, keep, swaps.generation)) {
+    zhuyin::swapStats().built++;
+  }
+}
+
+bool TextBlock::attachSwaps(const size_t baseArenaBytes, const zhuyin::Swap* swaps, const uint16_t n,
+                            const uint32_t generation) {
+  const auto eng = zhuyin::activeEngine();
+  if (!zhuyin::engineUsable(eng) || zhuyin::checkSwaps(lineText(), swaps, n, *eng.data) != zhuyin::SwapCheck::Ok) {
+    zhuyin::swapStats().dropCheck++;
+    return false;
+  }
+  uint8_t* tail = arena.get() + swapTailOffset(baseArenaBytes);
+  const uint16_t zero = 0;
+  memcpy(tail, &generation, sizeof(generation));
+  memcpy(tail + 4, &n, sizeof(n));
+  memcpy(tail + 6, &zero, sizeof(zero));
+  for (uint16_t i = 0; i < n; i++) {
+    // placement new：明確開始每一筆的生命期（codex 複查 ③ F11）
+    new (tail + 8 + i * sizeof(zhuyin::Swap)) zhuyin::Swap{swaps[i].word, swaps[i].pua, swaps[i].cp, 0};
+  }
+  swapTail = tail;
+  return true;
+}
+
+uint16_t TextBlock::swapCount() const {
+  if (!swapTail) return 0;
+  uint16_t n = 0;
+  memcpy(&n, swapTail + 4, sizeof(n));
+  return n;
+}
+
+const zhuyin::Swap* TextBlock::swapList() const {
+  return swapTail ? reinterpret_cast<const zhuyin::Swap*>(swapTail + 8) : nullptr;
+}
+
+uint32_t TextBlock::swapGeneration() const {
+  uint32_t g = 0;
+  if (swapTail) memcpy(&g, swapTail, sizeof(g));
+  return g;
+}
+
+bool TextBlock::swapsPersistable(const zhuyin::ActiveEngine& eng) const {
+  return swapTail && zhuyin::engineUsable(eng) && eng.generation == swapGeneration();
+}
+
+bool TextBlock::swapsPersistable() const { return swapsPersistable(zhuyin::activeEngine()); }
+
+bool TextBlock::serializeSwapHeader(HalFile& file, const uint8_t* binding) const {
+  const uint16_t n = swapCount();
+  return serialization::writePodChecked(file, n) && serialization::writePodChecked(file, static_cast<uint16_t>(~n)) &&
+         file.write(binding, zhuyin::kSwapBindingBytes) == zhuyin::kSwapBindingBytes;
+}
+
+bool TextBlock::serializeSwaps(HalFile& file, const uint8_t* binding) const {
+  const uint16_t n = swapCount();
+  const zhuyin::Swap* list = swapList();
+  uint16_t crc = zhuyin::swapCrcBegin(binding, n, numWords, focusPresent ? 1 : 0, textBytes, arena.get(),
+                                      arenaSize(numWords, focusPresent, textBytes));
+  for (uint16_t i = 0; i < n; i++) {
+    uint8_t rec[zhuyin::kSwapDiskBytes];
+    zhuyin::encodeSwap(list[i], rec);
+    if (file.write(rec, sizeof(rec)) != sizeof(rec)) return false;
+    crc = zhuyin::crc16(rec, sizeof(rec), crc);
+  }
+  return serialization::writePodChecked(file, crc);
 }
 
 bool TextBlock::hasRuby() const {
@@ -141,11 +231,44 @@ bool TextBlock::hasRuby() const {
 //    用橫排座標亂畫三處（不是靜默不畫）。直排的 TextBlock 一律不帶 rubyTexts，
 //    這裡再擋一次。實測未見真正的注音 ruby。
 // ⚠️ **不要用 SUP/SUB** —— renderCharScaled 沒有帶剪枝，直向分帶算繪會出事。
+const zhuyin::Swap* TextBlock::drawableSwaps(const int fontId, uint16_t* n) const {
+  *n = 0;
+  if (!swapTail) return nullptr;
+  const auto eng = zhuyin::activeEngine();
+  if (!zhuyin::engineUsable(eng) || eng.generation != swapGeneration() || eng.fontId != fontId) {
+    zhuyin::swapStats().renderGated++;
+    return nullptr;
+  }
+  *n = swapCount();
+  return swapList();
+}
+
+const char* TextBlock::drawnWord(const uint16_t i, const zhuyin::Swap* swaps, const uint16_t n, uint16_t& next,
+                                 char* buf, const size_t cap) const {
+  const char* word = wordText(i);
+  if (!swaps) return word;
+  uint16_t k = next;
+  while (k < n && swaps[k].word == i) k++;  // 清單照 (word, cp) 排好：這個字詞的那幾筆連在一起
+  if (k == next) return word;
+  const bool ok = zhuyin::applyWordSwaps(word, wordTextLen(i), swaps + next, static_cast<uint16_t>(k - next), buf, cap);
+  next = k;
+  if (!ok) {
+    zhuyin::swapStats().renderSkipped++;
+    return word;
+  }
+  return buf;
+}
+
 void TextBlock::renderVertical(const GfxRenderer& renderer, const int fontId, const int x, const int y) const {
   if (!isValid) return;
   renderer.noteVerticalDraw();  // 證人（B-22）：直排繪製分支確實被走到
+  // 注音（P2 ④）：判一次閘門；換字在交給字型之前做（預取掃描那一趟也一樣走這裡 → 看得到私用區碼位）
+  uint16_t swapN = 0;
+  const zhuyin::Swap* swaps = drawableSwaps(fontId, &swapN);
+  uint16_t nextSwap = 0;
+  char zbuf[zhuyin::kSwapWordBuffer];
   for (uint16_t i = 0; i < numWords; i++) {
-    const char* word = wordText(i);
+    const char* word = drawnWord(i, swaps, swapN, nextSwap, zbuf, sizeof(zbuf));
     const uint8_t raw = static_cast<uint8_t>(wordStyle(i));
     const bool rotated = (raw & vtext::STYLE_BIT_ROTATED) != 0;
     // ⚠️ 傳給字型之前必須遮掉第 7 位，否則字型會拿到它不認得的位元。
@@ -251,8 +374,15 @@ void TextBlock::render(const GfxRenderer& renderer, const int fontId, const int 
   // not once per word.
   const int rubyShift = getRubyShift(ascender);
 
+  // 注音（P2 ④）：判一次閘門；每個字詞在交給字型之前換字（預取掃描那一趟也走這裡 → 看得到私用區碼位）。
+  // 換字長度不變（3 位元組換 3 位元組），所以專注閱讀的位元組界線、字寬、裝飾線都不受影響。
+  uint16_t swapN = 0;
+  const zhuyin::Swap* swaps = drawableSwaps(fontId, &swapN);
+  uint16_t nextSwap = 0;
+  char zbuf[zhuyin::kSwapWordBuffer];
+
   for (uint16_t i = 0; i < numWords; i++) {
-    const char* word = wordText(i);
+    const char* word = drawnWord(i, swaps, swapN, nextSwap, zbuf, sizeof(zbuf));
     const int wordX = xposArr[i] + x;
     const EpdFontFamily::Style currentStyle = wordStyle(i);
     const auto baseDir =
@@ -352,13 +482,17 @@ bool TextBlock::serialize(HalFile& file) const {
     LOG_ERR("TXB", "Serialization failed: invalid block");
     return false;
   }
+  using serialization::writePodChecked;
 
   // Word data: scalars, then the arena verbatim -- its in-memory layout is
   // exactly the on-disk layout (see TextBlock.h), so one write covers all
   // per-word arrays and the text blob.
-  serialization::writePod(file, numWords);
-  serialization::writePod(file, static_cast<uint8_t>(focusPresent ? 1 : 0));
-  serialization::writePod(file, textBytes);
+  // 每個欄位都檢查寫入長度（codex 複查 ③ F8）：寫到一半失敗就回 false，不讓後面恢復的寫入把殘缺的一頁補成「成功」。
+  if (!writePodChecked(file, numWords) || !writePodChecked(file, static_cast<uint8_t>(focusPresent ? 1 : 0)) ||
+      !writePodChecked(file, textBytes)) {
+    LOG_ERR("TXB", "Serialization failed: short write (header)");
+    return false;
+  }
   if (numWords > 0) {
     const size_t size = arenaSize(numWords, focusPresent, textBytes);
     if (file.write(arena.get(), size) != size) {
@@ -373,31 +507,36 @@ bool TextBlock::serialize(HalFile& file) const {
   }
 
   // Style (alignment + margins/padding/indent)
-  serialization::writePod(file, blockStyle.alignment);
-  serialization::writePod(file, blockStyle.textAlignDefined);
-  serialization::writePod(file, blockStyle.marginTop);
-  serialization::writePod(file, blockStyle.marginBottom);
-  serialization::writePod(file, blockStyle.marginLeft);
-  serialization::writePod(file, blockStyle.marginRight);
-  serialization::writePod(file, blockStyle.paddingTop);
-  serialization::writePod(file, blockStyle.paddingBottom);
-  serialization::writePod(file, blockStyle.paddingLeft);
-  serialization::writePod(file, blockStyle.paddingRight);
-  serialization::writePod(file, blockStyle.textIndent);
-  serialization::writePod(file, blockStyle.textIndentDefined);
-  serialization::writePod(file, blockStyle.isRtl);
-  serialization::writePod(file, blockStyle.directionDefined);
-
+  const bool styleOk =
+      writePodChecked(file, blockStyle.alignment) && writePodChecked(file, blockStyle.textAlignDefined) &&
+      writePodChecked(file, blockStyle.marginTop) && writePodChecked(file, blockStyle.marginBottom) &&
+      writePodChecked(file, blockStyle.marginLeft) && writePodChecked(file, blockStyle.marginRight) &&
+      writePodChecked(file, blockStyle.paddingTop) && writePodChecked(file, blockStyle.paddingBottom) &&
+      writePodChecked(file, blockStyle.paddingLeft) && writePodChecked(file, blockStyle.paddingRight) &&
+      writePodChecked(file, blockStyle.textIndent) && writePodChecked(file, blockStyle.textIndentDefined) &&
+      writePodChecked(file, blockStyle.isRtl) && writePodChecked(file, blockStyle.directionDefined);
+  if (!styleOk) {
+    LOG_ERR("TXB", "Serialization failed: short write (style)");
+    return false;
+  }
   return true;
 }
 
-std::unique_ptr<TextBlock> TextBlock::deserialize(HalFile& file) {
-  uint16_t wc;
-  uint8_t hasFocus;
-  uint16_t textBytes;
-  serialization::readPod(file, wc);
-  serialization::readPod(file, hasFocus);
-  serialization::readPod(file, textBytes);
+std::unique_ptr<TextBlock> TextBlock::deserialize(HalFile& file, const uint16_t zhuyinSwaps, const uint8_t* binding,
+                                                  const zhuyin::PagePlace& place) {
+  using serialization::readPodChecked;
+  if (zhuyinSwaps > 0 && !binding) {
+    LOG_ERR("TXB", "Deserialization failed: zhuyin swaps without a binding");
+    return nullptr;
+  }
+  // 每個欄位都檢查讀到的長度（codex 複查 ③ F8）：截斷 → nullptr，不讓未初始化的值流下去
+  uint16_t wc = 0;
+  uint8_t hasFocus = 0;
+  uint16_t textBytes = 0;
+  if (!readPodChecked(file, wc) || !readPodChecked(file, hasFocus) || !readPodChecked(file, textBytes)) {
+    LOG_ERR("TXB", "Deserialization failed: truncated header");
+    return nullptr;
+  }
 
   // Sanity checks: cap the arena allocation and reject impossible geometry
   // (every word carries at least its NUL terminator).
@@ -419,15 +558,45 @@ std::unique_ptr<TextBlock> TextBlock::deserialize(HalFile& file) {
   block->textBytes = textBytes;
   block->focusPresent = hasFocus != 0;
 
+  // 標籤 4：先決定清單能不能掛（引擎可用、綁定相同、大小）—— 配置仍然只有一次。
+  // 掛不上也照樣把那幾筆讀掉、驗 CRC（完整性在每一條路徑都驗，codex 複查 ③ F9）。
+  const zhuyin::ActiveEngine eng = zhuyinSwaps > 0 ? zhuyin::activeEngine() : zhuyin::ActiveEngine{};
+  const size_t baseSize = wc > 0 ? arenaSize(wc, block->focusPresent, textBytes) : 0;
+  uint16_t keep = 0;
+  uint32_t* dropCounter = nullptr;
+  if (zhuyinSwaps > 0) {
+    uint8_t want[zhuyin::kSwapBindingBytes] = {};
+    if (zhuyin::engineUsable(eng)) zhuyin::encodeBinding(zhuyin::bindingOf(eng, place), want);
+    if (wc == 0) {
+      dropCounter = &zhuyin::swapStats().dropCheck;  // 空行不會有替換
+    } else if (!zhuyin::engineUsable(eng)) {
+      dropCounter = &zhuyin::swapStats().dropNoEngine;
+    } else if (memcmp(binding, want, sizeof(want)) != 0) {
+      dropCounter = &zhuyin::swapStats().dropBinding;  // 別的資料集／語意版號／字型／位置算的
+    } else if (zhuyinSwaps > zhuyin::kMaxLineSwaps ||
+               swapTailOffset(baseSize) + swapTailBytes(zhuyinSwaps) > zhuyin::kMaxLineArenaBytes) {
+      dropCounter = &zhuyin::swapStats().dropSize;  // 過大的筆數也算語意失敗：讀完、驗 CRC，這一行不換（第二輪 F2）
+    } else {
+      keep = zhuyinSwaps;
+    }
+  }
+
   if (wc > 0) {
-    const size_t size = arenaSize(wc, block->focusPresent, textBytes);
-    block->arena = makeUniqueNoThrow<uint8_t[]>(size);
+    if (keep > 0) {
+      block->arena = makeUniqueNoThrow<uint8_t[]>(swapTailOffset(baseSize) + swapTailBytes(keep));
+      if (!block->arena) {  // 引擎讓記憶體：只配本體、這一行不換（codex 複查 ③ F6）；在失敗的當下記
+        zhuyin::swapStats().listOom++;
+        dropCounter = nullptr;
+        keep = 0;
+      }
+    }
+    if (!block->arena) block->arena = makeUniqueNoThrow<uint8_t[]>(baseSize);
     if (!block->arena) {
-      LOG_ERR("TXB", "OOM: arena %u bytes", static_cast<uint32_t>(size));
+      LOG_ERR("TXB", "OOM: arena %u bytes", static_cast<uint32_t>(baseSize));
       return nullptr;
     }
-    if (file.read(block->arena.get(), size) != size) {
-      LOG_ERR("TXB", "Deserialization failed: arena read (%u bytes)", static_cast<uint32_t>(size));
+    if (file.read(block->arena.get(), baseSize) != static_cast<int>(baseSize)) {
+      LOG_ERR("TXB", "Deserialization failed: arena read (%u bytes)", static_cast<uint32_t>(baseSize));
       return nullptr;
     }
     block->bindArenaPointers();
@@ -461,7 +630,10 @@ std::unique_ptr<TextBlock> TextBlock::deserialize(HalFile& file) {
   // overwrites every byte, so a moved-from value carries nothing into the next iteration.
   std::string scratch;
   for (uint16_t i = 0; i < wc; i++) {
-    serialization::readString(file, scratch);
+    if (!serialization::readStringChecked(file, scratch)) {  // 長度欄位或內容讀不齊 → 這一頁壞了（第二輪 F8）
+      LOG_ERR("TXB", "Deserialization failed: truncated ruby text %u", i);
+      return nullptr;
+    }
     if (scratch.empty()) continue;
     if (block->rubyTexts.empty()) {
       block->rubyTexts.resize(wc);
@@ -471,20 +643,63 @@ std::unique_ptr<TextBlock> TextBlock::deserialize(HalFile& file) {
 
   // Style (alignment + margins/padding/indent)
   BlockStyle& blockStyle = block->blockStyle;
-  serialization::readPod(file, blockStyle.alignment);
-  serialization::readPod(file, blockStyle.textAlignDefined);
-  serialization::readPod(file, blockStyle.marginTop);
-  serialization::readPod(file, blockStyle.marginBottom);
-  serialization::readPod(file, blockStyle.marginLeft);
-  serialization::readPod(file, blockStyle.marginRight);
-  serialization::readPod(file, blockStyle.paddingTop);
-  serialization::readPod(file, blockStyle.paddingBottom);
-  serialization::readPod(file, blockStyle.paddingLeft);
-  serialization::readPod(file, blockStyle.paddingRight);
-  serialization::readPod(file, blockStyle.textIndent);
-  serialization::readPod(file, blockStyle.textIndentDefined);
-  serialization::readPod(file, blockStyle.isRtl);
-  serialization::readPod(file, blockStyle.directionDefined);
+  const bool styleOk =
+      readPodChecked(file, blockStyle.alignment) && readPodChecked(file, blockStyle.textAlignDefined) &&
+      readPodChecked(file, blockStyle.marginTop) && readPodChecked(file, blockStyle.marginBottom) &&
+      readPodChecked(file, blockStyle.marginLeft) && readPodChecked(file, blockStyle.marginRight) &&
+      readPodChecked(file, blockStyle.paddingTop) && readPodChecked(file, blockStyle.paddingBottom) &&
+      readPodChecked(file, blockStyle.paddingLeft) && readPodChecked(file, blockStyle.paddingRight) &&
+      readPodChecked(file, blockStyle.textIndent) && readPodChecked(file, blockStyle.textIndentDefined) &&
+      readPodChecked(file, blockStyle.isRtl) && readPodChecked(file, blockStyle.directionDefined);
+  if (!styleOk) {
+    LOG_ERR("TXB", "Deserialization failed: truncated style");
+    return nullptr;
+  }
+
+  if (zhuyinSwaps > 0) {
+    // 標籤 4 的尾段：每一筆＋CRC。完整性（讀不到、CRC 不符）→ 這一頁壞了；完整性過了但掛不上 → 這一行不換。
+    // 先確定檔案裡真的還有那麼多位元組：筆數最多 65535，壞掉的筆數不該讓這裡空轉幾萬圈才發現讀不到。
+    const size_t remaining = file.size() > file.position() ? file.size() - file.position() : 0;
+    if (static_cast<size_t>(zhuyinSwaps) * zhuyin::kSwapDiskBytes + sizeof(uint16_t) > remaining) {
+      LOG_ERR("TXB", "Deserialization failed: zhuyin swaps truncated (%u)", zhuyinSwaps);
+      return nullptr;
+    }
+    uint16_t crc = zhuyin::swapCrcBegin(binding, zhuyinSwaps, wc, hasFocus, textBytes, block->arena.get(), baseSize);
+    uint8_t* tail = keep ? block->arena.get() + swapTailOffset(baseSize) : nullptr;
+    for (uint16_t i = 0; i < zhuyinSwaps; i++) {
+      uint8_t rec[zhuyin::kSwapDiskBytes];
+      if (file.read(rec, sizeof(rec)) != static_cast<int>(sizeof(rec))) {
+        LOG_ERR("TXB", "Deserialization failed: zhuyin swap %u truncated", i);
+        return nullptr;
+      }
+      crc = zhuyin::crc16(rec, sizeof(rec), crc);
+      if (tail) new (tail + 8 + i * sizeof(zhuyin::Swap)) zhuyin::Swap(zhuyin::decodeSwap(rec));
+    }
+    uint16_t stored = 0;
+    if (!readPodChecked(file, stored)) {
+      LOG_ERR("TXB", "Deserialization failed: zhuyin swap CRC truncated");
+      return nullptr;
+    }
+    if (stored != crc) {
+      LOG_ERR("TXB", "Deserialization failed: zhuyin line CRC");
+      return nullptr;
+    }
+    if (!keep) {
+      if (dropCounter) (*dropCounter)++;  // 記憶體那一種已經在配置失敗的當下記過了
+      return block;
+    }
+    const auto* list = reinterpret_cast<const zhuyin::Swap*>(tail + 8);
+    if (zhuyin::checkSwaps(block->lineText(), list, keep, *eng.data) != zhuyin::SwapCheck::Ok) {
+      zhuyin::swapStats().dropCheck++;
+      return block;
+    }
+    const uint16_t zero = 0;
+    memcpy(tail, &eng.generation, sizeof(eng.generation));
+    memcpy(tail + 4, &keep, sizeof(keep));
+    memcpy(tail + 6, &zero, sizeof(zero));
+    block->swapTail = tail;
+    zhuyin::swapStats().loaded++;
+  }
 
   return block;
 }

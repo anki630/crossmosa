@@ -123,6 +123,12 @@ unsigned long t2 = 0;
 // Definitions for SilentRestart.h. RTC_NOINIT survives ESP.restart() but not power loss.
 RTC_NOINIT_ATTR uint32_t silentRebootMagic;
 RTC_NOINIT_ATTR uint32_t silentRebootTarget;
+// v341：淺睡眠裡 SD 卡被拔掉或換掉的防護（rebootIfCardChanged）。醒來發現卡不對 → 不碰卡、直接重開機；
+//   原因放在 RTC（撐得過軟體重啟），開機、卡重新掛好之後才寫進 diag —— 在那之前寫卡，就是在寫一張我們不認得的卡。
+RTC_NOINIT_ATTR uint32_t sdSwapMagic;
+constexpr uint32_t SD_SWAP_MAGIC = 0x53445357;  // 'SDSW'
+static uint8_t g_sdCid[16];     // 開機掛卡時讀到的 CID（含卡片序號：不寫進任何 log）
+static bool g_sdCidOk = false;  // 開機時讀得到 CID 才有比較基準；讀不到（非 SPI 卡等）→ 不淺睡眠（lightSleepEnabled）
 constexpr uint32_t SILENT_REBOOT_MAGIC = 0xC1EAB007;
 constexpr uint32_t SILENT_REBOOT_TARGET_HOME = 0;
 constexpr uint32_t SILENT_REBOOT_TARGET_READER = 1;
@@ -287,6 +293,32 @@ void silentRestartToReader() {
   LOG_DBG("MAIN", "Silent restart (target=reader)");
   GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
   delay(50);
+  ESP.restart();
+}
+
+// v341：淺睡眠醒來時，SD 卡還是不是睡前那一張、有沒有被拔過（維護者 2026-09-25 要求）。
+//   淺睡眠把字型、書、檔案系統狀態（SdFat 的 FAT 快取、開著的檔柄）整個留在 RAM、醒來直接接著用，**沒有任何地方知道卡被換過**：
+//   睡著時在電腦上換了字型再插回、按鍵叫醒 → 拿舊卡的配置讀新卡（字形排法變了就畫錯字），寫進度或 diag 時可能把舊卡的
+//   配置寫到新卡上。板子沒有卡片偵測腳位，所以問卡片本身：CID（CMD10）。睡眠中卡一直有電（VDD_SDIO＋GPIO13 hold），
+//   沒被動過就一定答得出、而且跟開機時一樣；拔過再插回的卡斷過電、已經不在 SPI 模式 → 答不出；換成別張 → CID 不同。
+//   ⚠️ 必須是醒來後【第一件碰卡的事】：每條醒來的路（按鍵續讀、30 分鐘計時到、失敗）下一步都是 DiagLog 寫卡。
+//   呼叫端從入睡前就握著儲存鎖（HalStorage::ExclusiveHold，每一個 Storage／HalFile 操作都拿它）直到這裡檢查完，
+//   別的 task 在這之前碰卡都會等（codex：繪製鎖不是 SD 鎖）。
+//   讀到而且不同 → 立刻重開；讀不到 → 再試 2 次，用忙等（delayMicroseconds，不讓出 CPU）。
+//   重開的去處看醒來的原因：按鍵 → 回閱讀器（使用者要續讀）；計時器或其他 → 首頁（本來要關機，不把人拉回書裡）。
+//   不經 silentRestart*()：那兩條會先寫 diag 或畫提示，都不該發生在一張不認得的卡上。
+static void rebootIfCardChanged() {
+  if (!g_sdCidOk) return;  // 不會走到：開機讀不到 CID 就不淺睡眠（lightSleepEnabled）
+  uint8_t now[16];
+  bool read = false;
+  for (int i = 0; i < 3 && !(read = Storage.readCardId(now)); i++) {
+    if (i < 2) delayMicroseconds(1000);  // 最後一次失敗之後不再等
+  }
+  if (read && memcmp(now, g_sdCid, sizeof(now)) == 0) return;
+  sdSwapMagic = SD_SWAP_MAGIC;
+  const bool byButton = gpio.powerDownRaw() || esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_GPIO;
+  silentRebootTarget = byButton ? SILENT_REBOOT_TARGET_READER : SILENT_REBOOT_TARGET_HOME;
+  silentRebootMagic = SILENT_REBOOT_MAGIC;
   ESP.restart();
 }
 
@@ -500,6 +532,8 @@ static constexpr unsigned LIGHT_SLEEP_MIN_SOC = 10;
 static constexpr uint64_t LIGHT_SLEEP_WINDOW_US = 30ULL * 60ULL * 1000000ULL;  // 30 分鐘
 
 static bool lightSleepEnabled() {
+  // v341（codex）：開機讀不到卡片 CID ＝ 醒來無法確認卡沒被換過 → 不淺睡眠（每次都真關機、醒來重新掛卡），不要默默照舊。
+  if (!g_sdCidOk) return false;
   static int8_t cached = -1;  // 只問 SD 一次
   if (cached < 0) cached = Storage.exists(LIGHT_SLEEP_SENTINEL) ? 0 : 1;  // v330：哨兵存在＝關閉
   return cached == 1;
@@ -524,12 +558,18 @@ static bool lightSleepCycle(bool wakeFrameDeferred, RenderLock& sleepLock) {  //
   //          成長時新舊並存 —— 512 張以內瞬間最大連續需求約 18KB，這是唯一會 abort 的配置（-fno-exceptions）。
   //      20KB 蓋得住那個最壞情況，又低於所有被擋過的值。真正的需求由下面的 `LSLEEP mem` 證人量出來
   //      （minfree 是開機以來的歷史低點：畫桌布若創新低，差值就是這次的峰值用量）。
+  //    ⭐ v339：先放預取快取、【再】量。diag338：`LSLEEP skip why=lowmem largest=19444 free=43560` —— 同一輪其他五次
+  //      休眠在下面快照那一步放掉的快取是 0–58KB。那一步本來就會放，順序反了才讓它擋住淺睡眠（這一次就走了真關機）。
+  //      先放沒有代價：沒睡成就是真關機（快取本來就留不住），睡成了醒來的背景重畫會重新預取。
+  //      （render task 此時卡在 sleepLock 上，放掉之後到快照之前沒有人會再填它。）
+  size_t lsReleased = 0;
+  if (auto* fcm = renderer.getFontCacheManager()) lsReleased = fcm->releaseRetainedCache();
   const size_t lsLargest = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
   const size_t lsFree = heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
   const size_t lsMinFree = heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
   if (lsLargest < 20 * 1024) {
-    DiagLog::line("LSLEEP skip why=lowmem largest=%u free=%u", static_cast<unsigned>(lsLargest),
-                  static_cast<unsigned>(lsFree));
+    DiagLog::line("LSLEEP skip why=lowmem largest=%u free=%u released=%u", static_cast<unsigned>(lsLargest),
+                  static_cast<unsigned>(lsFree), static_cast<unsigned>(lsReleased));
     if (wakeFrameDeferred) {
       saveWakeFrameTimed("lowmem");  // v326：framebuffer 還是書頁（鎖在手上），先寫再走真關機
       wakeFrameDeferred = false;     // 已處理
@@ -602,8 +642,8 @@ static bool lightSleepCycle(bool wakeFrameDeferred, RenderLock& sleepLock) {  //
   bool frameRestoredOk = false;
   bool pageStillValid = true;  // 進來時 framebuffer 是書頁（呼叫端保證；提示還原失敗時根本不會延後 wake frame）
   {
-    size_t released = 0;
-    if (auto* fcm = renderer.getFontCacheManager()) released = fcm->releaseRetainedCache();
+    size_t released = lsReleased;  // v339：已在入口那關之前放掉（這裡再叫一次是保險，照理回 0）
+    if (auto* fcm = renderer.getFontCacheManager()) released += fcm->releaseRetainedCache();
     frameKept = renderer.storeBwBuffer();
     const size_t afterLargest = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     const size_t afterFree = heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);  // 與 largest 同一時間點
@@ -809,7 +849,11 @@ static bool lightSleepCycle(bool wakeFrameDeferred, RenderLock& sleepLock) {  //
                       static_cast<unsigned>(taps));
         return powerOffExit("expired");
       }
-      eSleep = esp_light_sleep_start();
+      {
+        HalStorage::ExclusiveHold sdHold;  // v341：跨睡眠握住儲存鎖，醒來檢查完卡片才放
+        eSleep = esp_light_sleep_start();
+        rebootIfCardChanged();  // v341：醒來第一件碰卡的事（下面每條路都會寫 diag）
+      }
       if (eSleep != ESP_OK && !gpio.powerDownRaw()) {
         delay(50);
         if (!armTimer()) {
@@ -817,7 +861,11 @@ static bool lightSleepCycle(bool wakeFrameDeferred, RenderLock& sleepLock) {  //
                         static_cast<unsigned>(taps));
           return powerOffExit("expired-retry");
         }
-        eSleep = esp_light_sleep_start();
+        {
+          HalStorage::ExclusiveHold sdHold;  // v341：同上
+          eSleep = esp_light_sleep_start();
+          rebootIfCardChanged();
+        }
         sleepRetries++;
       }
       if (eSleep == ESP_ERR_INVALID_STATE && gpio.powerDownRaw()) {
@@ -919,11 +967,17 @@ static bool lightSleepCycle(bool wakeFrameDeferred, RenderLock& sleepLock) {  //
   if (fromReader) sdFontSystem.ensureLoaded(renderer);  // v301／v305：安全網（已載入時是 no-op）；v327：首頁醒來不載字型
   uint32_t paintMs = 0;
   uint8_t firstBank = 0;  // 第一眼那次推面板用的 bank —— 要在背景重畫之前讀（codex 第四輪）
+  // ⭐ v334：醒來第一筆【兩個分支都】要清潔刷新 —— 面板上此刻是桌布，驅動 RAM 裡沒有任何一個平面描述它。
+  //   kept=1：⚠️⚠️ restoreBwBuffer() 內含 cleanupGrayscaleBuffers(fb)：把 DTM1／DTM2 都改成書頁並標記「舊平面有效」——
+  //     不明講 resync 的話，FAST 走 DU 差分「書頁→書頁」＝一個像素都不驅動，使用者會永遠停在桌布
+  //     （codex 三輪都以為驅動會 forceGc；是讀 restoreBwBuffer 全文才看到的）。
+  //   kept=0：v333 以前沒講，靠的是 X3 UC8279 自己的內部行為（灰階桌布之後舊平面無效 → forceGc）。
+  //     X4 的 SSD1677 沒有這條：差分的基準就是桌布，局部刷新推不動整面黑 → 醒來很黑、每動一次游標
+  //     才慢慢變回來（維護者 2026-09-23 X4 實機）。SDK fork 同版補上 SSD1677 的 requestResync。
+  //   它只會把差分刷新升級成清潔刷新（X3：GC；X4：HALF 0xD7，與冷開機第一筆同一種），已經是清潔的不變。
+  //   X3 實機紀錄的每一次醒來（kept=0 與 kept=1）本來就是 bank=1。
+  display.requestResync();
   if (frameRestored) {
-    // ⚠️⚠️ restoreBwBuffer() 內含 cleanupGrayscaleBuffers(fb)：把 DTM1／DTM2 都改成書頁並標記「舊平面有效」——
-    //   但面板上此刻還是桌布。不明講 resync 的話，FAST 走 DU 差分「書頁→書頁」＝一個像素都不驅動，
-    //   使用者會永遠停在桌布（codex 三輪都以為驅動會 forceGc；是讀 restoreBwBuffer 全文才看到的）。
-    display.requestResync();  // 下一次刷新走 GC（與今天重畫的轉場同價 769ms），之後恢復差分
     const uint32_t p0 = millis();
     renderer.displayBuffer();
     paintMs = millis() - p0;
@@ -1333,6 +1387,8 @@ void setup() {
 
   // Read-and-clear so a panic later in setup() doesn't loop into silent reboot.
   // Bound the target range too — RTC_NOINIT memory is uninitialized on cold boot.
+  // v341：寫進 diag 之後才清（掛卡失敗的那次開機不會丟掉它）；只信軟體重開（RTC_NOINIT 冷開機是亂數，碰巧相等也不算）
+  const bool sdSwapReboot = (sdSwapMagic == SD_SWAP_MAGIC) && esp_reset_reason() == ESP_RST_SW;
   const bool isSilentReboot = (silentRebootMagic == SILENT_REBOOT_MAGIC);
   const uint32_t snapshotTarget =
       (isSilentReboot && silentRebootTarget <= SILENT_REBOOT_TARGET_READER) ? silentRebootTarget : 0;
@@ -1368,6 +1424,7 @@ void setup() {
     activityManager.goToFullScreenMessage("SD card error", EpdFontFamily::BOLD);
     return;
   }
+  g_sdCidOk = Storage.readCardId(g_sdCid);  // v341：淺睡眠醒來的比較基準（rebootIfCardChanged）
 
   // v53/v57：診斷 log。**預設關閉**，靠 SD【根目錄】的空檔 `/diag.on` 開啟（放了要重開機）。
   // 判定只在這裡做一次，之後不再碰 SD；關閉時 mem()/line()/dumpPools() 全在第一行就 return，
@@ -1386,6 +1443,9 @@ void setup() {
   DataDir::resolve();
 
   DiagLog::begin();
+  // v341 證人：開機讀不讀得到卡片 CID（讀不到 → 淺睡眠醒來不做換卡檢查）；上一次重開是不是因為醒來發現卡換過。不印 CID 本身（含序號）。
+  DiagLog::line("SDID ok=%d swapboot=%d", g_sdCidOk ? 1 : 0, sdSwapReboot ? 1 : 0);
+  sdSwapMagic = 0;
   // v324 證人：電源鍵腳位在 gpio.begin() 之前／重設之後的狀態（rst=3 的軟體重啟會把 RTC 域的殘留帶進來，這裡看得到）。
   logPwrPad("boot-pre", g_pwrPadPin, g_pwrPadPre);
   logPwrPad("boot-post", g_pwrPadPin, g_pwrPadPost);
@@ -1410,6 +1470,16 @@ void setup() {
   g_wakeT[0] = millis();
 
   SETTINGS.loadFromFile();
+  {
+    // v343（帳本 B12）：時鐘證人 —— 開機一行（晶片在不在、讀不讀得到、年份、可不可信、設定的「已校時」）。
+    //   2026-09-26 狀態列停在 08:00 那次，log 裡沒有任何時鐘紀錄才查不到。多一次 I2C（約 1 ms）。
+    uint16_t clkYear = 0;
+    const HalClock::State clkState = halClock.probe(&clkYear);
+    //   dirty＝上一次開機的校時交易沒完成（RTC 記憶體裡的標記，見 HalClock.cpp）→ 這次開機晶片的時間不信，直到校時成功。
+    DiagLog::line("CLK boot st=%s year=%u synced=%u dirty=%u", HalClock::stateName(clkState),
+                  static_cast<unsigned>(clkYear), static_cast<unsigned>(SETTINGS.clockHasBeenSynced),
+                  halClock.chipDistrusted() ? 1u : 0u);
+  }
   // v187：粗體閱讀是 ParsedText 的全域旗標，開機就跟設定對齊（否則從設定頁進文字設定的預覽會用錯字重）。
   ParsedText::setBoldBodyText(SETTINGS.boldBodyText != 0);
   // 直排診斷：lib/Epub 看不到 DiagLog，所以在這裡接上（見 ParsedText.h 的註解）。

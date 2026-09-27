@@ -10,6 +10,8 @@
 #include <HalStorage.h>
 #include <Logging.h>
 #include <Utf8.h>
+#include <ZhuyinBufferedSource.h>
+#include <ZhuyinEngine.h>
 
 #include <algorithm>
 #include <climits>
@@ -461,6 +463,252 @@ struct SdCardFont::SharedFileLock {
 
 SdCardFont::SdCardFont() { sharedFileMutex_ = xSemaphoreCreateRecursiveMutexStatic(&sharedFileMutexStorage_); }
 
+// 注音引擎讀檔尾的 ZYDB 區塊：走常駐的 sharedFile_（不開第二個 handle，SdCardFont.h 的前提），
+// 每次持 SharedFileLock、自己 seek（位置可能被別的使用者搬走）。鎖的順序：RenderLock → SharedFileLock（codex 修訂 14）；
+// 鎖內只讀卡，不寫診斷、不讓出。
+// v339 讀卡證人（`ZY loadio`；每次 enableZhuyin 都是新的物件 ＝ 歸零）—— diag338 的 2 秒只知道總數。
+//   lock ＝ 等外層 SharedFileLock 的經過時間（含被搶走 CPU 的時間）；seek ＝ ensureFileOpen＋seek（含 HalFile 內層 StorageLock 的等待）；
+//   rd ＝ read 呼叫本身（同樣含內層鎖）；back ＝ 目標在檔柄【目前位置】之前的次數（FAT32 得從檔頭沿著鏈走；位置可能是別人的讀取留下的）。
+//   計數都在 SharedFileLock 內更新（跨 task 也不會打架）；只在載入期間被讀取（引擎公開之前取值，見 zyBeforeAttach）。
+struct SdCardFont::ZyBlockSource final : zhuyin::BlockSource {
+  SdCardFont& font;
+  uint32_t offset;
+  uint32_t length;
+  uint32_t waitUs = 0, seekUs = 0, readUs = 0, backSeeks = 0;
+  ZyBlockSource(SdCardFont& f, uint32_t off, uint32_t len) : font(f), offset(off), length(len) {}
+  uint32_t size() const override { return length; }
+  bool read(uint32_t off, void* dst, uint32_t len) override {
+    if (off > length || len > length - off) return false;
+    const int64_t t0 = esp_timer_get_time();
+    const SharedFileLock lock(font);
+    const int64_t t1 = esp_timer_get_time();
+    waitUs += static_cast<uint32_t>(t1 - t0);
+    const bool open = font.ensureFileOpen();
+    if (open && offset + off < font.sharedFile_.position()) backSeeks++;
+    const bool sought = open && font.sharedFile_.seek(offset + off);
+    const int64_t t2 = esp_timer_get_time();
+    seekUs += static_cast<uint32_t>(t2 - t1);  // 開檔／seek 失敗也照算（codex v339 第二輪 6）
+    if (!open) return false;
+    bool ok = false;
+    if (sought) {  // 只有真的呼叫了 read 才算進 rd
+      ok = font.sharedFile_.read(dst, len) == static_cast<int>(len);
+      readUs += static_cast<uint32_t>(esp_timer_get_time() - t2);
+    }
+    if (!ok) {
+      font.dropSharedFile();
+      return false;
+    }
+    return true;
+  }
+};
+
+namespace {
+// v339：引擎載入的讀取緩衝（為什麼分兩段借、各從哪裡借、為什麼要在公開之前還，見 ZhuyinBufferedSource.h）。
+constexpr uint32_t kZyStackWindow = 4096;        // 結構載入：堆疊上的窗口（電腦端：讀卡 423 → 42 次）
+constexpr uint32_t kZyTlsfMargin = 4096;         // 整塊配置的邊際（TLSF 取整律，硬限制第 6 條；同 BITMAP_BUDGET_MARGIN）
+constexpr uint32_t kZyWholeLeaveLargest = 20 * 1024;  // 整塊借走之後，最大連續塊至少還要這麼多（借用當下的觀測，不是保留）
+// 整塊的上限是 ZYDB 格式本身的上限（ZhuyinFormat.h，131,072 B），不是 arena 每塊 2 KB 的 ZhuyinEngine::kMaxBlockBytes ——
+// 兩個常數同名，codex 第二輪就誤判過一次；這一行釘住「用的是哪一個」。
+static_assert(zhuyin::kMaxBlockBytes >= 64 * 1024, "whole-block cap must be the ZYDB format limit, not the arena block cap");
+
+struct ZyOpenCtx {
+  zhuyin::ZhuyinEngine* engine;
+  zhuyin::BufferedSource* buffered;
+  const uint32_t* rawWaitUs;  // ZyBlockSource 的計數（取值在引擎公開之前）
+  const uint32_t* rawSeekUs;
+  const uint32_t* rawReadUs;
+  const uint32_t* rawBack;
+  SdCardFont::ZhuyinEnableResult* r;
+  uint32_t blockLen;
+  uint32_t heapReserve;
+  int64_t t0;
+  uint8_t* whole = nullptr;
+  bool structuralDone = false;
+};
+
+void zySnapshot(ZyOpenCtx& c) {  // 證人數字：載入期間的讀取（BufferedSource 在 release 之後就不再記數）
+  auto& r = *c.r;
+  r.calls = c.buffered->calls();
+  r.cardBytes = c.buffered->rawBytes();
+  r.cardFails = c.buffered->rawFails();
+  if (!c.structuralDone) r.cardStruct = c.buffered->rawReads();
+  r.cardTest = c.buffered->rawReads() - r.cardStruct;
+  r.waitUs = *c.rawWaitUs;
+  r.seekUs = *c.rawSeekUs;
+  r.readUs = *c.rawReadUs;
+  r.backSeeks = *c.rawBack;
+}
+
+void zyReleaseBuffers(ZyOpenCtx& c) {  // 從這裡起不再碰窗口（堆疊）與整塊（堆積）：之後直接讀
+  c.buffered->release();
+  delete[] c.whole;
+  c.whole = nullptr;
+}
+
+void zyAfterStructural(void* p) {
+  auto& c = *static_cast<ZyOpenCtx*>(p);
+  c.structuralDone = true;
+  c.r->structMs = static_cast<uint32_t>((esp_timer_get_time() - c.t0) / 1000);
+  c.r->cardStruct = c.buffered->rawReads();
+  // 自我測試的查詢在字詞群組之間隨機跳（約 97 次）：窗口接不住（電腦端 97 → 94 次，卻多讀三倍位元組）
+  // → 整塊借堆積讀進來，自我測試跑完、引擎公開之前就還（zyBeforeAttach）。配不到、或借走之後剩的最大塊太小 → 直接讀（v338）。
+  //   結構段已經退回直接讀（degraded）→ 這一趟不再借（卡對大讀取不穩，別再試 53 KB）。
+  const uint32_t n = c.blockLen;
+  const size_t freeNow = heap_caps_get_free_size(MALLOC_CAP_DEFAULT);
+  const size_t maxNow = heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT);
+  if (!c.buffered->degraded() && n <= zhuyin::kMaxBlockBytes && maxNow >= static_cast<size_t>(n) + kZyTlsfMargin &&
+      freeNow >= static_cast<size_t>(n) + c.heapReserve) {
+    c.whole = new (std::nothrow) uint8_t[n];  // new ＝ MALLOC_CAP_DEFAULT：上面、下面的檢查用同一個 caps（ESP32-C3 沒有外部 RAM）
+    // 借走之後再看一次（codex v339 複查 5）：總量夠不代表別人還拿得到一塊連續的；取整之後總量也可能掉到保留量以下。
+    // 這只是借用當下的觀測（不是替別的 task 保留）—— 夠短（整塊一次讀＋自我測試）才借。
+    if (c.whole && (heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT) < kZyWholeLeaveLargest ||
+                    heap_caps_get_free_size(MALLOC_CAP_DEFAULT) < c.heapReserve)) {
+      delete[] c.whole;
+      c.whole = nullptr;
+    }
+  }
+  const int64_t tp = esp_timer_get_time();
+  c.buffered->use(c.whole, c.whole ? n : 0);  // 沒借到：use(nullptr) ＝ 直接讀
+  c.r->preMs = static_cast<uint32_t>((esp_timer_get_time() - tp) / 1000);
+  if (c.buffered->mode() == zhuyin::BufferedSource::Mode::Whole) {
+    c.r->whole = n;
+  } else if (c.whole) {  // 借到了、整塊讀卡失敗 → 已退回直接讀：這一塊馬上還
+    delete[] c.whole;
+    c.whole = nullptr;
+  }
+}
+
+// prepare（載入＋自我測試，不公開）→ 取證人數字 → 還掉緩衝。公開（publish）由 enableZhuyin 在所有檢查都過了之後才做。
+bool zyOpen(ZyOpenCtx& c, uint8_t* window, const uint32_t cap) {
+  c.buffered->use(window, cap);
+  c.r->window = (c.buffered->mode() == zhuyin::BufferedSource::Mode::Window) ? cap : 0;  // 真的用上了才記（第二輪 11）
+  const zhuyin::ZhuyinEngine::OpenHooks hooks{&c, &zyAfterStructural};
+  const zhuyin::LoadStatus st = c.engine->prepare(*c.buffered, &c.r->failedCase, &hooks);
+  if (!c.structuralDone) c.r->structMs = static_cast<uint32_t>((esp_timer_get_time() - c.t0) / 1000);  // 結構段失敗（第二輪 10）
+  zySnapshot(c);
+  zyReleaseBuffers(c);
+  c.r->load = static_cast<uint8_t>(st);
+  return st == zhuyin::LoadStatus::Ok;
+}
+
+// 窗口只在這個框裡（noinline：沒呼叫到就不佔這 4 KB；呼叫端先確認堆疊夠）
+__attribute__((noinline)) bool zyOpenWithStackWindow(ZyOpenCtx& c) {
+  uint8_t window[kZyStackWindow];
+  return zyOpen(c, window, sizeof(window));
+}
+}  // namespace
+
+bool SdCardFont::coversAll(const uint32_t first, const uint32_t last) const {
+  // 每一個有的字面都要有（codex 整合複查 A9）：換成注音字形時交給字型的是那一行的字面，粗體字面少一個就會畫出方塊。
+  bool any = false;
+  for (uint8_t i = 0; i < MAX_STYLES; i++) {
+    if (!styles_[i].present) continue;
+    any = true;
+    for (uint32_t cp = first; cp <= last; cp++) {
+      if (findGlobalGlyphIndex(styles_[i], cp) < 0) return false;
+    }
+  }
+  return any;
+}
+
+bool SdCardFont::zhuyinReady() const { return zyEngine_ && zyEngine_->ready(); }
+
+void SdCardFont::disableZhuyin() {
+  zyEngine_.reset();    // 引擎的解構子先從登記處拿掉、再放暫存與資料
+  zyBuffered_.reset();  // 資料留著它的指標：引擎拆掉之後才拆
+  zySource_.reset();
+}
+
+bool SdCardFont::prepareZhuyinEngine(ZhuyinEnableResult& r, const bool stackWindow) {
+  static constexpr uint32_t kHeapReserve = 32 * 1024;  // 同 enableZhuyin：整塊借走之後也要留這麼多給別人
+  ZyOpenCtx c{zyEngine_.get(), zyBuffered_.get(), &zySource_->waitUs, &zySource_->seekUs, &zySource_->readUs,
+              &zySource_->backSeeks, &r, zySource_->size(), kHeapReserve, esp_timer_get_time()};
+  return stackWindow ? zyOpenWithStackWindow(c) : zyOpen(c, nullptr, 0);
+}
+
+SdCardFont::ZhuyinEnableResult SdCardFont::enableZhuyin(const int fontId) {
+  // 門檻（實機量過再調；ZY load 那一行會印出當時的值）：
+  //   自我測試的呼叫鏈約 1.9 KB（-fstack-usage 實測框大小加總）＋ 1 KB 餘裕；
+  //   常駐約 23 KB（電腦端實測 21,450 B ＋ 一行清單的緩衝 1,530 B）；P3（字型 v3 的資料區塊）多了補充詞與閉包新增的詞，
+  //   約 24 KB（雙字索引每組 4 B 常駐）→ 預算 26 KB。載入之後還要留 32 KB 給排版 —— 不夠就不載入（引擎讓記憶體）。
+  //   這只是載入前的估計；載入之後的真實餘裕另有一關（freeAfter／maxAfter）。
+  static constexpr uint32_t kStackNeed = 3072;
+  // v339：夠才借堆疊窗口，不夠就直接讀。另加 2 KB：量測點在這個框的頂端，窗口底下還疊著 openZhuyinEngine／zyOpen／hook
+  //   與讀卡（HalFile → SdFat → SPI）的框，而且窗口在整個 open 期間都活著（codex v339 複查 2：只加 4096 的名義餘裕不到 1 KB）。
+  static constexpr uint32_t kStackNeedWindowed = kStackNeed + kZyStackWindow + 2048;
+  // v343：字型 v8（P6a＋P6b）常駐約 26.9 KB → 預算 28 KB（使用者 2026-09-26 核可）。v341 實機：字型 v7 載入後 free 102,892／最大塊 98,292。
+  static constexpr uint32_t kResidentBudget = 28 * 1024;
+  static constexpr uint32_t kHeapReserve = 32 * 1024;
+  ZhuyinEnableResult r;
+  disableZhuyin();
+  if (!loaded_ || !zyMarker_) return r;  // NotZhuyin
+  {
+    const uint8_t* stackStart = pxTaskGetStackStart(nullptr);
+    const uint8_t* here = static_cast<const uint8_t*>(__builtin_frame_address(0));
+    r.stackFree = (stackStart && here > stackStart) ? static_cast<uint32_t>(here - stackStart) : 0;
+  }
+  r.hwmBefore = static_cast<uint32_t>(uxTaskGetStackHighWaterMark(nullptr));
+  r.freeBefore = static_cast<uint32_t>(heap_caps_get_free_size(MALLOC_CAP_DEFAULT));
+  r.maxBefore = static_cast<uint32_t>(heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT));
+  if (r.stackFree < kStackNeed) {
+    r.status = ZhuyinEnable::LowStack;
+    return r;
+  }
+  if (r.freeBefore < kResidentBudget + kHeapReserve || r.maxBefore < 4096) {
+    r.status = ZhuyinEnable::LowMemory;
+    return r;
+  }
+  if (zyBlockOffset_ < HEADER_SIZE || zyBlockOffset_ >= zyFileSize_) {
+    r.status = ZhuyinEnable::BadMarker;
+    return r;
+  }
+  zySource_.reset(new (std::nothrow) ZyBlockSource(*this, zyBlockOffset_, zyFileSize_ - zyBlockOffset_));
+  if (zySource_) zyBuffered_.reset(new (std::nothrow) zhuyin::BufferedSource(*zySource_));
+  zyEngine_.reset(new (std::nothrow) zhuyin::ZhuyinEngine());
+  if (!zySource_ || !zyBuffered_ || !zyEngine_) {
+    disableZhuyin();
+    r.status = ZhuyinEnable::NoMemory;
+    return r;
+  }
+  const int64_t t0 = esp_timer_get_time();
+  const bool opened = prepareZhuyinEngine(r, r.stackFree >= kStackNeedWindowed);  // 還沒公開（見下面的 publish）
+  r.ms = static_cast<uint32_t>((esp_timer_get_time() - t0) / 1000);
+  r.reads = zyEngine_->data().reads();
+  if (!opened) {
+    disableZhuyin();
+    r.status = ZhuyinEnable::LoadFailed;
+    return r;
+  }
+  // 配對：資料區塊跟這個字型檔是同一次打包的（檔頭的資料集 ID ＝ 區塊的；字型真的有每一個 PUA 字形）。
+  // 字形本身對不對得上讀音由出貨閘門 zy_verify_pack 逐字形比對保證。
+  const uint16_t pua = zyEngine_->data().puaCount();
+  if (zyEngine_->data().datasetId() != zyDataset_ || pua == 0 ||
+      !coversAll(zhuyin::kPuaFirst, static_cast<uint32_t>(zhuyin::kPuaFirst) + pua - 1u)) {
+    disableZhuyin();
+    r.status = ZhuyinEnable::PairMismatch;
+    return r;
+  }
+  r.status = ZhuyinEnable::Ready;
+  r.resident = static_cast<uint32_t>(zyEngine_->residentBytes());
+  r.hwmAfter = static_cast<uint32_t>(uxTaskGetStackHighWaterMark(nullptr));
+  r.freeAfter = static_cast<uint32_t>(heap_caps_get_free_size(MALLOC_CAP_DEFAULT));
+  r.maxAfter = static_cast<uint32_t>(heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT));
+  // 載入之後的餘裕要真的在（codex 整合複查 A10）：上面的門檻是用預估的常駐（kResidentBudget）算的；資料比預估大、或堆積被切碎，
+  //   都要在這裡擋下 —— 不夠就不開（引擎讓記憶體，不是讓排版失敗）。
+  if (r.freeAfter < kHeapReserve || r.maxAfter < 4096) {
+    disableZhuyin();
+    r.status = ZhuyinEnable::LowMemory;
+    return r;
+  }
+  // 公開（v339，codex 複查）：所有會反悔的檢查（配對、記憶體）都過了、借來的讀取緩衝也還了，才讓別的 task 看得到它。
+  //   之前是自我測試一過就公開、之後才做檢查 —— 檢查沒過再拆掉，中間那一段別的 task 可能已經拿到它。
+  if (!zyEngine_->publish(fontId)) {  // 走到這裡 prepare 一定成功過；不成立就當載入失敗（不公開）
+    disableZhuyin();
+    r.status = ZhuyinEnable::LoadFailed;
+  }
+  return r;
+}
+
 // v255：SD seek／read 出錯之後把共用檔柄關掉，下一次 ensureFileOpen 重開 —— 不讓一次暫時性錯誤毒化整個 session。
 // 呼叫端必須持有 SharedFileLock。
 void SdCardFont::dropSharedFile() { sharedFile_ = HalFile{}; }
@@ -476,6 +724,11 @@ bool SdCardFont::ensureFileOpen() {
 }
 
 void SdCardFont::freeAll() {
+  disableZhuyin();  // 引擎的讀卡走 sharedFile_：關檔之前先拆（它的解構子也先從登記處拿掉）
+  zyMarker_ = false;
+  zyBlockOffset_ = 0;
+  zyFileSize_ = 0;
+  zyDataset_ = 0;
   delete[] cpScratch_;
   cpScratch_ = nullptr;
   {
@@ -834,6 +1087,15 @@ bool SdCardFont::load(const char* path) {
   if (fileVersion != CPFONT_VERSION) {
     LOG_ERR("SDCF", "Unsupported version: %u (expected %u)", fileVersion, CPFONT_VERSION);
     return false;
+  }
+
+  // 注音標記（zy_pack.py：13 'Z' 14 'Y' 15 格式 1、16 區塊位移 u32、20 資料集 u64、28 'ZYE1'）。這幾個位元組本來就在
+  // 下面的內容雜湊裡 → 換資料集就換 fontId（章節快取跟著重排）。
+  if (headerBuf[13] == 'Z' && headerBuf[14] == 'Y' && headerBuf[15] == 1 && memcmp(headerBuf + 28, "ZYE1", 4) == 0) {
+    zyMarker_ = true;
+    zyBlockOffset_ = readU32(headerBuf + 16);
+    zyDataset_ = static_cast<uint64_t>(readU32(headerBuf + 20)) | (static_cast<uint64_t>(readU32(headerBuf + 24)) << 32);
+    zyFileSize_ = static_cast<uint32_t>(file.fileSize());
   }
 
   // Begin content hash: accumulate global header

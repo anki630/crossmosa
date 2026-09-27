@@ -75,6 +75,12 @@ inline bool utf8IsCombiningMark(const uint32_t cp) {
          || (cp >= 0xFE20 && cp <= 0xFE2F);  // Combining Half Marks
 }
 
+// 變體選擇符號（VS1–16、VS17–256）：屬於前一個字，本身不畫。
+// v342：注音的預先標注（bpmfvs）用它們指定讀音；ParsedText::addWord 送進注音 session 之後、切詞之前拿掉。
+inline bool utf8IsVariationSelector(const uint32_t cp) {
+  return (cp >= 0xFE00 && cp <= 0xFE0F) || (cp >= 0xE0100 && cp <= 0xE01EF);
+}
+
 // --- CJK 禁則(v118 從 lib/Epub/Epub/ParsedText.cpp 的匿名 namespace 搬來)---
 // 原本住在 ParsedText.cpp 內、標頭未宣告,所以 src/activities/ 連結不到,而純文字
 // 閱讀器與 GfxRenderer::wrappedText 因此一條禁則都沒有(句號、下引號可以跑到行首)。

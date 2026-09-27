@@ -3,6 +3,7 @@
 #include <Epub/ParsedText.h>
 #include "util/BenchFlags.h"
 #include "util/DiagLog.h"
+#include <XmlParserUtils.h>
 #include "util/NvsStore.h"
 #include "EpubReaderActivity.h"
 
@@ -554,6 +555,7 @@ void EpubReaderActivity::noteBuildStart() {
   diagYieldRun = false;
   diagBuildSpine = currentSpineIndex;
   diagBuildStartMs = millis();
+  takeXmlControlDrops();  // v345：歸零 → BUILD end 的 xmlfix 只算這一章
   diagBuildTicks = diagBuildZeroTicks = diagBuildYields = diagBuildTickMaxMs = 0;
   g_buildInputCaught = 0;
   ParsedText::buildProf = ParsedText::BuildProf{};  // v252
@@ -561,6 +563,10 @@ void EpubReaderActivity::noteBuildStart() {
   Section::buildStepMaxMs = Section::buildStepTotalUs = Section::buildStepCount = 0;
   ParsedText::buildGapMaxUs = ParsedText::buildGapSite = ParsedText::buildProbeCount = 0;
   SdCardFont::resetAdvanceDiag();  // v192：區間計數器歸零
+  Section::buildMinFree = UINT32_MAX;  // 注音（P2 I6）
+  Section::buildLargestAtMinFree = 0;
+  zhuyin::swapStats().queueMax = 0;
+  zyStatsAtBuildStart_ = zhuyin::swapStats();
 }
 
 void EpubReaderActivity::emitBuildEnd(const char* why) {
@@ -574,7 +580,7 @@ void EpubReaderActivity::emitBuildEnd(const char* why) {
                              : diagBuildPagesBuilt;
   // v192：尾端追加 amiss/asd/areject/aevict。
   DiagLog::line("BUILD end why=%s spine=%d ms=%lu pages=%u ticks=%lu zero=%lu yields=%lu tickmax=%lu stepmax=%lu "
-                "stepavg=%lu steps=%lu gapmax=%lu gapsite=%u probes=%lu amiss=%lu asd=%lu areject=%lu aevict=%lu",
+                "stepavg=%lu steps=%lu gapmax=%lu gapsite=%u probes=%lu amiss=%lu asd=%lu areject=%lu aevict=%lu xmlfix=%lu",
                 why, diagBuildSpine, static_cast<unsigned long>(millis() - diagBuildStartMs), pages,
                 static_cast<unsigned long>(diagBuildTicks), static_cast<unsigned long>(diagBuildZeroTicks),
                 static_cast<unsigned long>(diagBuildYields), static_cast<unsigned long>(diagBuildTickMaxMs),
@@ -587,7 +593,8 @@ void EpubReaderActivity::emitBuildEnd(const char* why) {
                 static_cast<unsigned long>(SdCardFont::advanceMissCount_),
                 static_cast<unsigned long>(SdCardFont::advanceSdReadCount_),
                 static_cast<unsigned long>(SdCardFont::advanceRejectCount_),
-                static_cast<unsigned long>(SdCardFont::advanceEvictCount_));
+                static_cast<unsigned long>(SdCardFont::advanceEvictCount_),
+                static_cast<unsigned long>(takeXmlControlDrops()));  // v345（帳本 D14）：這一章濾掉的控制字元
   // v252：分項（ms）。巢狀：xml ⊃ cd,el；cd,el ⊃ lay（layCd 是在 cd 裡的）；lay ⊃ adv,proc；proc ⊃ ser。
   //   step＝建置步總時間（Section::buildStepTotalUs）；step − rd − xml ≈ 步外的收尾／commit。asdms＝SD 查字寬的時間。
   {
@@ -626,6 +633,30 @@ void EpubReaderActivity::emitBuildEnd(const char* why) {
     } else {
       DiagLog::line("IMGHEAL skip why=%s", imageHealPage_ < 0 ? "nopending" : "moved");
     }
+  }
+  // 注音（P2 I6）：這次建置的注音證人，只有注音字型才印。
+  //   mode：0 非注音｜1 開｜2 沒開（建置開始時引擎不可用）｜3 途中降級（檔頭補成「沒注音」）｜9 章已換掉。
+  //   par＝開了注音的段落、lines＝掛上清單的行、held＝留到下一批的行、deg／cstop／bidi＝停止標注（資源／內容／雙向）、
+  //   ovf＝一行替換太多、loom＝清單配不到、stale＝建構時引擎不對、stk＝堆疊不夠跑解析器、qmax＝佇列最深（容量 512）、
+  //   minfree／blk＝每一步之後最低的 free 與那一刻的最大連續塊、hwm＝印這一行的任務的堆疊高水位。
+  //   v342：ann＝屬於預先標注章節的段落（章節標記認到了）、vs＝排版前拿掉的讀音選擇符號。
+  if (sdFontSystem.isZhuyinFont(SETTINGS.getReaderFontId())) {
+    const zhuyin::SwapStats& now = zhuyin::swapStats();
+    const zhuyin::SwapStats& was = zyStatsAtBuildStart_;
+    const unsigned mode =
+        (section && diagBuildSpine == currentSpineIndex) ? section->zhuyinBuildMode() : 9u;
+    const auto d = [](const uint32_t a, const uint32_t b) { return static_cast<unsigned long>(a - b); };
+    DiagLog::line("ZYBUILD spine=%d mode=%u par=%lu lines=%lu held=%lu deg=%lu cstop=%lu bidi=%lu ovf=%lu loom=%lu "
+                  "stale=%lu stk=%lu qmax=%lu ann=%lu vs=%lu minfree=%lu blk=%lu hwm=%u task=%s",
+                  diagBuildSpine, mode, d(now.paragraphs, was.paragraphs), d(now.built, was.built),
+                  d(now.heldLines, was.heldLines), d(now.degradedEvents, was.degradedEvents),
+                  d(now.contentStops, was.contentStops), d(now.bidiStops, was.bidiStops),
+                  d(now.lineOverflow, was.lineOverflow), d(now.listOom, was.listOom), d(now.dropStale, was.dropStale),
+                  d(now.stackStops, was.stackStops), static_cast<unsigned long>(now.queueMax),
+                  d(now.annotatedParagraphs, was.annotatedParagraphs), d(now.selectors, was.selectors),
+                  static_cast<unsigned long>(Section::buildMinFree == UINT32_MAX ? 0 : Section::buildMinFree),
+                  static_cast<unsigned long>(Section::buildLargestAtMinFree),
+                  static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr)), pcTaskGetName(nullptr));
   }
 }
 
@@ -1095,6 +1126,8 @@ void EpubReaderActivity::loop() {
           LOG_ERR("ERS", "Background build hit low memory; pausing (partial kept)");
           partialRebuildStartFailed = true;
           emitBuildEnd("lowmem");
+          // 注音（P2 I7）：引擎先退 —— 下一次（越過 watermark 的翻頁）續建多出約 23 KB，而不是在前景跳「記憶體不足」
+          sdFontSystem.yieldZhuyin("build-lowmem");
         } else {
           LOG_ERR("ERS", "Background section build failed");
           emitBuildEnd("failed");
@@ -1796,6 +1829,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
   } firstRenderPublisher{firstRenderDone_};
 
   const uint32_t renderStartMs = millis();  // v243 EPLAT：在最前面取，才量得到排隊等鎖的時間
+  zyStatsAtRender_ = zhuyin::swapStats();   // 注音（P2 I6）：ZYPAGE 的載入掉清單數從這裡起算
   // v264（codex 第二輪）：render task 一接手，`isRenderPending()` 就變 false，而這次要畫的可能是別頁 ——
   //   上一次發佈的「書首」在這段空窗會變成過時的 true，把該有的上一頁吃掉。接手就先作廢，
   //   等下面定案再發佈；中間主任務讀到 false ＝ 照舊行為（保守方向，只會少擋、不會誤擋）。
@@ -1847,6 +1881,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
     // 這條路徑一個 session 最多幾次，dumpPools 的成本在這裡可付。
     DiagLog::mem("fg-lowmem");
     DiagLog::dumpPools(2048, "fg-lowmem");
+    sdFontSystem.yieldZhuyin("fg-lowmem");  // 注音（P2 I7）：拍完池之後再退（快照要記到引擎還在時的樣子）
     renderer.clearScreen();
     GUI.drawPopup(renderer, tr(STR_BUILD_LOW_MEMORY));
     return true;
@@ -2431,10 +2466,41 @@ void EpubReaderActivity::render(RenderLock&& lock) {
     // Collect footnotes from the loaded page
     currentPageFootnotes = std::move(p->footnotes);
 
+    // 注音（P2 I6）：這一頁的注音證人（只有注音字型才印）。行與替換數在交給 renderContents 之前數。
+    const bool zyFont = sdFontSystem.isZhuyinFont(SETTINGS.getReaderFontId());
+    unsigned zyLines = 0, zySwaps = 0;
+    if (zyFont) {
+      for (const auto& el : p->elements) {
+        if (!el || el->getTag() != TAG_PageLine) continue;
+        const auto& block = static_cast<const PageLine&>(*el).getBlock();
+        if (block && block->swapCount() != 0) {
+          zyLines++;
+          zySwaps += block->swapCount();
+        }
+      }
+    }
+    const zhuyin::SwapStats zyBeforeDraw = zhuyin::swapStats();
+
     const auto start = millis();
     renderContents(std::move(p), pageNo, orientedMarginTop, orientedMarginRight, orientedMarginBottom,
                    orientedMarginLeft);
     LOG_DBG("ERS", "Rendered page in %dms", millis() - start);
+    if (zyFont) {
+      // lines／sw＝這一頁掛著清單的行與替換數；loaded／drop＝這次 render 載入時掛上的行／因沒有引擎、綁定不同、驗不過、
+      // 太大、配不到而丟掉的行；gated＝繪製時閘門關著的行（一頁畫好幾趟，每趟都算）、skip＝某個字詞換不了；
+      // shwm＝繪製任務的堆疊高水位（render 192→272 B、renderVertical 32→128 B 之後的餘裕）。
+      const zhuyin::SwapStats& now = zhuyin::swapStats();
+      const zhuyin::SwapStats& was = zyStatsAtRender_;
+      const auto drops = [](const zhuyin::SwapStats& x) {
+        return x.dropNoEngine + x.dropBinding + x.dropCheck + x.dropSize + x.listOom;
+      };
+      DiagLog::line("ZYPAGE spine=%d page=%d lines=%u sw=%u loaded=%lu drop=%lu gated=%lu skip=%lu shwm=%u",
+                    currentSpineIndex, pageNo, zyLines, zySwaps, static_cast<unsigned long>(now.loaded - was.loaded),
+                    static_cast<unsigned long>(drops(now) - drops(was)),
+                    static_cast<unsigned long>(now.renderGated - zyBeforeDraw.renderGated),
+                    static_cast<unsigned long>(now.renderSkipped - zyBeforeDraw.renderSkipped),
+                    static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr)));
+    }
     // v243：放在 renderContents【之後】而不是它裡面的 SEG 行 —— renderContents 有好幾條繪製分支
     // （tiled／tiled-async／fallback），各印各的 SEG；裝進其中一條就是賭那條會跑（CLAUDE.md B-22）。
     // 這裡是所有分支的共同出口。lat 含灰階那幾趟（抗鋸齒關著時就是黑白上面板的時刻）。
@@ -3079,8 +3145,9 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int pa
     const GfxRenderer& r;
     ~VertWitness() {
       if (!r.isVerticalLayout()) return;
-      DiagLog::line("VERT vdraw=%u vrot=%u", static_cast<unsigned>(r.takeVerticalDrawCount()),
-                    static_cast<unsigned>(r.takeVerticalRotCount()));
+      // v344：vscan＝預讀掃描走到旋轉字的次數（只記錄不畫）；vrot 起只數真的畫的。
+      DiagLog::line("VERT vdraw=%u vrot=%u vscan=%u", static_cast<unsigned>(r.takeVerticalDrawCount()),
+                    static_cast<unsigned>(r.takeVerticalRotCount()), static_cast<unsigned>(r.takeVerticalRotScanCount()));
     }
   } vertWitness{renderer};
 

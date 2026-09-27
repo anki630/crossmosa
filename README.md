@@ -47,15 +47,16 @@
 
 版本:[`2.0.1`](https://github.com/anki630/crossmosa/releases/latest)
 
-> 🧪 **想試新東西？** 測試版 **2.1.0-beta.4** 有直排閱讀，按電源鍵是睡眠、再按一次就回到你離開的地方。
-> 它是預發佈版，**第一次刷 CrossMosa 的人請不要從它開始**——先刷 2.0.1，確認一切正常之後再換上來。
-> 詳情見 [2.1.0-beta.4 的說明](https://github.com/anki630/crossmosa/releases/tag/v2.1.0-beta.4)。
+> 🧪 **想試新東西？** 測試版 **2.1.0-beta.5** 有直排閱讀、給孩子的注音字型，也開始支援 X4。
+> 它是預發佈版，**第一次刷 CrossMosa 的人請不要從它開始**——先刷 2.0.1，確認一切正常之後再換上來。用 X4 的話，直接刷這一版。
+> 詳情見 [2.1.0-beta.5 的說明](https://github.com/anki630/crossmosa/releases/tag/v2.1.0-beta.5)。
 
 **我該刷哪一版？**
 
 | | |
 |---|---|
 | **第一次刷，或不知道該選哪一版** | **刷 2.0.1。** 它會自己認出你的螢幕是哪一種，新舊機器都認得。刷舊版才要碰運氣——比較新的 X3 刷上去，畫面就不會再更新 |
+| **用 X4** | **刷 2.1.0-beta.5。** X4 從這一版開始支援 |
 | **已經在用 1.0／1.1／1.2** | 建議升:換一章從十秒左右變成一兩秒，翻頁更順，書裡的圖也更少出不來 |
 | **已經在用 2.0.0** | 建議升:書名裡的黑方塊少了很多，逛 OPDS 書單也不會偶爾當機。設定與進度都不受影響 |
 
@@ -65,7 +66,7 @@ CrossMosa 把範圍收窄，專心做三件事:
 
 1. **介面與內文都是繁體中文**——選單、檔名、書名、OPDS 書庫、書的內文。
 2. **閱讀優先**。凡是會讓翻頁掉字、讓長章節排不出來的東西，一律讓路。
-3. **只針對 X3 調校**。原版同時支援 X3 與 X4;本分支的顯示、記憶體與字型全部照 X3 實測而定。
+3. **以 X3 為主調校，2.1.0-beta.5 起也支援 X4**。原版同時支援 X3 與 X4;本分支的顯示、記憶體與字型全部照實機實測而定。
 
 這是個人專案，不是產品。**沒有任何隸屬於 Xteink 或原版 CrossPoint 專案的關係。**
 
@@ -175,8 +176,8 @@ core 裡，不是本專案能改的)，兩次建置就會差幾十個位元組�
   開始之前請先讀安裝章開頭的「刷機無法保證成功」與 USB-locked 注意事項:
   SD 救援模式在韌體卡住開機迴圈時進不去，部分機器的 USB 也沒有資料傳輸。
 - **與 Xteink 無關，與原版 CrossPoint 專案也無隸屬關係。** 兩者都不為這個分支負責。
-- **驗證主力是一台 UC8279 新批次 X3**，舊批次（UC8253）由使用者回報刷機成功。
-  沒有 X4，沒有自動化的硬體測試。
+- **驗證主力是一台 UC8279 新批次 X3 與一台 X4**，舊批次 X3（UC8253）由使用者回報刷機成功。
+  沒有自動化的硬體測試。
   很多改動的驗證方式就是「用了幾天沒出事」。
 - **沒有遙測。** 本韌體不會回報使用狀況給任何人。Wi-Fi 憑證、閱讀進度、書籤只存在你自己的
   SD 卡上(`/.crossmosa/`)。裝置只有在你主動要求時才連外:連 Wi-Fi 後對時(NTP)、
@@ -247,16 +248,16 @@ Free, open source, a personal project.
 
 Version: `2.0.1` · [Download](https://github.com/anki630/crossmosa/releases/latest) · [Changelog](CHANGELOG.md)
 
-> 🧪 **Want to try what's next?** Pre-release **2.1.0-beta.4** adds vertical (top-to-bottom) reading,
-> and the power button now sleeps and resumes where you left off.
-> **Don't start here if this is your first CrossMosa flash** — install 2.0.1 first.
-> See the [2.1.0-beta.4 notes](https://github.com/anki630/crossmosa/releases/tag/v2.1.0-beta.4).
+> 🧪 **Want to try what's next?** Pre-release **2.1.0-beta.5** adds vertical (top-to-bottom) reading,
+> a zhuyin font for children that picks the right reading for polyphonic characters, and X4 support.
+> **Don't start here if this is your first CrossMosa flash** — install 2.0.1 first. On an X4, flash this release directly.
+> See the [2.1.0-beta.5 notes](https://github.com/anki630/crossmosa/releases/tag/v2.1.0-beta.5).
 
 ## What it is
 
 A narrow fork of CrossPoint with one goal: read Traditional Chinese books well on the X3.
-It trades away breadth (other languages, other formats, the X4) for Chinese typography,
-a reading-first memory policy, and X3-specific display tuning.
+It trades away breadth (other languages, other formats) for Chinese typography,
+a reading-first memory policy, and X3-first display tuning. The X4 is supported from 2.1.0-beta.5.
 
 Newer X3 units ship a different display controller. This build identifies it at boot, so both
 the newer and the older batches work. If your screen already updates normally, you do not need to flash.
@@ -323,8 +324,8 @@ Issues for missing characters or bugs are welcome too.
 ## Disclaimer
 
 This project ships **no book content and no book sources** — bring your own legally obtained, DRM-free EPUBs (publisher or indie-store direct sales, public-domain libraries, your own documents). Support the authors. Flash at your own risk; third-party firmware can leave a device unbootable. Not affiliated
-with Xteink or upstream. Verified primarily on **one newer-batch UC8279 X3**; an
-older-batch (UC8253) unit was **flashed successfully by a user**. No X4 — much of the verification is "used it for
+with Xteink or upstream. Verified primarily on **one newer-batch UC8279 X3 and one X4**; an
+older-batch (UC8253) X3 was **flashed successfully by a user**. Much of the verification is "used it for
 a few days and nothing broke". **No telemetry**: credentials, progress and bookmarks stay on
 your SD card, and the device only reaches the network when you ask it to (NTP after joining
 Wi-Fi, your own OPDS server, Calibre). The upstream OTA update check is removed, so this

@@ -2,6 +2,10 @@
 #include <esp_timer.h>
 #include "Section.h"
 
+#include <ZhuyinActive.h>
+#include <ZhuyinData.h>
+#include <ZhuyinIdentity.h>
+
 #include <Breadcrumb.h>
 #include <HalStorage.h>
 #include <Logging.h>
@@ -146,7 +150,8 @@ uint32_t Section::onPageComplete(std::unique_ptr<Page> page) {
   }
 
   const uint32_t position = file.position();
-  if (!page->serialize(file)) {
+  // 注音：帶清單的行綁著這一頁在章節裡的位置（載入時要相同才換，codex 複查 ③ 第二輪 F4）
+  if (!page->serialize(file, zhuyin::PagePlace{static_cast<uint16_t>(spineIndex), static_cast<uint16_t>(builtPageCount_)})) {
     LOG_ERR("SCT", "Failed to serialize page %d", builtPageCount_);
     return 0;
   }
@@ -193,7 +198,9 @@ void Section::writeSectionFileHeader(const ReaderRenderSpec& spec) {
   // Written as the incomplete sentinel; finalizeBuild() patches it to
   // SECTION_FILE_VERSION as the last step, committing the file.
   serialization::writePod(file, SECTION_FILE_INCOMPLETE_VERSION);
-  serialization::writePod(file, spec.fontId);
+  // 注音：非注音字型 → fontId 原值（逐位元組不變）；注音字型 → 混合身分（開或關）。提交時可能補成「關」。
+  const int identity = zhuyin::sectionIdentity(spec.fontId, spec.zhuyinIdentity);
+  serialization::writePod(file, identity);
   serialization::writePod(file, spec.lineHeightEm);
   // v284：**這次建置凍結的字身框**，是【新增】的欄位，不是拿上面那個來挪用。
   //   ⚠️⚠️ 實機教訓（實機回報「三檔行距完全失效」）：我第一版把使用者設定
@@ -291,7 +298,9 @@ bool Section::loadSectionFile(const ReaderRenderSpec& spec) {
     }
 
     lastFileEmFP_ = fileEmFP;  // v309 證人：讓上層能印出「存檔裡的 em」
-    if (spec.fontId != fileFontId || spec.lineHeightEm != fileLineHeightEm ||
+    if (!zhuyin::sectionIdentityAccepted(fileFontId, spec.fontId, spec.zhuyinIdentity, spec.zhuyinOffIdentity,
+                                         spec.zhuyinOnIdentity) ||
+        spec.lineHeightEm != fileLineHeightEm ||
         renderer.probeEmFP(spec.fontId) != fileEmFP ||
         spec.extraParagraphSpacing != fileExtraParagraphSpacing || spec.paragraphAlignment != fileParagraphAlignment ||
         spec.viewportWidth != fileViewportWidth || spec.viewportHeight != fileViewportHeight ||
@@ -584,6 +593,19 @@ bool Section::startBuild(const ReaderRenderSpec& spec, const std::function<void(
     return false;
   }
 
+  // 注音：這次建置允不允許（spec 說引擎開著、而且建置開始時引擎真的可用、就是這個字型、資料集相同）；
+  // 字型是不是注音格（直排欄距）。提交時依實際情況補檔頭的身分（commitBuildFile）。
+  {
+    const zhuyin::ActiveEngine e = zhuyin::activeEngine();
+    zyHeaderOn_ = spec.zhuyinIdentity != 0 && spec.zhuyinIdentity != spec.zhuyinOffIdentity;
+    zyBuildOn_ = zyHeaderOn_ && zhuyin::engineUsable(e) && e.fontId == spec.fontId &&
+                 zhuyin::engineIdentity(e.data->datasetId(), zhuyin::EngineMode::On) == spec.zhuyinIdentity;
+    zyGenAtStart_ = e.generation;
+    zyPatchedOff_ = false;
+    zyOffIdentity_ = zhuyin::sectionIdentity(spec.fontId, spec.zhuyinOffIdentity);
+    ctx->parser->setZhuyin(zyBuildOn_, spec.zhuyinIdentity != 0, spec.columnPitchTier);
+  }
+
   Hyphenator::setPreferredLanguage(epub->getLanguage());
   build_ = std::move(ctx);
 
@@ -614,6 +636,8 @@ bool Section::startBuild(const ReaderRenderSpec& spec, const std::function<void(
 uint32_t Section::buildStepMaxMs = 0;
 uint32_t Section::buildStepTotalUs = 0;
 uint32_t Section::buildStepCount = 0;
+uint32_t Section::buildMinFree = UINT32_MAX;
+uint32_t Section::buildLargestAtMinFree = 0;
 int Section::lastPoisonAvoidedSpine = -1;
 
 bool Section::buildSomeMore(const int maxPages, bool (*shouldYield)(void*), void* yieldCtx) {
@@ -646,6 +670,13 @@ bool Section::buildSomeMore(const int maxPages, bool (*shouldYield)(void*), void
       if (us / 1000 > buildStepMaxMs) buildStepMaxMs = us / 1000;
       buildStepTotalUs += us;
       buildStepCount++;
+      // 注音（P2 I6）證人。free 是現成的計數器（便宜）；最大連續塊要把整個池一塊一塊走過（建置中有好幾千塊、持堆積鎖）
+      // → 只在 free 創新低的那一步量，一次建置只有幾次。所以它是「最低點當下」的最大塊，不是最大塊本身的最低值。
+      const auto freeNow = static_cast<uint32_t>(heap_caps_get_free_size(MALLOC_CAP_DEFAULT));
+      if (freeNow < buildMinFree) {
+        buildMinFree = freeNow;
+        buildLargestAtMinFree = static_cast<uint32_t>(heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT));
+      }
     };
     if (status == ChapterHtmlSlimParser::ParseStatus::Done) {
       // 收尾（最後一頁的排版＋序列化＋commit 改名）也在同一個 tick 裡、也不能讓路——算進最後一步。
@@ -816,6 +847,19 @@ bool Section::commitBuildFile(const uint8_t version, const uint32_t bytesConsume
   serialization::writePod(file, paragraphLutOffset);
   serialization::writePod(file, liLutFileOffset);
   serialization::writePod(file, visibleLutFileOffset);
+  // 注音：身分補成這次建置實際用的模式（在版號之前寫 → 斷電時版號仍是 0，這一份不算數）
+  if (zyHeaderOn_) {
+    const bool degraded = !zyBuildOn_ || build_->parser->zhuyinDegraded() ||
+                          zhuyin::activeEngine().generation != zyGenAtStart_;
+    if (degraded) {
+      // ⚠️ 寫不進去就整個不提交（codex 整合複查 A8）：留著「開」的身分 ＝ 缺注音的行永遠不重排
+      if (!file.seek(sizeof(uint8_t)) || !serialization::writePodChecked(file, zyOffIdentity_)) {
+        LOG_ERR("SCT", "Failed to patch the zhuyin-off identity; not committing");
+        return failCommit();
+      }
+      zyPatchedOff_ = true;
+    }
+  }
   // ...then commit by overwriting the sentinel version with the real one. Writing the
   // version last makes it the commit point: a crash before here leaves version 0.
   file.seek(0);
@@ -962,7 +1006,7 @@ std::unique_ptr<Page> Section::loadPageDuringBuild(const int page) {
   const uint32_t writePos = file.position();
   file.seek(pos);
   const uint32_t allocFailsBefore = Page::allocFailCount();
-  auto p = Page::deserialize(file);
+  auto p = Page::deserialize(file, zhuyin::PagePlace{static_cast<uint16_t>(spineIndex), static_cast<uint16_t>(page)});
   file.seek(writePos);
   if (p) {
     p->visibleTextOffset = build_->lut[page].visibleTextOffset;
@@ -1005,7 +1049,7 @@ std::unique_ptr<Page> Section::loadPageAt(const int page) const {
 
   f.seek(pagePos);
   const uint32_t allocFailsBefore = Page::allocFailCount();
-  auto p = Page::deserialize(f);
+  auto p = Page::deserialize(f, zhuyin::PagePlace{static_cast<uint16_t>(spineIndex), static_cast<uint16_t>(page)});
   if (p) {
     p->visibleTextOffset = visibleTextOffset;
   } else if (Page::allocFailCount() != allocFailsBefore) {

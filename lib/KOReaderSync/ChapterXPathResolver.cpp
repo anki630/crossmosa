@@ -81,6 +81,7 @@ class ParagraphTextCounter final : public Print {
  public:
   ParagraphTextCounter() {
     parser = XML_ParserCreate(nullptr);
+    xmlFilter_ = XmlControlCharFilter{};  // v345：每份文件重新判斷是不是 UTF-16
     if (!parser) {
       LOG_ERR("KOX", "Failed to create XML parser");
       return;
@@ -114,11 +115,20 @@ class ParagraphTextCounter final : public Print {
       return size;
     }
 
-    if (XML_Parse(parser, reinterpret_cast<const char*>(buffer), static_cast<int>(size), XML_FALSE) != XML_STATUS_OK) {
-      const enum XML_Error error = XML_GetErrorCode(parser);
-      if (error != XML_ERROR_ABORTED) {
-        LOG_ERR("KOX", "XML parse error: %s", XML_ErrorString(error));
-        parseOk = false;
+    // v345（帳本 D14）：跟章節排版同一道濾網 —— XML 不准的控制字元先濾掉，兩邊看到的文字才一致。
+    //   原始 buffer 是 const，所以一段一段複製出來濾（expat 是串流解析，分段餵與一次餵結果相同）。
+    char chunk[256];
+    for (size_t off = 0; off < size && parseOk && !stopped;) {
+      const size_t take = size - off < sizeof(chunk) ? size - off : sizeof(chunk);
+      memcpy(chunk, buffer + off, take);
+      off += take;
+      if (XML_Parse(parser, chunk, static_cast<int>(xmlFilter_.apply(chunk, take)), XML_FALSE) != XML_STATUS_OK) {
+        const enum XML_Error error = XML_GetErrorCode(parser);
+        if (error != XML_ERROR_ABORTED) {
+          LOG_ERR("KOX", "XML parse error: %s", XML_ErrorString(error));
+          parseOk = false;
+        }
+        break;
       }
     }
 
@@ -189,6 +199,7 @@ class ParagraphTextCounter final : public Print {
 
  private:
   XML_Parser parser = nullptr;
+  XmlControlCharFilter xmlFilter_;  // v345（帳本 D14）：餵 expat 前濾掉 XML 不准的控制字元
   bool parseOk = true;
   bool insideBody = false;
   bool stopped = false;
@@ -202,6 +213,7 @@ class XPathParagraphResolver final : public Print {
  public:
   explicit XPathParagraphResolver(const int targetParagraph) : targetParagraph(targetParagraph) {
     parser = XML_ParserCreate(nullptr);
+    xmlFilter_ = XmlControlCharFilter{};  // v345：每份文件重新判斷是不是 UTF-16
     if (!parser) {
       LOG_ERR("KOX", "Failed to create XML parser");
       return;
@@ -237,11 +249,20 @@ class XPathParagraphResolver final : public Print {
       return size;
     }
 
-    if (XML_Parse(parser, reinterpret_cast<const char*>(buffer), static_cast<int>(size), XML_FALSE) != XML_STATUS_OK) {
-      const enum XML_Error error = XML_GetErrorCode(parser);
-      if (error != XML_ERROR_ABORTED) {
-        LOG_ERR("KOX", "XML parse error: %s", XML_ErrorString(error));
-        parseOk = false;
+    // v345（帳本 D14）：跟章節排版同一道濾網 —— XML 不准的控制字元先濾掉，兩邊看到的文字才一致。
+    //   原始 buffer 是 const，所以一段一段複製出來濾（expat 是串流解析，分段餵與一次餵結果相同）。
+    char chunk[256];
+    for (size_t off = 0; off < size && parseOk && !stopped;) {
+      const size_t take = size - off < sizeof(chunk) ? size - off : sizeof(chunk);
+      memcpy(chunk, buffer + off, take);
+      off += take;
+      if (XML_Parse(parser, chunk, static_cast<int>(xmlFilter_.apply(chunk, take)), XML_FALSE) != XML_STATUS_OK) {
+        const enum XML_Error error = XML_GetErrorCode(parser);
+        if (error != XML_ERROR_ABORTED) {
+          LOG_ERR("KOX", "XML parse error: %s", XML_ErrorString(error));
+          parseOk = false;
+        }
+        break;
       }
     }
 
@@ -319,6 +340,7 @@ class XPathParagraphResolver final : public Print {
   }
 
   XML_Parser parser = nullptr;
+  XmlControlCharFilter xmlFilter_;  // v345（帳本 D14）：餵 expat 前濾掉 XML 不准的控制字元
   const int targetParagraph;
   bool parseOk = true;
   bool insideBody = false;
@@ -335,6 +357,7 @@ class XPathProgressResolver final : public Print {
  public:
   explicit XPathProgressResolver(const size_t targetVisibleChar) : targetVisibleChar(targetVisibleChar) {
     parser = XML_ParserCreate(nullptr);
+    xmlFilter_ = XmlControlCharFilter{};  // v345：每份文件重新判斷是不是 UTF-16
     if (!parser) {
       LOG_ERR("KOX", "Failed to create XML parser");
       return;
@@ -371,11 +394,20 @@ class XPathProgressResolver final : public Print {
       return size;
     }
 
-    if (XML_Parse(parser, reinterpret_cast<const char*>(buffer), static_cast<int>(size), XML_FALSE) != XML_STATUS_OK) {
-      const enum XML_Error error = XML_GetErrorCode(parser);
-      if (error != XML_ERROR_ABORTED) {
-        LOG_ERR("KOX", "XML parse error: %s", XML_ErrorString(error));
-        parseOk = false;
+    // v345（帳本 D14）：跟章節排版同一道濾網 —— XML 不准的控制字元先濾掉，兩邊看到的文字才一致。
+    //   原始 buffer 是 const，所以一段一段複製出來濾（expat 是串流解析，分段餵與一次餵結果相同）。
+    char chunk[256];
+    for (size_t off = 0; off < size && parseOk && !stopped;) {
+      const size_t take = size - off < sizeof(chunk) ? size - off : sizeof(chunk);
+      memcpy(chunk, buffer + off, take);
+      off += take;
+      if (XML_Parse(parser, chunk, static_cast<int>(xmlFilter_.apply(chunk, take)), XML_FALSE) != XML_STATUS_OK) {
+        const enum XML_Error error = XML_GetErrorCode(parser);
+        if (error != XML_ERROR_ABORTED) {
+          LOG_ERR("KOX", "XML parse error: %s", XML_ErrorString(error));
+          parseOk = false;
+        }
+        break;
       }
     }
 
@@ -502,6 +534,7 @@ class XPathProgressResolver final : public Print {
   }
 
   XML_Parser parser = nullptr;
+  XmlControlCharFilter xmlFilter_;  // v345（帳本 D14）：餵 expat 前濾掉 XML 不准的控制字元
   const size_t targetVisibleChar;
   bool parseOk = true;
   bool insideBody = false;

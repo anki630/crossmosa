@@ -1,6 +1,7 @@
 #pragma once
 
 #include <HalStorage.h>
+#include <XmlParserUtils.h>
 #include <expat.h>
 
 #include <climits>
@@ -69,7 +70,11 @@ class ChapterHtmlSlimParser {
   // ⚠️ 而它【必須進 section 檔頭】，否則換檔位會讀到用舊幾何排的快取。
   //    已在 Section.cpp 的 columnPitchTier 欄位（v104）。曾規劃摺進側檔檔名，已放棄。
   float columnPitchFactor = 1.50f;
-  mutable int columnPitchCache_ = -1;  // v284：由 frozenEmFP_ 算一次就記住（見 .cpp columnPitchPx）
+  mutable int columnPitchCache_ = -1;
+  bool zhuyinAllowed_ = false;
+  // v342（B 路線）：這一章是預先標注的（<head> 有 <meta name="zhuyin-ivs" content="bpmfvs"/>，zy_preannotate.py 寫的）
+  bool zhuyinDocAnnotated_ = false;
+  bool zhuyinDegraded_ = false;  // v284：由 frozenEmFP_ 算一次就記住（見 .cpp columnPitchPx）
   bool vertColLogged = false;  // VERTCOL 每次建置只印一行
   uint8_t vertImgDropLogged = 0;  // VERTIMGDROP 上限 3 筆
   uint8_t imgPlaceLogged = 0;     // v255：IMGPLACE 每章上限 6 筆
@@ -161,6 +166,7 @@ class ChapterHtmlSlimParser {
   // for the lifetime of the parse so it can be paused and resumed at buffer
   // boundaries.
   XML_Parser xmlParser_ = nullptr;
+  XmlControlCharFilter xmlFilter_;  // v345（帳本 D14）：餵 expat 前濾掉 XML 不准的控制字元
   HalFile parseFile_;
   uint32_t parseStartTime_ = 0;
 
@@ -187,6 +193,15 @@ class ChapterHtmlSlimParser {
  public:
   // v258：預排接手時補上 popup callback（預排的 startBuild 沒有給；同 showBuildPopup 自己的 buildPopupPending 閘門）。
   void setPopupFn(std::function<void()> fn) { popupFn = std::move(fn); }
+  // 注音（P2）：這次建置允不允許注音（Section 決定：建置開始時引擎可用、而且就是這個字型的）、字型是不是注音格
+  // （直排欄距多 0.5 em，vtext::columnPitchPx）。必須在開始解析之前呼叫。
+  void setZhuyin(const bool allowed, const bool cells, const uint8_t columnPitchTier) {
+    zhuyinAllowed_ = allowed;
+    columnPitchFactor = vtext::columnPitchFactor(columnPitchTier, cells);
+    columnPitchCache_ = -1;
+  }
+  // 有段落因資源或 I/O 停止標注，或允許注音卻開不起來（引擎中途不見）→ 章節身分要寫「沒注音」
+  bool zhuyinDegraded() const { return zhuyinDegraded_; }
   explicit ChapterHtmlSlimParser(
       std::shared_ptr<Epub> epub, const std::string& filepath, GfxRenderer& renderer, const int fontId,
       const int lineHeightPx, const int32_t frozenEmFP, const bool extraParagraphSpacing,

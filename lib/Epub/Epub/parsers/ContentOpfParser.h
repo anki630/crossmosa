@@ -6,6 +6,8 @@
 #include <vector>
 
 #include "Epub.h"
+#include <XmlParserUtils.h>
+
 #include "expat.h"
 
 class BookMetadataCache;
@@ -27,6 +29,7 @@ class ContentOpfParser final : public Print {
   const std::string& baseContentPath;
   size_t remainingSize;
   XML_Parser parser = nullptr;
+  XmlControlCharFilter xmlFilter_;  // v345（帳本 D14）：餵 expat 前濾掉 XML 不准的控制字元
   ParserState state = START;
   BookMetadataCache* cache;
   HalFile tempItemStore;

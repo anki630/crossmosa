@@ -3,6 +3,7 @@
 #include <Bitmap.h>
 #include <FsHelpers.h>
 #include <GfxRenderer.h>
+#include <HalGPIO.h>
 #include <HalStorage.h>
 #include <I18n.h>
 
@@ -72,6 +73,11 @@ void BmpViewerActivity::onEnter() {
 
   const auto pageWidth = renderer.getScreenWidth();
   const auto pageHeight = renderer.getScreenHeight();
+  // v335：圖片只用按鍵列【上方】的空間 —— 原本照整個螢幕縮放，按鍵提示直接蓋在圖上（2026-09-23 實機）。
+  //   代價：跟螢幕一樣大的圖在預覽裡小約 5%（設成待機畫面時仍是原尺寸，那條路不經過這裡）。
+  //   觸控機型不畫按鍵提示 → 不保留。
+  const int imageAreaHeight =
+      pageHeight - (gpio.hasTouch() ? 0 : UITheme::getInstance().getMetrics().buttonHintsHeight);
   GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));  // v155：純文字，假進度條已移除
   // 1. Open the file
   if (Storage.openFileForRead("BMP", filePath, file)) {
@@ -81,23 +87,23 @@ void BmpViewerActivity::onEnter() {
     if (bitmap.parseHeaders() == BmpReaderError::Ok) {
       int x, y;
 
-      if (bitmap.getWidth() > pageWidth || bitmap.getHeight() > pageHeight) {
+      if (bitmap.getWidth() > pageWidth || bitmap.getHeight() > imageAreaHeight) {
         float ratio = static_cast<float>(bitmap.getWidth()) / static_cast<float>(bitmap.getHeight());
-        const float screenRatio = static_cast<float>(pageWidth) / static_cast<float>(pageHeight);
+        const float screenRatio = static_cast<float>(pageWidth) / static_cast<float>(imageAreaHeight);
 
         if (ratio > screenRatio) {
           // Wider than screen
           x = 0;
-          y = std::round((static_cast<float>(pageHeight) - static_cast<float>(pageWidth) / ratio) / 2);
+          y = std::round((static_cast<float>(imageAreaHeight) - static_cast<float>(pageWidth) / ratio) / 2);
         } else {
           // Taller than screen
-          x = std::round((static_cast<float>(pageWidth) - static_cast<float>(pageHeight) * ratio) / 2);
+          x = std::round((static_cast<float>(pageWidth) - static_cast<float>(imageAreaHeight) * ratio) / 2);
           y = 0;
         }
       } else {
         // Center small images
         x = (pageWidth - bitmap.getWidth()) / 2;
-        y = (pageHeight - bitmap.getHeight()) / 2;
+        y = (imageAreaHeight - bitmap.getHeight()) / 2;
       }
 
       // 4. Prepare Rendering
@@ -105,14 +111,16 @@ void BmpViewerActivity::onEnter() {
       bool hasNext = (siblingImages.size() > 1 && currentImageIndex != -1 &&
                       currentImageIndex < static_cast<int>(siblingImages.size()) - 1);
 
-      const auto labels =
-          mappedInput.mapLabels(tr(STR_BACK), tr(STR_SET_SLEEP_COVER), (hasPrevious ? "<" : ""), (hasNext ? ">" : ""));
-
+      // v335：四顆鍵都寫出做什麼（實機回報：「那 4 個按鈕可能會讓使用者不知道在幹嘛」）——
+      //   原本上一張／下一張只有「<」「>」。
+      const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SET_SLEEP_COVER),
+                                                (hasPrevious ? tr(STR_PREV_IMAGE) : ""),
+                                                (hasNext ? tr(STR_NEXT_IMAGE) : ""));
 
       renderer.clearScreen();
       // Assuming drawBitmap defaults to 0,0 crop if omitted, or pass explicitly: drawBitmap(bitmap, x, y, pageWidth,
       // pageHeight, 0, 0)
-      renderer.drawBitmap(bitmap, x, y, pageWidth, pageHeight, 0, 0);
+      renderer.drawBitmap(bitmap, x, y, pageWidth, imageAreaHeight, 0, 0);
 
       // Draw UI hints on the base layer
       GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
@@ -170,7 +178,8 @@ void BmpViewerActivity::doSetSleepCover() {
   if (success) {
     SETTINGS.sleepScreen = CrossPointSettings::SLEEP_SCREEN_MODE::CUSTOM;
     SETTINGS.saveToFile();
-    GUI.drawPopup(renderer, tr(STR_DONE));
+    // v335：說出剛才發生了什麼，而不是「完成」—— 按鍵上只放得下「設為待機」四個字，這裡補足。
+    GUI.drawPopup(renderer, tr(STR_SLEEP_COVER_SET));
   } else {
     GUI.drawPopup(renderer, tr(STR_FAILED_LOWER));
   }

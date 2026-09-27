@@ -67,6 +67,25 @@ inline float columnPitchForTier(const uint8_t tier) {
   }
 }
 
+// 注音字型（P2 ⑥）：每個漢字與全形標點的字形寬 1.5 em（字 1 em ＋ 右邊的注音 0.5 em；U+3000 仍是 1.0 em，
+// 所以 probeEmFP 量到的 em 就是字的本體）。直排的漢字從欄的左緣畫起（跨軸位移 0）→ 一欄要多留 0.5 em，
+// 欄與欄之間的空隙才跟沒有注音時一樣、三檔仍然分得開：1.85／2.00／2.25 em。
+// 〔量：26／32 號所有 URO＋私用區字形的墨跡在 −0.03～1.495 em、字寬 1.500 em（字型 ZhuyinKai-zy2）〕
+// ⚠️ 旗標由字型決定（cpfont 檔頭的注音標記），不從字寬量：任何一套 U+3000 與 U+4E00 差一點點的一般字型，
+//    量出來的「多出來的寬度」都會讓欄距變一個像素 → 違反「非注音不重排」。
+// ⚠️ 這個政策改了要加 ZHUYIN_SEMANTICS_VERSION（test/zhuyin_cache 的 column-pitch 摘要會紅）。
+constexpr float ZHUYIN_COLUMN_EXTRA_EM = 0.5f;
+
+inline float columnPitchFactor(const uint8_t tier, const bool zhuyinCells) {
+  return columnPitchForTier(tier) + (zhuyinCells ? ZHUYIN_COLUMN_EXTRA_EM : 0.0f);
+}
+
+// EPUB（ChapterHtmlSlimParser::columnPitchPx）與 TXT（TxtReaderActivity::recomputeGeometry）共用：同一個 em、
+// 同一檔、同一種字型 → 同一個欄距。非注音時與舊公式 `int(em × columnPitchForTier(tier) + 0.5)` 逐值相同。
+inline int columnPitchPx(const float emPx, const uint8_t tier, const bool zhuyinCells) {
+  return static_cast<int>(emPx * columnPitchFactor(tier, zhuyinCells) + 0.5f);
+}
+
 constexpr float CELL_ASCENT_FACTOR = 0.88f;
 
 // 縦中横一組字的【墨水】寬度上限，以 em 為單位。超過就退回①直立逐字。

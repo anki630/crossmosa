@@ -333,6 +333,9 @@ ReaderRenderSpec CrossPointSettings::readerRenderSpec(const uint16_t viewportWid
   spec.boldBodyText = boldBodyText != 0;
   spec.verticalLayout = documentIsVertical();
   spec.columnPitchTier = readerColumnPitch;
+  if (zhuyinSpecResolver) {
+    zhuyinSpecResolver(zhuyinSpecCtx, spec.fontId, &spec.zhuyinIdentity, &spec.zhuyinOffIdentity, &spec.zhuyinOnIdentity);
+  }
   return spec;
 }
 

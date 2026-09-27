@@ -3,6 +3,7 @@
 
 #include <atomic>
 #include <WarmIdentity.h>
+#include <ZhuyinActive.h>
 #include <Epub.h>
 #include <Epub/FootnoteEntry.h>
 #include <Epub/Section.h>
@@ -337,6 +338,9 @@ class EpubReaderActivity final : public Activity {
   uint32_t diagBuildZeroTicks = 0;
   uint32_t diagBuildYields = 0;
   uint32_t diagBuildTickMaxMs = 0;
+  // 注音（P2 I6）：ZYBUILD 印這次建置的差量、ZYPAGE 印這一頁的差量（SwapStats 是全域累計）
+  zhuyin::SwapStats zyStatsAtBuildStart_;
+  zhuyin::SwapStats zyStatsAtRender_;
   // v189（複查 state-major）：設定變更後 render 落地時解析到的頁。applyDeferredReposition 在背景建置收尾
   // 才跑，排到底之後那是 20–30 秒後——讀者若已翻頁，拿舊 offset 重定位會把人拉回去。落地時 offset
   // 已解析成功就當場消耗快取；這個欄位是第二道保險：收尾時頁已不同就不再重定位。

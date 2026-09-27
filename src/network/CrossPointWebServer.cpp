@@ -1218,8 +1218,11 @@ void CrossPointWebServer::handleGetSettings() const {
   bool seenFirst = false;
   JsonDocument doc;
 
+  const bool hasClock = halClock.isAvailable();
   for (const auto& s : settings) {
     if (!s.key) continue;  // Skip ACTION-only entries
+    // v337：沒有時鐘晶片（X4）就不列時鐘四項 —— 與裝置上的狀態列設定頁同一個判斷（帳本 D11）。
+    if (!hasClock && isClockSetting(s)) continue;
 
     doc.clear();
     doc["key"] = s.key;
@@ -1313,10 +1316,13 @@ void CrossPointWebServer::handlePostSettings() {
 
   const auto& settings = getSettingsList(&sdFontSystem.registry());
   int applied = 0;
+  const bool hasClock = halClock.isAvailable();
 
   for (const auto& s : settings) {
     if (!s.key) continue;
     if (!doc[s.key].is<JsonVariant>()) continue;
+    // v337：與 handleGetSettings 對稱 —— 頁面不列就不收（例如從 X3 開過、還開著的舊分頁送過來的值）。
+    if (!hasClock && isClockSetting(s)) continue;
 
     switch (s.type) {
       case SettingType::TOGGLE: {

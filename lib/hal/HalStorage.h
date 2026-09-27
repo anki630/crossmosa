@@ -4,6 +4,8 @@
 #include <common/FsApiConstants.h>  // for oflag_t
 #include <freertos/semphr.h>
 
+#include <cassert>
+
 #include <memory>
 #include <string>
 #include <vector>
@@ -15,6 +17,21 @@ class HalStorage {
   HalStorage();
   bool begin();
   bool ready() const;
+  // v341：卡片的 CID（16 bytes）—— 淺睡眠醒來比對「還是不是同一張卡、有沒有被拔過」。含卡片序號：不可寫進 log。
+  bool readCardId(uint8_t out[16]);
+  // v341：握住儲存鎖（每一個 Storage／HalFile 操作都拿的那把遞迴鎖）。淺睡眠用它跨過 esp_light_sleep_start()，
+  //   醒來檢查完卡片才放 —— 期間別的 task 一碰卡就會等（codex：繪製鎖不是 SD 鎖）。同一個 task 裡照常可以用 Storage。
+  class ExclusiveHold {
+   public:
+    ExclusiveHold() {
+      const BaseType_t got = xSemaphoreTakeRecursive(getInstance().storageMutex, portMAX_DELAY);
+      assert(got == pdTRUE);  // portMAX_DELAY：只有鎖本身無效才會失敗
+      (void)got;
+    }
+    ~ExclusiveHold() { xSemaphoreGiveRecursive(getInstance().storageMutex); }
+    ExclusiveHold(const ExclusiveHold&) = delete;
+    ExclusiveHold& operator=(const ExclusiveHold&) = delete;
+  };
   std::vector<String> listFiles(const char* path = "/", int maxFiles = 200);
   // Read the entire file at `path` into a String. Returns empty string on failure.
   String readFile(const char* path);
