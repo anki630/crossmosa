@@ -10,9 +10,7 @@
 
 ## 2.1.0-beta.5 (2026-09) — internal build 345
 
-> **這是測試版，不是正式版。**
-> 想穩定使用請留在 [2.0.1](https://github.com/anki630/crossmosa/releases/tag/v2.0.1)；
-> 第一次刷 CrossMosa 的人也請不要從測試版開始。
+> 這是 Beta 版，第一次刷也可以直接用這一版。X3 也可以用正式版 [2.0.1](https://github.com/anki630/crossmosa/releases/tag/v2.0.1)。
 
 ### 功能 (Features)
 

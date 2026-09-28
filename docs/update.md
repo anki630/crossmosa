@@ -9,7 +9,7 @@
 機器會先把整個檔案檢查過一遍，確定沒問題才寫入。USB 被鎖住的機器也能用這個方法。
 
 **X3 開不了機的時候**：關機，按住左側的上一頁鍵，再按電源鍵，會直接進到同一個 SD 卡韌體選擇畫面。
-只要機器上裝的是 CrossMosa，這條路就一直在。X4 的救援方法還在整理。
+只要機器上裝的是 CrossMosa，這條路就一直在。
 
 ---
 
@@ -27,7 +27,7 @@ You do not need to reflash the device or start it with a key combination. After 
 
 The device checks the complete file before writing it. This method also works on devices with USB flashing locked.
 
-**If your X3 cannot start:** Turn it off. Hold the previous-page key on the left edge, then press the power button. The device will open the same SD card firmware selection screen. This option remains available as long as CrossMosa is installed. The X4 rescue procedure is still being prepared.
+**If your X3 cannot start:** Turn it off. Hold the previous-page key on the left edge, then press the power button. The device will open the same SD card firmware selection screen. This option remains available as long as CrossMosa is installed.
 
 ---
 

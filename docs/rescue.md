@@ -1,6 +1,6 @@
 # 螢幕停住了
 
-這一頁適用 X3。X4 的救援方法還在整理。
+這一頁適用 X3。
 
 刷完 1.x 之後畫面就不動了的，**看不到畫面也能直接刷成 2.0**，不必先刷回原廠韌體。
 順的話大約五到六分鐘。**全程看不到畫面，照秒數操作就好——寧可多等，不要提早按。**
@@ -92,7 +92,7 @@
 
 # Screen stopped updating? Rescue (English)
 
-This page applies to X3. The X4 rescue procedure is still being prepared.
+This page applies to the X3.
 
 If the screen stopped updating after you flashed 1.x, you can **blind-flash directly to 2.0**. You do not need to return to the stock firmware first.
 

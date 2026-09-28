@@ -13,7 +13,7 @@
 
 ## 步驟 1：刷機
 
-1. 下載 `update.bin`：X3 用[正式版](https://github.com/anki630/crossmosa/releases/latest)，X4 用[測試版](https://github.com/anki630/crossmosa/releases/tag/v2.1.0-beta.5)。
+1. 下載 `update.bin`。建議用 [Beta 版](https://github.com/anki630/crossmosa/releases/tag/v2.1.0-beta.5)，X3、X4 都能用；X3 也可以用[正式版](https://github.com/anki630/crossmosa/releases/latest)。
 2. 把 `update.bin` 放進 SD 卡最外層，檔名不要改。瀏覽器重複下載時會存成 `update (1).bin`，那樣不行。
 3. SD 卡插回機器。關機後，按住下面兩顆鍵開機，看到載入畫面就放手：
    - **X3**：左側的上一頁鍵＋電源鍵
@@ -30,7 +30,7 @@
 **用 X4 的話**
 
 - X4 的硬體不支援時鐘和傾斜翻頁。
-- [救援步驟](rescue.md)目前只適用 X3，X4 的還在整理。
+- [救援步驟](rescue.md)目前只適用 X3。
 
 <details>
 <summary>其他刷法：機器接得上電腦的話</summary>
@@ -115,7 +115,7 @@ Install CrossMosa on your X3 or X4. It takes three steps and about ten minutes w
 
 ## Step 1: Flash the firmware
 
-1. Download `update.bin`: use the [stable release](https://github.com/anki630/crossmosa/releases/latest) for X3 or the [beta release](https://github.com/anki630/crossmosa/releases/tag/v2.1.0-beta.5) for X4.
+1. Download `update.bin`. We recommend the [beta](https://github.com/anki630/crossmosa/releases/tag/v2.1.0-beta.5), which works on both the X3 and X4; on an X3, you can also use the [stable release](https://github.com/anki630/crossmosa/releases/latest).
 2. Put `update.bin` in the root of the SD card. Do not rename it. A browser may save a repeated download as `update (1).bin`, which will not work.
 3. Put the SD card back in the device. Turn the device off, then hold the following two keys while turning it on. Release them when the loading screen appears:
    - **X3:** the previous-page key on the left edge + power button
@@ -133,7 +133,7 @@ This method does not require connecting the device to a computer. It also works 
 **If you use an X4**
 
 - X4 hardware does not support the clock or tilt page turning.
-- The [rescue procedure](rescue.md#screen-stopped-updating-rescue-english) currently applies only to X3. The X4 procedure is still being prepared.
+- The [rescue procedure](rescue.md#screen-stopped-updating-rescue-english) currently applies only to the X3.
 
 <details>
 <summary>Other methods: if the device can connect to a computer</summary>
