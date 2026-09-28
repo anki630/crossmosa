@@ -392,8 +392,8 @@ void BaseTheme::drawHeader(const GfxRenderer& renderer, Rect rect, const char* t
     int truncatedSubtitleWidth = renderer.getTextWidth(UI_10_FONT_ID, truncatedSubtitle.c_str());
     // 底部右側副標（Classic 設計）；由螢幕高推導而非寫死 y=738——原值在直向會壓進按鈕提示區、
     // 橫向（高 528）則整個超出畫面被裁掉（v38 頁碼副標複查抓到）
-    const int subY = renderer.getScreenHeight() - BaseMetrics::values.buttonHintsHeight -
-                     renderer.getLineHeight(UI_10_FONT_ID);
+    const int subY =
+        renderer.getScreenHeight() - BaseMetrics::values.buttonHintsHeight - renderer.getLineHeight(UI_10_FONT_ID);
     renderer.drawText(UI_10_FONT_ID,
                       rect.x + rect.width - BaseMetrics::values.contentSidePadding - truncatedSubtitleWidth, subY,
                       truncatedSubtitle.c_str(), true);

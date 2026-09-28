@@ -1,7 +1,5 @@
 #include "GfxRenderer.h"
 
-#include "../Epub/Epub/VerticalText.h"  // 直排西文的座標映射（與桌面測試共用同一份）
-
 #include <BidiUtils.h>
 #include <BuildScratch.h>
 #include <FontDecompressor.h>
@@ -13,6 +11,7 @@
 #include <algorithm>
 #include <cmath>
 
+#include "../Epub/Epub/VerticalText.h"  // 直排西文的座標映射（與桌面測試共用同一份）
 #include "FontCacheManager.h"
 
 namespace {
@@ -128,16 +127,16 @@ void GfxRenderer::ensureSdCardFontReady(int fontId, const std::deque<std::string
 }
 
 void GfxRenderer::ensureSdCardFontReady(int fontId, const std::deque<std::string>& words,
-                                        const std::vector<EpdFontFamily::Style>& wordStyles,
-                                        const bool includeHyphen, bool (*cpFilter)(uint32_t)) const {
+                                        const std::vector<EpdFontFamily::Style>& wordStyles, const bool includeHyphen,
+                                        bool (*cpFilter)(uint32_t)) const {
   auto it = sdCardFonts_.find(fontId);
   if (it != sdCardFonts_.end()) {
     std::string shaped;
     for (const auto& w : words) {
       appendShapedRtlTokens(w.c_str(), shaped);
     }
-    int missed = it->second->buildAdvanceTable(words, wordStyles, includeHyphen, shaped.empty() ? nullptr : shaped.c_str(),
-                                               cpFilter);
+    int missed = it->second->buildAdvanceTable(words, wordStyles, includeHyphen,
+                                               shaped.empty() ? nullptr : shaped.c_str(), cpFilter);
     if (missed > 0) {
       LOG_DBG("GFX", "ensureSdCardFontReady: %d glyph(s) not found", missed);
     }
@@ -1488,7 +1487,8 @@ void GfxRenderer::drawImage(const uint8_t bitmap[], const int x, const int y, co
 
 void GfxRenderer::drawImageGray(const uint8_t data[], const int x, const int y, const int width,
                                 const int height) const {
-  // v34/v155（搬自舊樹）：BW 模式把所有非白像素畫黑（新樹的灰階標記介面不同，開機/待機只走 BW 單趟，v36 的取捨本來就是如此）。
+  // v34/v155（搬自舊樹）：BW 模式把所有非白像素畫黑（新樹的灰階標記介面不同，開機/待機只走 BW 單趟，v36
+  // 的取捨本來就是如此）。
   const int rowStride = (width + 3) / 4;
   for (int imgY = 0; imgY < height; imgY++) {
     const int screenY = y + imgY;
@@ -2136,7 +2136,8 @@ bool GfxRenderer::copyBufferToRegion(int lx, int ly, int lw, int lh, const uint8
 // 於是首行縮排（3 個空白寬）、字間距會隨「這一章表裡剛好有沒有 ' '」變動（換章清表、段落的字重遮罩、
 // v253 起的跨章保留都會改變它）。改成與 getTextAdvanceX 同一條規則：查不到就讀字形紀錄。
 // 之後表裡放了什麼只影響速度、不影響排版結果。
-int32_t GfxRenderer::sdSpaceAdvanceFP(const SdCardFont& sdFont, const int fontId, const EpdFontFamily::Style style) const {
+int32_t GfxRenderer::sdSpaceAdvanceFP(const SdCardFont& sdFont, const int fontId,
+                                      const EpdFontFamily::Style style) const {
   int32_t advFP = sdFont.getAdvance(' ', resolveSdCardStyle(sdFont, style));
   if (advFP == 0) {
     const auto fontIt = fontMap.find(fontId);

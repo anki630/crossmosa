@@ -1,10 +1,10 @@
 #pragma once
 #include <ArduinoJson.h>
-#include <cstdio>
 #include <DataDir.h>
 #include <PersistableStore.h>
 
 #include <cstdint>
+#include <cstdio>
 #include <string>
 
 // Document matching method for KOReader sync

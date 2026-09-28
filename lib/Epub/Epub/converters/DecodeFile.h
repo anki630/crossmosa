@@ -44,7 +44,8 @@ inline bool verifyActiveDecodeSourceComplete() {
 }
 
 // v248：ImageBlock 在呼叫 decodeToFramebuffer 之前設、之後清。設著的時候，解碼器的開檔回呼不開 SD 上的檔名，
-// 改開這本書裡的 src 項目。只有 JPEG／PNG 的轉換器走 openDecodeFile；其他格式看不到這個請求（照舊開檔 → 失敗 → 退回抽圖）。
+// 改開這本書裡的 src 項目。只有 JPEG／PNG 的轉換器走 openDecodeFile；其他格式看不到這個請求（照舊開檔 → 失敗 →
+// 退回抽圖）。
 using DecodeStreamOpenFn = bool (*)(void* ctx, const char* src, ZipEntryReader& reader, size_t readBufSize);
 struct DecodeStreamRequest {
   DecodeStreamOpenFn open = nullptr;
@@ -62,8 +63,9 @@ inline DecodeFile* openDecodeFile(const char* tag, const char* filename, int32_t
   }
   size_t fileSize = 0;
   if (g_decodeStreamRequest.open) {
-    // 壓縮讀取緩衝最多 8KB（與抽圖時相同；v250 起配不到會減半）。inflate 狀態＋視窗約 41KB 在這裡配 —— 解碼器自己的大塊已經先配好了
-    // （JPEGDEC 物件、PNG 的三塊都在 open() 之前），配不到就讓這次 open 失敗、呼叫端退回抽到 SD。
+    // 壓縮讀取緩衝最多 8KB（與抽圖時相同；v250 起配不到會減半）。inflate 狀態＋視窗約 41KB 在這裡配 ——
+    // 解碼器自己的大塊已經先配好了 （JPEGDEC 物件、PNG 的三塊都在 open() 之前），配不到就讓這次 open
+    // 失敗、呼叫端退回抽到 SD。
     if (!g_decodeStreamRequest.open(g_decodeStreamRequest.ctx, g_decodeStreamRequest.src, d->zip, 8 * 1024)) {
       g_decodeStats.streamOpenFailed = 1;
       delete d;

@@ -1,7 +1,5 @@
 #include "ScreenshotUtil.h"
 
-#include "DiagLog.h"
-
 #include <Arduino.h>
 #include <BitmapHelpers.h>
 #include <FsHelpers.h>
@@ -15,6 +13,7 @@
 
 #include "Bitmap.h"  // Required for BmpHeader struct definition
 #include "CrossPointSettings.h"
+#include "DiagLog.h"
 #include "activities/Activity.h"
 
 // v275：檔名的時間戳從「開機毫秒」改成「時分-毫秒後三位」。
@@ -91,8 +90,8 @@ void ScreenshotUtil::buildFilename(const ScreenshotInfo& info, char* buf, size_t
     snprintf(buf, bufSize, "/screenshots/%s/%s_sp%d_p%d_%dpct_%s.bmp", sanitizedTitle, sanitizedTitle, chapterNum,
              info.currentPage, pct, stamp);
   } else {
-    snprintf(buf, bufSize, "/screenshots/%s/%s_p%d_%dpct_%s.bmp", sanitizedTitle, sanitizedTitle, info.currentPage,
-             pct, stamp);
+    snprintf(buf, bufSize, "/screenshots/%s/%s_p%d_%dpct_%s.bmp", sanitizedTitle, sanitizedTitle, info.currentPage, pct,
+             stamp);
   }
 
   // Truncate title if total path exceeds FAT32 limit
@@ -171,8 +170,8 @@ static void flatFallbackPath(char* buf, size_t bufSize) {
   snprintf(buf, bufSize, "/screenshot-%lu.bmp", static_cast<unsigned long>(millis()));
 }
 
-bool ScreenshotUtil::saveFramebufferAsBmp(const char* filename, const uint8_t* framebuffer, int width,
-                                          int height, const bool allowFallback) {
+bool ScreenshotUtil::saveFramebufferAsBmp(const char* filename, const uint8_t* framebuffer, int width, int height,
+                                          const bool allowFallback) {
   if (!framebuffer) {
     return false;
   }
@@ -186,8 +185,7 @@ bool ScreenshotUtil::saveFramebufferAsBmp(const char* filename, const uint8_t* f
   const std::string path(filename);
   const size_t last_slash = path.find_last_of('/');
   if (last_slash != std::string::npos) {
-    for (size_t pos = path.find('/', 1); pos != std::string::npos && pos <= last_slash;
-         pos = path.find('/', pos + 1)) {
+    for (size_t pos = path.find('/', 1); pos != std::string::npos && pos <= last_slash; pos = path.find('/', pos + 1)) {
       const std::string dir = path.substr(0, pos);
       if (!dir.empty() && !Storage.exists(dir.c_str()) && !Storage.mkdir(dir.c_str())) {
         // ⚠️ 失敗必須看得見：這台沒有序列埠，LOG_ERR 等於丟掉，

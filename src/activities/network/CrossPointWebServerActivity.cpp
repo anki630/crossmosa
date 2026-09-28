@@ -1,5 +1,3 @@
-#include "SdCardFontSystem.h"
-#include "util/DiagLog.h"
 #include "CrossPointWebServerActivity.h"
 
 #include <DNSServer.h>
@@ -12,19 +10,21 @@
 
 #include "MappedInputManager.h"
 #include "NetworkModeSelectionActivity.h"
+#include "SdCardFontSystem.h"
 #include "SilentRestart.h"
 #include "WifiSelectionActivity.h"
 #include "activities/network/CalibreConnectActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "util/DiagLog.h"
 #include "util/QrUtils.h"
 #include "util/TaskWatchdog.h"
 
 namespace {
 // AP Mode configuration
 constexpr const char* AP_SSID = "CrossMosa-Reader";  // v34/v155 品牌
-constexpr const char* AP_PASSWORD = nullptr;  // Open network for ease of use
-constexpr const char* AP_HOSTNAME = "crossmosa";  // v34/v155：mDNS = crossmosa.local
+constexpr const char* AP_PASSWORD = nullptr;         // Open network for ease of use
+constexpr const char* AP_HOSTNAME = "crossmosa";     // v34/v155：mDNS = crossmosa.local
 constexpr uint8_t AP_CHANNEL = 1;
 constexpr uint8_t AP_MAX_CONNECTIONS = 4;
 constexpr int QR_CODE_WIDTH = 198;

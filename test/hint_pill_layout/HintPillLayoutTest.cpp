@@ -1,11 +1,11 @@
 // v335：按鍵提示膠囊寬度分配（src/components/themes/HintPillLayout.h）的主機測試。
 //   位置表與寬度照抄兩個主題（FormosaProTheme／LyraTheme::drawButtonHints），螢幕寬＝直向寬（X3 528、X4 480）。
 //   窮舉 × 不變量，再加上實機回報的那幾個字的具體數字（2026-09-23 從 ubuntu_10 glyph 表量的）。
-#include "src/components/themes/HintPillLayout.h"
-
 #include <gtest/gtest.h>
 
 #include <string>
+
+#include "src/components/themes/HintPillLayout.h"
 
 namespace {
 

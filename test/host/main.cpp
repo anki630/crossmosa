@@ -16,13 +16,13 @@
 //
 // Usage: ./smbhost [port]   (default 4450 -- unprivileged, no root needed)
 
-#include "SmbServer.h"
-
 #include <HalStorage.h>
+#include <unistd.h>
 
 #include <cstdio>
 #include <cstdlib>
-#include <unistd.h>
+
+#include "SmbServer.h"
 
 int main(int argc, char** argv) {
   uint16_t port = 4450;

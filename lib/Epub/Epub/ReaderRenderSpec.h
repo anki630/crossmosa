@@ -31,11 +31,14 @@ struct ReaderRenderSpec {
   bool verticalLayout = false;
   uint8_t columnPitchTier = 1;  // 0=緊 1.35em／1=標準 1.50em／2=寬 1.75em
   // 注音（P2）：0 ＝ 非注音字型（章節檔頭照舊存 fontId，逐位元組不變）；非 0 ＝ 注音字型的引擎身分
-  //   （zhuyin::engineIdentity(資料集, 開／關)）。章節檔頭存 sectionIdentity(fontId, 它)；非 0 也表示字形是 1.5 em 的注音格（直排欄距）。
+  //   （zhuyin::engineIdentity(資料集, 開／關)）。章節檔頭存 sectionIdentity(fontId, 它)；非 0 也表示字形是 1.5 em
+  //   的注音格（直排欄距）。
   uint32_t zhuyinIdentity = 0;
-  // 同一個字型「引擎沒開」時的身分（非注音字型為 0）：建置途中降級、或開始時引擎就不在 → 章節檔頭補成這個（codex 修訂 2）
+  // 同一個字型「引擎沒開」時的身分（非注音字型為 0）：建置途中降級、或開始時引擎就不在 → 章節檔頭補成這個（codex 修訂
+  // 2）
   uint32_t zhuyinOffIdentity = 0;
-  // 同一個字型「引擎開著」時的身分（非注音字型為 0）：引擎暫時不在時，「開」建的章節照樣可以用（zhuyin::sectionIdentityAccepted）
+  // 同一個字型「引擎開著」時的身分（非注音字型為
+  // 0）：引擎暫時不在時，「開」建的章節照樣可以用（zhuyin::sectionIdentityAccepted）
   uint32_t zhuyinOnIdentity = 0;
   // ℹ️ v271 曾有 `hangMarginPx`（行尾懸掛可吊進頁邊多少），v273 隨橫排懸掛一起移除。
   //    約物擠壓在行內進行，不需要任何頁邊參數 —— 不要為了它再把設定送進排版引擎。

@@ -1,7 +1,6 @@
 #include "TextSettingsActivity.h"
 
 #include <Epub/ParsedText.h>
-
 #include <GfxRenderer.h>
 #include <I18n.h>
 
@@ -274,7 +273,7 @@ void TextSettingsActivity::render(RenderLock&&) {
       constexpr int LAYOUT_ROWS = static_cast<int>(LayoutRow::Count);
       static constexpr StrId ROW_NAME_IDS[LAYOUT_ROWS] = {StrId::STR_TEXT_DIRECTION, StrId::STR_LINE_SPACING,
                                                           StrId::STR_COLUMN_SPACING, StrId::STR_EXTRA_SPACING,
-                                                          StrId::STR_ALIGNMENT, StrId::STR_SCREEN_MARGIN};
+                                                          StrId::STR_ALIGNMENT,      StrId::STR_SCREEN_MARGIN};
       GUI.drawList(
           renderer, listRect, LAYOUT_ROWS, selectedItem,
           [](int index) { return std::string(I18N.get(ROW_NAME_IDS[index])); }, nullptr, nullptr,
@@ -415,8 +414,8 @@ void TextSettingsActivity::confirmLayoutRow(int row) {
       requestUpdate();
       break;
     case LayoutRow::TextDirection:
-      optionPopup_.show(StrId::STR_TEXT_DIRECTION, TEXT_DIRECTION_IDS,
-                        static_cast<int>(std::size(TEXT_DIRECTION_IDS)), SETTINGS.readerVerticalLayout, [](int idx) {
+      optionPopup_.show(StrId::STR_TEXT_DIRECTION, TEXT_DIRECTION_IDS, static_cast<int>(std::size(TEXT_DIRECTION_IDS)),
+                        SETTINGS.readerVerticalLayout, [](int idx) {
                           SETTINGS.readerVerticalLayout = static_cast<uint8_t>(idx);
                           SETTINGS.saveToFile();
                         });

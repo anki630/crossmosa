@@ -1,7 +1,7 @@
 #include "Dictionary.h"
-#include <DataDir.h>
 
 #include <Arduino.h>
+#include <DataDir.h>
 #include <Logging.h>
 #include <Memory.h>
 

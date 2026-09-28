@@ -1,8 +1,8 @@
 #pragma once
 
-#include "components/themes/BaseTheme.h"
-
 #include <string>
+
+#include "components/themes/BaseTheme.h"
 
 class GfxRenderer;
 

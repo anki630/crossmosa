@@ -104,8 +104,9 @@ class ParsedText {
                               const std::vector<uint16_t>& unitByteLen, const std::vector<uint16_t>& columnStarts,
                               size_t columnCount, size_t unitCount);
   void zhuyinAbandon();  // 字詞被整批丟掉（直排的 bail）：佇列裡那些字不會再有人取 → 這一段之後不標
-  // 一行要了清單、TextBlock 卻因為配不到而沒掛上（SwapStats::listOom 在建構時加一）→ 這一段記成降級（章節提交成「沒注音」、
-  // 之後記憶體夠時重排），但不停止：後面的行照常標（codex 整合複查 A1：否則那一行在「開」的快取裡永遠沒有注音）。
+  // 一行要了清單、TextBlock 卻因為配不到而沒掛上（SwapStats::listOom 在建構時加一）→
+  // 這一段記成降級（章節提交成「沒注音」、 之後記憶體夠時重排），但不停止：後面的行照常標（codex 整合複查
+  // A1：否則那一行在「開」的快取裡永遠沒有注音）。
   void zhuyinNoteBuilt(const zhuyin::SwapBatch& requested, uint32_t listOomBefore);
   bool zhuyinTake(uint32_t cp, uint16_t* out);
   // 一行（或一欄）照順序的每個漢字拿讀音、組清單（放在引擎的緩衝裡，建 TextBlock 之前用完）。
@@ -141,7 +142,7 @@ class ParsedText {
   //   （beginParse），空區塊之後會被第一個段落重用、不會再 enableZhuyin → 認到標記的當下要補設給當前這一個。
   void setZhuyinDocAnnotated(bool on);
   void useZhuyinCursor(zhuyin::ZhuyinTxtCursor* cursor, int fontId, uint32_t generation);
-  bool zhuyinActive() const;  // 這一段還在標注（排版端用它把軟性分批壓到 200 詞）
+  bool zhuyinActive() const;    // 這一段還在標注（排版端用它把軟性分批壓到 200 詞）
   bool zhuyinDegraded() const;  // 這一段因資源或 I/O 停止標注、或有一行的清單配不到（章節身分要寫「沒注音」）
   // 排版端每加一個字詞問一次：session 佇列裡等著被取出的漢字超過這個數 → 現在就排一批（軟性分批，不含最後一行）。
   // 真正的上界靠這個，不靠字詞數：一個字詞可以有好幾個漢字、一次字元回呼可以進好幾百個（codex 整合複查 A2）。

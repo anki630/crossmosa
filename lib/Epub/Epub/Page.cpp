@@ -6,7 +6,6 @@
 #include <Logging.h>
 #include <Serialization.h>
 #include <ZhuyinActive.h>
-
 #include <esp_heap_caps.h>
 
 #include <cstdio>
@@ -318,7 +317,8 @@ std::unique_ptr<Page> Page::deserialize(HalFile& file, const zhuyin::PagePlace& 
                          static_cast<size_t>(fnCount) * sizeof(FootnoteEntry) + 1024) {
     LOG_ERR("PGE", "Skipping %u footnotes (low memory)", fnCount);
     Page::footnoteDrops = static_cast<uint16_t>(Page::footnoteDrops + fnCount);
-    file.seekCur(static_cast<int64_t>(fnCount) * static_cast<int64_t>(sizeof(FootnoteEntry::number) + sizeof(FootnoteEntry::href)));
+    file.seekCur(static_cast<int64_t>(fnCount) *
+                 static_cast<int64_t>(sizeof(FootnoteEntry::number) + sizeof(FootnoteEntry::href)));
     return page;
   }
   page->footnotes.resize(fnCount);

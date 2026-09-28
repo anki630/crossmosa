@@ -86,7 +86,9 @@ bool getBlob(const char* key, void* data, size_t* lenInOut, int* errOut) {
 }
 
 // v332：型別化入口。
-bool putState(const StateBlob& b, uint32_t* usOut, int* errOut) { return putBlob("state", &b, sizeof(b), usOut, errOut); }
+bool putState(const StateBlob& b, uint32_t* usOut, int* errOut) {
+  return putBlob("state", &b, sizeof(b), usOut, errOut);
+}
 
 bool readState(StateBlob* out, int* errOut) {
   StateBlob b{};
@@ -95,7 +97,9 @@ bool readState(StateBlob* out, int* errOut) {
   if (len != sizeof(b) || b.magic != 'S' || b.version != 2) {
     // 長度／magic／版本不合：當成沒有（呼叫端走 SD）。v1（v331 的影子）刻意不採信：它沒有配對資訊。
     if (errOut)
-      *errOut = len != sizeof(b) ? ESP_ERR_NVS_INVALID_LENGTH : b.magic != 'S' ? ESP_ERR_INVALID_STATE : ESP_ERR_INVALID_VERSION;
+      *errOut = len != sizeof(b) ? ESP_ERR_NVS_INVALID_LENGTH
+                : b.magic != 'S' ? ESP_ERR_INVALID_STATE
+                                 : ESP_ERR_INVALID_VERSION;
     return false;
   }
   b.path[sizeof(b.path) - 1] = '\0';
@@ -111,7 +115,9 @@ bool readProg(ProgBlob* out, int* errOut) {
   if (!getBlob("prog", &b, &len, errOut)) return false;
   if (len != sizeof(b) || b.magic != 'P' || b.version != 2) {
     if (errOut)
-      *errOut = len != sizeof(b) ? ESP_ERR_NVS_INVALID_LENGTH : b.magic != 'P' ? ESP_ERR_INVALID_STATE : ESP_ERR_INVALID_VERSION;
+      *errOut = len != sizeof(b) ? ESP_ERR_NVS_INVALID_LENGTH
+                : b.magic != 'P' ? ESP_ERR_INVALID_STATE
+                                 : ESP_ERR_INVALID_VERSION;
     return false;
   }
   *out = b;

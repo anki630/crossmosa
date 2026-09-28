@@ -69,10 +69,10 @@ void Lyra3CoversTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect, con
 
         if (!hasCover) {
           // v175（使用者的設計稿）：沒有封面（txt、封面缺失、尚未產生）一律畫「書名幾何封面」。
-          LyraTheme::drawTitleCoverPlaceholder(
-              renderer, tileX + hPaddingInSelection, tileY + hPaddingInSelection, tileWidth - 2 * hPaddingInSelection,
-              Lyra3CoversMetrics::values.homeCoverHeight,
-              LyraTheme::displayTitleFor(recentBooks[i].title, recentBooks[i].path));
+          LyraTheme::drawTitleCoverPlaceholder(renderer, tileX + hPaddingInSelection, tileY + hPaddingInSelection,
+                                               tileWidth - 2 * hPaddingInSelection,
+                                               Lyra3CoversMetrics::values.homeCoverHeight,
+                                               LyraTheme::displayTitleFor(recentBooks[i].title, recentBooks[i].path));
         }
 
         // v168（使用者拍板）：進度徽章畫在封面右下角 —— 白底黑字＋1px 框（蓋在封面上
@@ -127,7 +127,6 @@ void Lyra3CoversTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect, con
         renderer.drawText(UI_10_FONT_ID, tileX + hPaddingInSelection, currentY, line.c_str(), true);
         currentY += titleLineHeight;
       }
-
     }
   } else {
     drawEmptyRecents(renderer, rect);

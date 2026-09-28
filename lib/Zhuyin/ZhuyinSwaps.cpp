@@ -73,11 +73,15 @@ void encodeBinding(const SwapBinding& b, uint8_t out[kSwapBindingBytes]) {
 }
 
 uint16_t swapCrcBegin(const uint8_t binding[kSwapBindingBytes], const uint16_t n, const uint16_t words,
-                      const uint8_t focusFlag, const uint16_t textBytes, const uint8_t* arena, const size_t arenaBytes) {
+                      const uint8_t focusFlag, const uint16_t textBytes, const uint8_t* arena,
+                      const size_t arenaBytes) {
   uint16_t c = crc16(binding, kSwapBindingBytes);
-  const uint8_t head[7] = {static_cast<uint8_t>(n),         static_cast<uint8_t>(n >> 8),
-                           static_cast<uint8_t>(words),     static_cast<uint8_t>(words >> 8),
-                           focusFlag,                       static_cast<uint8_t>(textBytes),
+  const uint8_t head[7] = {static_cast<uint8_t>(n),
+                           static_cast<uint8_t>(n >> 8),
+                           static_cast<uint8_t>(words),
+                           static_cast<uint8_t>(words >> 8),
+                           focusFlag,
+                           static_cast<uint8_t>(textBytes),
                            static_cast<uint8_t>(textBytes >> 8)};
   c = crc16(head, sizeof(head), c);
   if (arena && arenaBytes) c = crc16(arena, arenaBytes, c);

@@ -12,8 +12,8 @@ const char* activeDir = NEW_DIR;
 DataDir::Outcome outcome_ = DataDir::Outcome::Unresolved;
 bool stubWasRemoved_ = false;
 
-constexpr const char* SENTINELS[] = {"state.json",   "settings.json", "recent.json", "wifi.json",
-                                     "opds.json",    "state.bin",     "settings.bin"};
+constexpr const char* SENTINELS[] = {"state.json", "settings.json", "recent.json", "wifi.json",
+                                     "opds.json",  "state.bin",     "settings.bin"};
 
 // ⚠️ No "which dir is newer" heuristic on purpose (v186 review)：v194 起時鐘已知
 // 才會掛 FsDateTime callback，我們寫的檔才有真實時戳；但目錄誰贏仍不看 FAT 時間
@@ -94,7 +94,9 @@ void resolve() {
       // entries can alias the same FAT clusters, so touching one could corrupt
       // the other. Needs a PC disk check before manual cleanup; to prefer the
       // legacy data instead, remove /.crossmosa on a PC and reboot (migrates).
-      LOG_ERR("MAIN", "Both %s and %s exist; using %s (data written by other-firmware sessions stays in %s — do not delete it from the device)",
+      LOG_ERR("MAIN",
+              "Both %s and %s exist; using %s (data written by other-firmware sessions stays in %s — do not delete it "
+              "from the device)",
               NEW_DIR, LEGACY_DIR, NEW_DIR, LEGACY_DIR);
       activeDir = NEW_DIR;
       outcome_ = Outcome::BothNewWins;
@@ -175,16 +177,26 @@ Outcome outcome() { return outcome_; }
 
 const char* outcomeName() {
   switch (outcome_) {
-    case Outcome::Unresolved: return "unresolved";
-    case Outcome::Fresh: return "fresh";
-    case Outcome::AlreadyNew: return "already-new";
-    case Outcome::Migrated: return "migrated";
-    case Outcome::MigrationFailed: return "rename-failed-legacy";
-    case Outcome::StubRemoved: return "stub-removed";
-    case Outcome::StubBlocked: return "stub-blocked-legacy";
-    case Outcome::StubBlockedNew: return "stub-blocked-new";
-    case Outcome::BothNewWins: return "both-new-wins";
-    case Outcome::LegacyEmpty: return "legacy-empty";
+    case Outcome::Unresolved:
+      return "unresolved";
+    case Outcome::Fresh:
+      return "fresh";
+    case Outcome::AlreadyNew:
+      return "already-new";
+    case Outcome::Migrated:
+      return "migrated";
+    case Outcome::MigrationFailed:
+      return "rename-failed-legacy";
+    case Outcome::StubRemoved:
+      return "stub-removed";
+    case Outcome::StubBlocked:
+      return "stub-blocked-legacy";
+    case Outcome::StubBlockedNew:
+      return "stub-blocked-new";
+    case Outcome::BothNewWins:
+      return "both-new-wins";
+    case Outcome::LegacyEmpty:
+      return "legacy-empty";
   }
   return "?";
 }
@@ -209,8 +221,10 @@ bool existedAtResolve() {
   switch (outcome_) {
     case Outcome::AlreadyNew:
     case Outcome::Migrated:
-    case Outcome::BothNewWins: return true;
-    default: return false;
+    case Outcome::BothNewWins:
+      return true;
+    default:
+      return false;
   }
 }
 

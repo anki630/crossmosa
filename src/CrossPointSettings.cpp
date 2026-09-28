@@ -1,9 +1,9 @@
 #include "CrossPointSettings.h"
 
+#include <Epub/VerticalText.h>  // v284：行距與直排欄距共用 COLUMN_PITCH_* 三個常數
 #include <I18n.h>
 #include <Logging.h>
 #include <ObfuscationUtils.h>
-#include <Epub/VerticalText.h>  // v284：行距與直排欄距共用 COLUMN_PITCH_* 三個常數
 
 #include <algorithm>
 #include <cstring>
@@ -89,7 +89,7 @@ void CrossPointSettings::toJson(JsonDocument& doc) const {
   // 本專案踩過三次同型（v52 uiTheme、v53、v57 tiltPageTurn）：
   // 【getter 型 / DynamicEnum / 條件式插入】的設定一律要手動加存讀條目。
   doc["tiltPageTurn"] = tiltPageTurn;
-  doc["uiThemeSchema"] = 2;  // v184：介面主題枚舉版本（LYRA=0／EXTENDED=1／PRO=2）
+  doc["uiThemeSchema"] = 2;     // v184：介面主題枚舉版本（LYRA=0／EXTENDED=1／PRO=2）
   doc["sideButtonSchema"] = 1;  // v228：側鍵配置已遷移過（見 loadFromFile）
 
   // Front button remap — managed by RemapFrontButtons sub-activity, not in SettingsList.
@@ -232,9 +232,8 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
   //   ⚠️ 這個 key 名不要重用。
   {
     const auto rawSleepScreen = doc["sleepScreen"];
-    if (!rawSleepScreen.isNull() &&
-        (!rawSleepScreen.is<int>() || rawSleepScreen.as<int>() < 0 ||
-         rawSleepScreen.as<int>() >= static_cast<int>(SLEEP_SCREEN_MODE_COUNT)))
+    if (!rawSleepScreen.isNull() && (!rawSleepScreen.is<int>() || rawSleepScreen.as<int>() < 0 ||
+                                     rawSleepScreen.as<int>() >= static_cast<int>(SLEEP_SCREEN_MODE_COUNT)))
       needsResave = true;
   }
 
@@ -334,7 +333,8 @@ ReaderRenderSpec CrossPointSettings::readerRenderSpec(const uint16_t viewportWid
   spec.verticalLayout = documentIsVertical();
   spec.columnPitchTier = readerColumnPitch;
   if (zhuyinSpecResolver) {
-    zhuyinSpecResolver(zhuyinSpecCtx, spec.fontId, &spec.zhuyinIdentity, &spec.zhuyinOffIdentity, &spec.zhuyinOnIdentity);
+    zhuyinSpecResolver(zhuyinSpecCtx, spec.fontId, &spec.zhuyinIdentity, &spec.zhuyinOffIdentity,
+                       &spec.zhuyinOnIdentity);
   }
   return spec;
 }

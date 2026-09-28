@@ -20,9 +20,9 @@ class ImageBlock final : public Block {
   // v246 儀器：每次真的解碼一張圖（快取未命中）就寫一行時間分解，reader 的 loop 讀走印成 IMGDEC。
   // 先到先得（同 lastFailPath）：同一頁的第二張圖不覆寫第一張。
   static char lastDecodeWitness[300];  // v247：200→300（加了抽圖分解 z*= 與 ra=）
-  // v249 儀器：一次頁面繪製內，像素快取（.pxc）的 RAM slot 與 SD 串流用量。reader 在 renderContents 結束時印 PXCSLOT 並歸零。
-  // slot 同一時間只給一張圖（先到先得）；total／loaded／ram／sd 講的是【那一張】，other 是同頁其他圖整張從 SD 串流的量
-  // （codex 複查：混在一起，多圖頁的一行會看起來像在描述同一張圖）。
+  // v249 儀器：一次頁面繪製內，像素快取（.pxc）的 RAM slot 與 SD 串流用量。reader 在 renderContents 結束時印 PXCSLOT
+  // 並歸零。 slot 同一時間只給一張圖（先到先得）；total／loaded／ram／sd 講的是【那一張】，other 是同頁其他圖整張從 SD
+  // 串流的量 （codex 複查：混在一起，多圖頁的一行會看起來像在描述同一張圖）。
   struct PxcStats {
     uint32_t totalBytes = 0;   // 最後一張試著載入 slot 的圖的快取大小
     uint32_t loadedBytes = 0;  // 載進 RAM 的量（部分載入時 < total；完全放不下 0）

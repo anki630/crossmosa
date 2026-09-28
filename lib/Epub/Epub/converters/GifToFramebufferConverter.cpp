@@ -32,7 +32,7 @@ struct GifContext {
   int lastDstY{-1};
 
   // 交錯 GIF 的行序非循序：關快取（.pxc 的單列帶只能往下捲）、關 lastDstY 去重
-  //（去重假設行序遞增，交錯下會把後到的行整批丟掉）。framebuffer 本身可隨機寫，畫面正確。
+  // （去重假設行序遞增，交錯下會把後到的行整批丟掉）。framebuffer 本身可隨機寫，畫面正確。
   bool interlaced{false};
 
   PixelCache cache;

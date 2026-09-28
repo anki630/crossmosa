@@ -51,7 +51,8 @@ struct PagePlace {
 };
 
 // 章節檔每一行存的綁定（codex 複查 ③ F4、F12）：這份清單是哪個資料集、哪個語意版號、哪個字型、哪一頁算的。
-// 載入時必須跟目前的引擎與要載入的位置完全相同 —— 章節檔頭那一格 32 位元的身分只決定「要不要重排」，讀音能不能用由這裡決定。
+// 載入時必須跟目前的引擎與要載入的位置完全相同 —— 章節檔頭那一格 32
+// 位元的身分只決定「要不要重排」，讀音能不能用由這裡決定。
 struct SwapBinding {
   uint64_t dataset = 0;
   uint16_t semantics = 0;
@@ -69,9 +70,9 @@ struct LineText {
   uint16_t textBytes = 0;
 };
 
-constexpr uint16_t kMaxLineSwaps = 255;       // 一行最多幾筆（一行的漢字遠少於此）
-constexpr size_t kMaxLineArenaBytes = 2048;   // TextBlock arena＋替換清單 ≤ 2 KB，超過就這一行不換（不變量 4）
-constexpr size_t kSwapDiskBytes = 5;          // 章節檔裡每一筆：u16 word、u8 cp、u16 pua（小端序）
+constexpr uint16_t kMaxLineSwaps = 255;      // 一行最多幾筆（一行的漢字遠少於此）
+constexpr size_t kMaxLineArenaBytes = 2048;  // TextBlock arena＋替換清單 ≤ 2 KB，超過就這一行不換（不變量 4）
+constexpr size_t kSwapDiskBytes = 5;         // 章節檔裡每一筆：u16 word、u8 cp、u16 pua（小端序）
 
 enum class SwapCheck : uint8_t {
   Ok = 0,
@@ -101,9 +102,9 @@ uint16_t swapCrcBegin(const uint8_t binding[kSwapBindingBytes], uint16_t n, uint
 void encodeSwap(const Swap& s, uint8_t rec[kSwapDiskBytes]);
 Swap decodeSwap(const uint8_t rec[kSwapDiskBytes]);
 
-// 繪製（P2 ④）：把一個字詞的那幾筆替換套上去。word ＝ 那個字詞（len 位元組、不含 NUL），swaps ＝ 它的那幾筆（cp 嚴格遞增）。
-// 換好的字串（NUL 結尾、長度不變）寫進 out。任何一筆的位置找不到、原字不是 3 位元組的漢字、pua 不在私用區、
-// 或 out 放不下（len + 1 > cap）→ false：呼叫端畫原字（破音字不標，不會標錯）。
+// 繪製（P2 ④）：把一個字詞的那幾筆替換套上去。word ＝ 那個字詞（len 位元組、不含 NUL），swaps ＝ 它的那幾筆（cp
+// 嚴格遞增）。 換好的字串（NUL 結尾、長度不變）寫進 out。任何一筆的位置找不到、原字不是 3 位元組的漢字、pua
+// 不在私用區、 或 out 放不下（len + 1 > cap）→ false：呼叫端畫原字（破音字不標，不會標錯）。
 bool applyWordSwaps(const char* word, size_t len, const Swap* swaps, uint16_t n, char* out, size_t cap);
 
 // 繪製時的暫存（在堆疊上，每個字詞重用）：有替換的字詞實際上就是一個漢字（可能黏著標點），遠小於此；

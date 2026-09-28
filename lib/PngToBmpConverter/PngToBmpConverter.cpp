@@ -633,8 +633,7 @@ bool PngToBmpConverter::pngFileToBmpStreamInternal(HalFile& pngFile, Print& bmpO
     // v194：nothrow；配不到退回 quantize1bit，轉換繼續。
     atkinson1BitDitherer = new (std::nothrow) Atkinson1BitDitherer(outWidth);
     if (!atkinson1BitDitherer || !atkinson1BitDitherer->ok()) {
-      const size_t bytes =
-          sizeof(Atkinson1BitDitherer) + (static_cast<size_t>(outWidth) + 4) * sizeof(int16_t) * 3;
+      const size_t bytes = sizeof(Atkinson1BitDitherer) + (static_cast<size_t>(outWidth) + 4) * sizeof(int16_t) * 3;
       noteDitherAllocFail("Atkinson1BitDitherer:PngToBmp", bytes);
       delete atkinson1BitDitherer;
       atkinson1BitDitherer = nullptr;
@@ -643,8 +642,7 @@ bool PngToBmpConverter::pngFileToBmpStreamInternal(HalFile& pngFile, Print& bmpO
     if (USE_ATKINSON) {
       atkinsonDitherer = new (std::nothrow) AtkinsonDitherer(outWidth);
       if (!atkinsonDitherer || !atkinsonDitherer->ok()) {
-        const size_t bytes =
-            sizeof(AtkinsonDitherer) + (static_cast<size_t>(outWidth) + 4) * sizeof(int16_t) * 3;
+        const size_t bytes = sizeof(AtkinsonDitherer) + (static_cast<size_t>(outWidth) + 4) * sizeof(int16_t) * 3;
         noteDitherAllocFail("AtkinsonDitherer:PngToBmp", bytes);
         delete atkinsonDitherer;
         atkinsonDitherer = nullptr;
@@ -652,8 +650,7 @@ bool PngToBmpConverter::pngFileToBmpStreamInternal(HalFile& pngFile, Print& bmpO
     } else if (USE_FLOYD_STEINBERG) {
       fsDitherer = new (std::nothrow) FloydSteinbergDitherer(outWidth);
       if (!fsDitherer || !fsDitherer->ok()) {
-        const size_t bytes =
-            sizeof(FloydSteinbergDitherer) + (static_cast<size_t>(outWidth) + 2) * sizeof(int16_t) * 2;
+        const size_t bytes = sizeof(FloydSteinbergDitherer) + (static_cast<size_t>(outWidth) + 2) * sizeof(int16_t) * 2;
         noteDitherAllocFail("FloydSteinbergDitherer:PngToBmp", bytes);
         delete fsDitherer;
         fsDitherer = nullptr;

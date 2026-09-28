@@ -1,9 +1,9 @@
 #include "BenchFlags.h"
 
 #include <HalStorage.h>
+#include <strings.h>
 
 #include <cstring>
-#include <strings.h>
 
 #include "DiagLog.h"
 

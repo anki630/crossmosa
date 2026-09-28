@@ -35,16 +35,16 @@ const char* path();
 // v186: what resolve() decided, for the diag.log witness (X3 has no serial —
 // LOG_* alone would drop the single most important SD-format decision).
 enum class Outcome : uint8_t {
-  Unresolved,        // resolve() not run
-  Fresh,             // neither dir: new dir created lazily by the first save
-  AlreadyNew,        // only /.crossmosa (real dir)
-  Migrated,          // renamed /.crosspoint -> /.crossmosa this boot
-  MigrationFailed,   // rename failed: staying on /.crosspoint this session
-  StubRemoved,       // a failed-rename stub was cleared, then handled as above
-  StubBlocked,       // stub could not be cleared: staying on /.crosspoint
-  StubBlockedNew,    // only /.crossmosa exists but is an unremovable non-dir stub
-  BothNewWins,       // both real: /.crossmosa used by NAME (see .cpp — no recency on this FS)
-  LegacyEmpty,       // /.crosspoint exists but holds nothing: nothing to migrate, /.crossmosa used
+  Unresolved,       // resolve() not run
+  Fresh,            // neither dir: new dir created lazily by the first save
+  AlreadyNew,       // only /.crossmosa (real dir)
+  Migrated,         // renamed /.crosspoint -> /.crossmosa this boot
+  MigrationFailed,  // rename failed: staying on /.crosspoint this session
+  StubRemoved,      // a failed-rename stub was cleared, then handled as above
+  StubBlocked,      // stub could not be cleared: staying on /.crosspoint
+  StubBlockedNew,   // only /.crossmosa exists but is an unremovable non-dir stub
+  BothNewWins,      // both real: /.crossmosa used by NAME (see .cpp — no recency on this FS)
+  LegacyEmpty,      // /.crosspoint exists but holds nothing: nothing to migrate, /.crossmosa used
 };
 Outcome outcome();
 const char* outcomeName();

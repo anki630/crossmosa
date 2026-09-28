@@ -1,10 +1,10 @@
 #pragma once
 
-#include <atomic>
-#include <mutex>
-
 #include <Arduino.h>
 #include <Rtc.h>
+
+#include <atomic>
+#include <mutex>
 
 #include "ClockCache.h"
 
@@ -22,8 +22,10 @@ class HalClock {
   mutable uint32_t _lastPollMs = 0;
   // v343（codex 第二輪）：校時失敗後的退避（只在 RAM）。任何一次校時成功（自動或手動）就清掉。0 ＝ 沒有退避。
   std::atomic<uint32_t> _syncRetryAfterMs{0};
-  // v343（codex 第二、三輪）：校時寫入是一個交易 —— 開始寫就記「這顆晶片現在給的時間不能信」，只有「讀回可信、而且跟寫進去的
-  //   差 ≤ kSyncReadbackToleranceSec」才解除。寫到一半失敗（可能被改了一半）、讀回讀不到、讀回不合理、讀回不一致，都維持不信：
+  // v343（codex 第二、三輪）：校時寫入是一個交易 ——
+  // 開始寫就記「這顆晶片現在給的時間不能信」，只有「讀回可信、而且跟寫進去的
+  //   差 ≤
+  //   kSyncReadbackToleranceSec」才解除。寫到一半失敗（可能被改了一半）、讀回讀不到、讀回不合理、讀回不一致，都維持不信：
   //   之後讀到的合理時間也當不可信，直到下一次校時成功（持有 _mu 時讀寫；只在 RAM，重開機就重來）。
   mutable bool _chipDistrusted = false;
 
@@ -58,7 +60,8 @@ class HalClock {
   static constexpr uint32_t CLOCK_POLL_MS = 10000;  // 10 seconds
 
  public:
-  // v343（帳本 B12）：「時間可不可信」。RTC 被歸零（實機 2026-09-26：2000-01-01 00:00 ＋ 時區 +8 ＝ 狀態列永遠 08:00）時
+  // v343（帳本 B12）：「時間可不可信」。RTC 被歸零（實機 2026-09-26：2000-01-01 00:00 ＋ 時區 +8 ＝ 狀態列永遠
+  // 08:00）時
   //   SDK 的 now() 照樣回 true（它只看振盪器停止旗標），所以要自己看：年份早於 2025 或晚於 2099、或任一欄位超出範圍
   //   ＝ 沒有時間（clockcache::trusted）。Invalid ＝ 讀得到但不可信。
   enum class State : uint8_t { Absent = 0, ReadFailed = 1, Invalid = 2, Ok = 3 };

@@ -139,7 +139,7 @@ bool ZhuyinTxtCursor::next(const uint32_t cp, uint16_t* out) {
         continue;
       }
       if (pos_ >= src_.size()) return fail(TxtCursorFail::PastEof);  // 檔尾了還要字 → 排版交來的跟檔案對不上
-      session_.begin();                                             // 下一段
+      session_.begin();                                              // 下一段
       paragraphEnded_ = false;
     }
     if (!feed()) return false;  // feed 自己記了原因

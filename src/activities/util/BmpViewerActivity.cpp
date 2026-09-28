@@ -113,9 +113,9 @@ void BmpViewerActivity::onEnter() {
 
       // v335：四顆鍵都寫出做什麼（實機回報：「那 4 個按鈕可能會讓使用者不知道在幹嘛」）——
       //   原本上一張／下一張只有「<」「>」。
-      const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SET_SLEEP_COVER),
-                                                (hasPrevious ? tr(STR_PREV_IMAGE) : ""),
-                                                (hasNext ? tr(STR_NEXT_IMAGE) : ""));
+      const auto labels =
+          mappedInput.mapLabels(tr(STR_BACK), tr(STR_SET_SLEEP_COVER), (hasPrevious ? tr(STR_PREV_IMAGE) : ""),
+                                (hasNext ? tr(STR_NEXT_IMAGE) : ""));
 
       renderer.clearScreen();
       // Assuming drawBitmap defaults to 0,0 crop if omitted, or pass explicitly: drawBitmap(bitmap, x, y, pageWidth,

@@ -1,53 +1,47 @@
 #include "TxtReaderActivity.h"
 
-#include "TxtEngineLayout.h"
-
-#include "Epub/ParsedText.h"
-#include "Epub/blocks/TextBlock.h"
-#include "Epub/VerticalEm.h"
-#include "Epub/VerticalText.h"
-
-#include "ReaderFontSizes.h"
-
 #include <BidiUtils.h>
 #include <EpdFontData.h>  // v118:fp4::toPixel(單趟斷行的定點累加)
 #include <FontCacheManager.h>
 #include <GfxRenderer.h>
-
-#include <algorithm>
-#include <cstring>  // v118:memcpy
-#include <numeric>
-#include <optional>  // v121:預取讓 PrewarmScope 只在冷路徑存在(內建字型備援路徑的單碼位緩衝)
 #include <HalStorage.h>
 #include <I18n.h>
+#include <SdCardFont.h>
 #include <Serialization.h>
 #include <Utf8.h>
 #include <ZhuyinActive.h>
 #include <ZhuyinEngine.h>
 
+#include <algorithm>
 #include <cstdio>
+#include <cstring>  // v118:memcpy
+#include <numeric>
+#include <optional>  // v121:預取讓 PrewarmScope 只在冷路徑存在(內建字型備援路徑的單碼位緩衝)
 
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
+#include "Epub/ParsedText.h"
+#include "Epub/VerticalEm.h"
+#include "Epub/VerticalText.h"
+#include "Epub/blocks/TextBlock.h"
+#include "EpubReaderPercentSelectionActivity.h"
 #include "MappedInputManager.h"
 #include "ProgressFile.h"
-#include "EpubReaderPercentSelectionActivity.h"
-#include "QrDisplayActivity.h"  // v289：顯示 QR（與 EPUB 共用）
+#include "QrDisplayActivity.h"        // v289：顯示 QR（與 EPUB 共用）
 #include "ReaderBookmarksActivity.h"  // v290：與 EPUB 共用的書籤清單
-#include <SdCardFont.h>
-
-#include "SdCardFontSystem.h"
-
+#include "ReaderFontSizes.h"
 #include "ReaderUtils.h"
+#include "RecentBooksStore.h"
+#include "SdCardFontSystem.h"
+#include "TxtEngineLayout.h"
 #include "TxtReaderMenuActivity.h"
 #include "activities/settings/TextSettingsActivity.h"  // v286：txt 也要有文字設定入口
-#include "RecentBooksStore.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
-#include "util/DiagLog.h"
-#include "util/NvsStore.h"
 #include "util/BookmarkFile.h"
 #include "util/BookmarkUtil.h"
+#include "util/DiagLog.h"
+#include "util/NvsStore.h"
 #include "util/ScreenshotUtil.h"  // v289：選單觸發的截圖
 
 namespace {
@@ -91,9 +85,12 @@ void trimToUtf8Boundaries(std::string& text) {
   if (i > 0) {
     const unsigned char lead = static_cast<unsigned char>(text[i - 1]);
     size_t need = 1;
-    if ((lead & 0xF8) == 0xF0) need = 4;
-    else if ((lead & 0xF0) == 0xE0) need = 3;
-    else if ((lead & 0xE0) == 0xC0) need = 2;
+    if ((lead & 0xF8) == 0xF0)
+      need = 4;
+    else if ((lead & 0xF0) == 0xE0)
+      need = 3;
+    else if ((lead & 0xE0) == 0xC0)
+      need = 2;
     if (text.size() - (i - 1) < need) text.resize(i - 1);  // 續接位元組在下一頁
   }
 }
@@ -150,7 +147,8 @@ void TxtReaderActivity::onExit() {
   // 它一直沒有百分比(EPUB 從 v31 起就有)。位移進度讓這件事變成兩行。
   if (txt) {
     const size_t fileSize = txt->getFileSize();
-    const int pct = fileSize != 0 ? static_cast<int>(static_cast<double>(pageStartOffset_) * 100.0 / fileSize + 0.5) : 0;
+    const int pct =
+        fileSize != 0 ? static_cast<int>(static_cast<double>(pageStartOffset_) * 100.0 / fileSize + 0.5) : 0;
     RECENT_BOOKS.setProgress(txt->getPath(), static_cast<uint8_t>(pct > 100 ? 100 : pct));
   }
 
@@ -158,9 +156,6 @@ void TxtReaderActivity::onExit() {
   APP_STATE.saveDurable();  // v332：離開書＝沒人等的時刻，NVS＋state.json 都寫（SD 那份是降版／換卡的保險）
   txt.reset();
 }
-
-
-
 
 // ---------------------------------------------------------------------------
 // v239：txt 走 EPUB 排版引擎
@@ -239,8 +234,8 @@ bool TxtReaderActivity::loadPageAtOffset(const size_t offset, std::vector<std::s
   }
 
   const uint32_t wrapStartMs = millis();
-  txtengine::Result r = txtengine::layoutPage(buffer + skip, want - skip, readFrom + want >= fileSize, midParagraph,
-                                              renderer, tp);
+  txtengine::Result r =
+      txtengine::layoutPage(buffer + skip, want - skip, readFrom + want >= fileSize, midParagraph, renderer, tp);
   segWrapMs_ = millis() - wrapStartMs;
   if (zyCursor) {
     diagZyFail_ = static_cast<uint8_t>(zyCursor->failReason());
@@ -330,7 +325,8 @@ void TxtReaderActivity::renderPage(const size_t pageOffset, const size_t pageEnd
   const uint32_t dispStartMs = millis();
   ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh);
   segDispMs_ = millis() - dispStartMs;
-  dispDoneMs_ = std::max<uint32_t>(1, millis());  // v243：黑白這一趟上了面板 ＝ 使用者看到換頁的時刻（0 ＝ 這次沒上面板）
+  // v243：黑白這一趟上了面板 ＝ 使用者看到換頁的時刻（0 ＝ 這次沒上面板）
+  dispDoneMs_ = std::max<uint32_t>(1, millis());
 
   segAaMs_ = 0;
   if (SETTINGS.textAntiAliasing) {
@@ -347,12 +343,6 @@ void TxtReaderActivity::renderPage(const size_t pageOffset, const size_t pageEnd
     ScreenshotUtil::takeScreenshot(renderer);
   }
 }
-
-
-
-
-
-
 
 // ---------------------------------------------------------------------------
 // v118:串流導覽
@@ -552,8 +542,8 @@ void TxtReaderActivity::loop() {
     confirmHoldConsumed_ = false;
     confirmPressedAtMs_ = 0;
   }
-  if (mappedInput.isPressed(MappedInputManager::Button::Confirm) && !confirmHoldConsumed_ &&
-      confirmPressedAtMs_ != 0 && SETTINGS.longPressMenuFunction == CrossPointSettings::LP_MENU_BOOKMARK &&
+  if (mappedInput.isPressed(MappedInputManager::Button::Confirm) && !confirmHoldConsumed_ && confirmPressedAtMs_ != 0 &&
+      SETTINGS.longPressMenuFunction == CrossPointSettings::LP_MENU_BOOKMARK &&
       (millis() - confirmPressedAtMs_) >= ReaderUtils::BOOKMARK_HOLD_MS) {
     confirmHoldConsumed_ = true;
     toggleBookmark();  // 回饋就是狀態列的書籤圖示亮／滅（同 v290 的設計）
@@ -717,7 +707,8 @@ void TxtReaderActivity::render(RenderLock&&) {
   // （上一輪的存進度＋預取還沒做完時，這一頁要排隊）。
   const uint32_t renderStartMs = millis();
   const uint32_t pressMs = pressMs_.exchange(0);
-  const uint32_t prevDlogMs = lastRenderDlogMs_;  // v329：TXTPAGE dlog= 報【上一次】render 的（含那次 TXTPAGE 自己的 append）
+  // v329：TXTPAGE dlog= 報【上一次】render 的（含那次 TXTPAGE 自己的 append）
+  const uint32_t prevDlogMs = lastRenderDlogMs_;
   lastRenderDlogMs_ = 0;
   const int32_t prevNvsUs = lastNvsUs_;  // v331：同 dlog，報上一次的
   lastNvsUs_ = -1;
@@ -822,7 +813,8 @@ void TxtReaderActivity::render(RenderLock&&) {
     }
     if (moved) {
       if (sdProgLen_ == 0) saveProgressSd(pageOffset, "anchor");  // v332：沒有 progress.bin 先寫一次當錨（同 EPUB）
-      // v332：閱讀位置的主檔＝NVS，每一次真的翻頁寫（同 EPUB）。失敗 → 當場退回寫 progress.bin（save= 就是那次的毫秒）。
+      // v332：閱讀位置的主檔＝NVS，每一次真的翻頁寫（同 EPUB）。失敗 → 當場退回寫 progress.bin（save=
+      // 就是那次的毫秒）。
       lastNvsUs_ = writeProgressNvs(pageOffset);
       if (lastNvsUs_ == -2 && ++nvsFailStreak_ >= 10) {  // 退路：第一次失敗立刻、之後每 10 次（v329 的節奏；codex）
         nvsFailStreak_ = 0;
@@ -854,15 +846,17 @@ void TxtReaderActivity::render(RenderLock&&) {
              static_cast<unsigned>(diagZyBehind_), static_cast<unsigned>(diagZySwaps_),
              static_cast<unsigned>(diagZyCard_), static_cast<unsigned>(diagZyUnsafe_));
   }
-  DiagLog::line("TXTPAGE off=%u next=%u layout=%u rd=%u fnt=%u wrp=%u prewarm=%u bw=%u disp=%u aa=%u save=%u warm=%u afail=%u dropped=%u lines=%u est=%d/%d eng=2 remap=%u vmiss=%u flush=%u words=%u eoom=%u cut=%u glue=%u vert=%u pitch=%u rescue=%u wait=%u lat=%u dlog=%u nvs=%d zy=%s shwm=%u",
-                static_cast<unsigned>(pageOffset), static_cast<unsigned>(nextOffset), layoutMs, segReadMs_, segFontMs_, segWrapMs_, segPrewarmMs_,
-                segBwMs_, segDispMs_, segAaMs_, saveMs, diagWarmHit_, diagAllocFail_, diagDropped_,
-                static_cast<unsigned>(currentPageLines.size()),
-                estimatedCurrentPage(), estimatedTotalPages(), diagRemapMiss_, diagVerifyMiss_, diagFlushes_, diagWords_, diagEngOom_,
-                diagChunkCut_, diagGlue_, vertical_ ? 1u : 0u, static_cast<unsigned>(columnPitch_),
-                diagRescue_, static_cast<unsigned>(latWait), static_cast<unsigned>(latTotal),
-                static_cast<unsigned>(prevDlogMs), static_cast<int>(prevNvsUs), zyDiag,
-                static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr)));  // 繪製任務（排版在這裡跑）的堆疊高水位
+  DiagLog::line(
+      "TXTPAGE off=%u next=%u layout=%u rd=%u fnt=%u wrp=%u prewarm=%u bw=%u disp=%u aa=%u save=%u warm=%u afail=%u "
+      "dropped=%u lines=%u est=%d/%d eng=2 remap=%u vmiss=%u flush=%u words=%u eoom=%u cut=%u glue=%u vert=%u pitch=%u "
+      "rescue=%u wait=%u lat=%u dlog=%u nvs=%d zy=%s shwm=%u",
+      static_cast<unsigned>(pageOffset), static_cast<unsigned>(nextOffset), layoutMs, segReadMs_, segFontMs_,
+      segWrapMs_, segPrewarmMs_, segBwMs_, segDispMs_, segAaMs_, saveMs, diagWarmHit_, diagAllocFail_, diagDropped_,
+      static_cast<unsigned>(currentPageLines.size()), estimatedCurrentPage(), estimatedTotalPages(), diagRemapMiss_,
+      diagVerifyMiss_, diagFlushes_, diagWords_, diagEngOom_, diagChunkCut_, diagGlue_, vertical_ ? 1u : 0u,
+      static_cast<unsigned>(columnPitch_), diagRescue_, static_cast<unsigned>(latWait), static_cast<unsigned>(latTotal),
+      static_cast<unsigned>(prevDlogMs), static_cast<int>(prevNvsUs), zyDiag,
+      static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr)));  // 繪製任務（排版在這裡跑）的堆疊高水位
   // v240：txt 也寫 SDCFFAIL（EPUB 閱讀器一直有寫）。v239 看得到 afail 卻不知道差多少位元組，
   // 分不出是新引擎把記憶體切碎、還是某頁剛好用到比較多字。預取的失敗會出現在【下一頁】的這一行之後。
   DiagLog::crumb("SDCFFAIL", SdCardFont::lastAllocFail, sizeof(SdCardFont::lastAllocFail));
@@ -896,7 +890,8 @@ void TxtReaderActivity::render(RenderLock&&) {
 void TxtReaderActivity::toggleBookmark() {
   if (!txt) return;
   const uint32_t anchor = static_cast<uint32_t>(pageStartOffset_);
-  const uint32_t hi = static_cast<uint32_t>(nextPageOffset_ > pageStartOffset_ ? nextPageOffset_ : pageStartOffset_ + 1);
+  const uint32_t hi =
+      static_cast<uint32_t>(nextPageOffset_ > pageStartOffset_ ? nextPageOffset_ : pageStartOffset_ + 1);
   // ⚠️ 存檔失敗要能還原 —— 不可以「記憶體改了、SD 沒寫成功」卻讓使用者以為成功
   //    （這個專案的老毛病：把 I/O 失敗當成 UI 成功）。
   const std::vector<BookmarkEntry> snapshot = bookmarks_;
@@ -950,9 +945,8 @@ void TxtReaderActivity::toggleBookmark() {
 bool TxtReaderActivity::isBookmarked(const size_t from, const size_t to) const {
   const uint32_t lo = static_cast<uint32_t>(from);
   const uint32_t hi = static_cast<uint32_t>(to > from ? to : from + 1);
-  return std::any_of(bookmarks_.begin(), bookmarks_.end(), [lo, hi](const auto& b) {
-    return b.hasByteOffset && b.byteOffset >= lo && b.byteOffset < hi;
-  });
+  return std::any_of(bookmarks_.begin(), bookmarks_.end(),
+                     [lo, hi](const auto& b) { return b.hasByteOffset && b.byteOffset >= lo && b.byteOffset < hi; });
 }
 
 void TxtReaderActivity::renderStatusBar(const size_t offset, const size_t endOffset) const {
@@ -1068,10 +1062,11 @@ void TxtReaderActivity::loadProgress() {
   const uint32_t fileSize = static_cast<uint32_t>(txt->getFileSize());
   NvsStore::ProgBlob pb{};
   bool used = false;
-  // NVS 贏的條件（同 EPUB，codex）：同一個檔（路徑 hash＋大小）＋ 它記的 progress.bin 指紋／長度＝現在讀到的 ＋ offset 在檔內。
-  if (sdProgLen_ != 0 && NvsStore::readProg(&pb) && pb.kind == 2 && pb.bookHash == nvsBookHash_ && pb.identity == fileSize &&
-      pb.sdHash == sdProgHash_ && pb.sdLen == sdProgLen_ && (pb.flags & NvsStore::PROG_HAS_OFFSET) != 0 &&
-      pb.page != UINT16_MAX && pb.offset < fileSize) {
+  // NVS 贏的條件（同 EPUB，codex）：同一個檔（路徑 hash＋大小）＋ 它記的 progress.bin 指紋／長度＝現在讀到的 ＋ offset
+  // 在檔內。
+  if (sdProgLen_ != 0 && NvsStore::readProg(&pb) && pb.kind == 2 && pb.bookHash == nvsBookHash_ &&
+      pb.identity == fileSize && pb.sdHash == sdProgHash_ && pb.sdLen == sdProgLen_ &&
+      (pb.flags & NvsStore::PROG_HAS_OFFSET) != 0 && pb.page != UINT16_MAX && pb.offset < fileSize) {
     pageStartOffset_ = pb.offset;
     used = true;
   }
@@ -1176,8 +1171,8 @@ ScreenshotInfo TxtReaderActivity::getScreenshotInfo() const {
   info.currentPage = estimatedCurrentPage();
   info.totalPages = estimatedTotalPages();
   const size_t fileSize = txt ? txt->getFileSize() : 0;
-  info.progressPercent = fileSize != 0 ? static_cast<int>(static_cast<double>(pageStartOffset_) * 100.0 / fileSize + 0.5)
-                                       : 0;
+  info.progressPercent =
+      fileSize != 0 ? static_cast<int>(static_cast<double>(pageStartOffset_) * 100.0 / fileSize + 0.5) : 0;
   if (info.progressPercent > 100) info.progressPercent = 100;
   return info;
 }
@@ -1185,12 +1180,11 @@ ScreenshotInfo TxtReaderActivity::getScreenshotInfo() const {
 // v119:閱讀選單(公開 repo issue #1)。
 void TxtReaderActivity::openReaderMenu() {
   const size_t fileSize = txt->getFileSize();
-  const float pct =
-      fileSize != 0 ? static_cast<float>(static_cast<double>(pageStartOffset_) * 100.0 / fileSize) : 0.0f;
+  const float pct = fileSize != 0 ? static_cast<float>(static_cast<double>(pageStartOffset_) * 100.0 / fileSize) : 0.0f;
 
   startActivityForResult(
-      std::make_unique<TxtReaderMenuActivity>(
-          renderer, mappedInput, txt->getTitle(), pct, SETTINGS.orientation, !bookmarks_.empty()),
+      std::make_unique<TxtReaderMenuActivity>(renderer, mappedInput, txt->getTitle(), pct, SETTINGS.orientation,
+                                              !bookmarks_.empty()),
       [this](const ActivityResult& result) {
         const auto& menu = std::get<MenuResult>(result.data);
 
@@ -1400,8 +1394,8 @@ void TxtReaderActivity::jumpToOffset(const size_t offset) {
 WarmIdentity TxtReaderActivity::buildWarmIdentity(const size_t offset) const {
   WarmIdentity id;
   id.bookHash = WarmIdentity::fnv1a(txt->getCachePath().c_str());
-  id.spineIndex = 0;                                  // txt 沒有 spine
-  id.pageNumber = static_cast<int32_t>(offset);       // 位元組位移就是 txt 的「頁身分」
+  id.spineIndex = 0;                             // txt 沒有 spine
+  id.pageNumber = static_cast<int32_t>(offset);  // 位元組位移就是 txt 的「頁身分」
   id.fontId = cachedFontId;
   id.viewportWidth = static_cast<uint16_t>(viewportWidth);
   // 每頁單位數已折入方向/邊距/狀態列；v241 起最高位標記軸向（直排與橫排同單位數時身分也必須不同）。

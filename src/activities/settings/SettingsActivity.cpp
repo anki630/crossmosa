@@ -3,6 +3,7 @@
 #include <BoardConfig.h>
 #include <GfxRenderer.h>
 #include <Logging.h>
+#include <Memory.h>
 
 #include <algorithm>
 #include <cstdio>
@@ -11,8 +12,6 @@
 #include "ButtonRemapActivity.h"
 #include "ClearCacheActivity.h"
 #include "CrossPointSettings.h"
-#include <Memory.h>
-
 #include "DeviceInfoActivity.h"
 #include "LanguageSelectActivity.h"
 #include "MappedInputManager.h"
@@ -78,8 +77,8 @@ void SettingsActivity::rebuildSettingsLists() {
   // DynamicString 在 toggleCurrentSetting 對 STRING 無寫入分支（唯讀）；不啟用清單 subtitle，
   // 以免全列改用 listWithSubtitleRowHeight 壓縮橫向可見列數。
   systemSettings.push_back(SettingInfo::DynamicString(
-      StrId::STR_DEVICE_INFO, []() { return std::string(displayControllerName()); },
-      [](const std::string&) {}, nullptr, StrId::STR_CAT_SYSTEM));
+      StrId::STR_DEVICE_INFO, []() { return std::string(displayControllerName()); }, [](const std::string&) {}, nullptr,
+      StrId::STR_CAT_SYSTEM));
   readerSettings.insert(readerSettings.begin(),
                         SettingInfo::Action(StrId::STR_TEXT_SETTINGS, SettingAction::TextSettings));
   readerSettings.push_back(SettingInfo::Action(StrId::STR_CUSTOMISE_STATUS_BAR, SettingAction::CustomiseStatusBar));

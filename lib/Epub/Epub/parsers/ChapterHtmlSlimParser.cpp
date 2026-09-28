@@ -1,16 +1,12 @@
 #include "ChapterHtmlSlimParser.h"
 
-#include "../VerticalEm.h"
-#include "../VerticalText.h"
-
-#include <esp_heap_caps.h>
-
 #include <FsHelpers.h>
 #include <GfxRenderer.h>
 #include <HalStorage.h>
 #include <Logging.h>
 #include <Utf8.h>
 #include <XmlParserUtils.h>
+#include <esp_heap_caps.h>
 #include <expat.h>
 
 #include <algorithm>
@@ -19,6 +15,8 @@
 #include <new>
 
 #include "../../../../src/fontIds.h"
+#include "../VerticalEm.h"
+#include "../VerticalText.h"
 
 namespace {
 // v252 BUILDPROF：RAII 累計計時器（ParsedText::buildProf 的欄位）。
@@ -123,9 +121,7 @@ bool matches(const char* rawTagName, const char* const* possible_tags, size_t co
 }
 
 // 同 matches()：自己去前綴。不動 VisibleTextUtils.h —— 那是與 ProgressMapper 共用的。
-bool isNonVisibleTextTag(const char* rawName) {
-  return VisibleTextUtils::isNonVisibleElement(xmlLocalName(rawName));
-}
+bool isNonVisibleTextTag(const char* rawName) { return VisibleTextUtils::isNonVisibleElement(xmlLocalName(rawName)); }
 
 const char* getAttribute(const XML_Char** atts, const char* attrName) {
   if (!atts) return nullptr;
@@ -341,7 +337,8 @@ void ChapterHtmlSlimParser::flushPartWordBuffer() {
   // 注音：佇列裡等著被取出的漢字太多 → 現在就排一批（同字元回呼尾端那個軟性分批；hasOom 由那裡照常檢查）。
   //   逐字詞看，不等回呼結束：一次回呼可以進好幾百個漢字（codex 整合複查 A2）。
   //   ⚠️ ruby 裡面不排：rubyStartWordIndex 是「這一段目前的字詞序號」，排一批會把字詞吃掉、序號就指到別的字 →
-  //      出版社的注音掛到錯的字上；而且底字會在知道它有 ruby 之前就被取出、換上我們的注音。等 </ruby> 之後的下一個字詞。
+  //      出版社的注音掛到錯的字上；而且底字會在知道它有 ruby 之前就被取出、換上我們的注音。等 </ruby>
+  //      之後的下一個字詞。
   if (!inRuby && currentTextBlock->zhuyinWantsFlush()) layoutCurrentBlock(false);
 }
 
@@ -400,8 +397,8 @@ bool ChapterHtmlSlimParser::startNewTextBlock(const BlockStyle& blockStyle) {
   flushPendingAnchor();
   if (buildAborted_) return false;
   // v194：nothrow；失敗 latch，呼叫點必須立刻 return，不能再配 string／vector／shared_ptr。
-  currentTextBlock.reset(
-      new (std::nothrow) ParsedText(extraParagraphSpacing, hyphenationEnabled, focusReadingEnabled, blockStyle));
+  currentTextBlock.reset(new (std::nothrow)
+                             ParsedText(extraParagraphSpacing, hyphenationEnabled, focusReadingEnabled, blockStyle));
   if (!currentTextBlock) {
     Page::noteAllocFail("ParsedText:startNewTextBlock", sizeof(ParsedText));
     latchBuildAborted();
@@ -488,10 +485,12 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
   // 重新序列化的書會是 <ns0:body>）。下面【所有】元素名比對都要用 element 而非 name。
   const char* const element = xmlLocalName(name);
 
-  // v342（B 路線）：預先標注的章節 —— <head> 裡的 <meta name="zhuyin-ivs" content="bpmfvs"/>（zy_preannotate.py 寫的）。
+  // v342（B 路線）：預先標注的章節 —— <head> 裡的 <meta name="zhuyin-ivs" content="bpmfvs"/>（zy_preannotate.py
+  // 寫的）。
   //   只認 <body> 之前的 meta（正文裡的不算）。⚠️ 第一個文字區塊在讀到任何標籤之前就建好了（beginParse），而空區塊
-  //   之後會被第一個段落重用、不會再 enableZhuyin（grok 複查抓到：否則每一章的第一段、整章只有一個區塊時整章都走解析器）
-  //   → 認到的當下補設給當前這一個；之後建立的區塊由 startNewTextBlock 帶上。
+  //   之後會被第一個段落重用、不會再 enableZhuyin（grok
+  //   複查抓到：否則每一章的第一段、整章只有一個區塊時整章都走解析器） → 認到的當下補設給當前這一個；之後建立的區塊由
+  //   startNewTextBlock 帶上。
   if (!self->insideBody && strcasecmp(element, "meta") == 0 && atts != nullptr) {
     bool nameOk = false, contentOk = false;
     for (int i = 0; atts[i]; i += 2) {
@@ -1014,12 +1013,13 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                 if (self->imgPlaceLogged < 6) {
                   ++self->imgPlaceLogged;
                   const size_t slash = resolvedPath.rfind('/');
-                  ParsedText::vertDiag("IMGPLACE page=%d y=%d h=%d w=%d x=%d mtop=%d>%d mbot=%d vh=%d vert=%d %s",
-                                       self->completedPageCount, self->currentPageNextY, displayHeight, displayWidth,
-                                       xPos, static_cast<int>(rawMarginTop), static_cast<int>(imageMarginTop),
-                                       static_cast<int>(imageMarginBottom), static_cast<int>(self->viewportHeight),
-                                       self->renderer.isVerticalLayout() ? 1 : 0,
-                                       slash == std::string::npos ? resolvedPath.c_str() : resolvedPath.c_str() + slash + 1);
+                  ParsedText::vertDiag(
+                      "IMGPLACE page=%d y=%d h=%d w=%d x=%d mtop=%d>%d mbot=%d vh=%d vert=%d %s",
+                      self->completedPageCount, self->currentPageNextY, displayHeight, displayWidth, xPos,
+                      static_cast<int>(rawMarginTop), static_cast<int>(imageMarginTop),
+                      static_cast<int>(imageMarginBottom), static_cast<int>(self->viewportHeight),
+                      self->renderer.isVerticalLayout() ? 1 : 0,
+                      slash == std::string::npos ? resolvedPath.c_str() : resolvedPath.c_str() + slash + 1);
                 }
                 auto pageImage =
                     std::shared_ptr<PageImage>(new (std::nothrow) PageImage(imageBlock, xPos, self->currentPageNextY));
@@ -1062,8 +1062,8 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                   HalFile probe;
                   if (Storage.openFileForRead("EHP", cachedImagePath, probe)) sz = probe.size();
                 }
-                ImageBlock::noteFailure("layout-drop exists=%d size=%u %s", exists ? 1 : 0,
-                                        static_cast<unsigned>(sz), cachedImagePath.c_str());
+                ImageBlock::noteFailure("layout-drop exists=%d size=%u %s", exists ? 1 : 0, static_cast<unsigned>(sz),
+                                        cachedImagePath.c_str());
                 LOG_ERR("EHP", "Failed to get image dimensions (exists=%d size=%u)", exists ? 1 : 0,
                         static_cast<unsigned>(sz));
                 Storage.remove(cachedImagePath.c_str());
@@ -1466,8 +1466,7 @@ void XMLCALL ChapterHtmlSlimParser::characterData(void* userData, const XML_Char
       const auto last = static_cast<unsigned char>(self->currentFootnote.number[self->currentFootnoteLinkTextLen - 1]);
       if (last < 0x80) break;  // ASCII，完整
       int seqStart = self->currentFootnoteLinkTextLen - 1;
-      while (seqStart > 0 &&
-             (static_cast<unsigned char>(self->currentFootnote.number[seqStart]) & 0xC0) == 0x80) {
+      while (seqStart > 0 && (static_cast<unsigned char>(self->currentFootnote.number[seqStart]) & 0xC0) == 0x80) {
         --seqStart;
       }
       const auto lead = static_cast<unsigned char>(self->currentFootnote.number[seqStart]);
@@ -1612,8 +1611,7 @@ void XMLCALL ChapterHtmlSlimParser::characterData(void* userData, const XML_Char
   // words, so flush earlier when embedded CSS is active. We still keep the
   // "exclude last line" behavior to preserve paragraph flow across chunks.
   const size_t blockWordCount = self->currentTextBlock->size();
-  size_t softFlushThreshold =
-      self->embeddedStyle ? TEXT_BLOCK_SOFT_FLUSH_WORDS_WITH_CSS : TEXT_BLOCK_SOFT_FLUSH_WORDS;
+  size_t softFlushThreshold = self->embeddedStyle ? TEXT_BLOCK_SOFT_FLUSH_WORDS_WITH_CSS : TEXT_BLOCK_SOFT_FLUSH_WORDS;
   // 注音：每批最多約 200 詞（分批小一點，峰值記憶體也小）。⚠️ 佇列不會滿不是靠這一行 —— 一個字詞可以有好幾個漢字、
   //   一次回呼可以進好幾百個；真正的上界是 flushPartWordBuffer 逐字詞看佇列深度（ParsedText::kZhuyinFlushQueued）。
   const bool zhuyinOn = self->currentTextBlock->zhuyinActive();
@@ -2046,8 +2044,7 @@ bool ChapterHtmlSlimParser::parseAndBuildPages() {
 void ChapterHtmlSlimParser::addLineToPage(std::shared_ptr<TextBlock> line, const uint32_t visibleOffset) {
   if (buildAborted_) return;
   const ProfScope profProc(ParsedText::buildProf.procUs);  // v252
-  const int lineHeight =
-      lineHeightPx + line->getRubyShift(renderer.getFontAscenderSize(fontId));
+  const int lineHeight = lineHeightPx + line->getRubyShift(renderer.getFontAscenderSize(fontId));
 
   if (!ensureCurrentPage("Page:addLine:first")) return;
 
@@ -2106,7 +2103,7 @@ int ChapterHtmlSlimParser::columnPitchPx() const {
 int16_t ChapterHtmlSlimParser::maxTotalHorizontalInset() const {
   if (maxTotalInsetCache_ >= 0) return maxTotalInsetCache_;
   const int vw = viewportWidth;
-  int cap = (vw * 2) / 5;  // ② 40%
+  int cap = (vw * 2) / 5;            // ② 40%
   const int32_t emFP = frozenEmFP_;  // v284：用建置凍結值，不再現量
   if (emFP > 0) {
     // ⚠️ **在定點數裡算完再取整，而且往【上】取**（複查抓到）：先把 emFP/16 截成整數，
@@ -2133,7 +2130,7 @@ void ChapterHtmlSlimParser::clampHorizontalInsets(BlockStyle& style) const {
   //    全樹只透過 `leftInset()／rightInset()／totalHorizontalInset()` 讀它（已 grep 確認）。
   int left = style.leftInset();
   int right = style.rightInset();
-  if (left < 0) left = 0;    // 負的累加值 ＝ 區塊已經在版心外，救回來
+  if (left < 0) left = 0;  // 負的累加值 ＝ 區塊已經在版心外，救回來
   if (right < 0) right = 0;
   const int cap = maxTotalHorizontalInset();
   const int total = left + right;
@@ -2182,7 +2179,7 @@ void ChapterHtmlSlimParser::verticalEndIsolated() {
 //    TextBlock 的 xpos[i] 在直排是沿欄的位移、focusSuffixX[i] 是跨軸位移
 //    （轉置編碼，見 ParsedTextVertical.cpp）。**arena 與 .bin 格式一個位元組都不改。**
 void ChapterHtmlSlimParser::addColumnToPage(std::shared_ptr<TextBlock> column, const uint32_t visibleOffset,
-                                           const int tokensInColumn) {
+                                            const int tokensInColumn) {
   if (buildAborted_) return;
   const ProfScope profProc(ParsedText::buildProf.procUs);  // v252
   const int pitch = columnPitchPx();
@@ -2376,8 +2373,8 @@ void ChapterHtmlSlimParser::makePages() {
     ParsedText::vertDiag("VSPACE n=%u pg=%d>%d y=%d>%d>%d>%d mt=%d pt=%d mb=%d pb=%d xp=%d lines=%u lh=%d endoff=%lu",
                          static_cast<unsigned>(vspaceBlockSeq_), vspacePg0, completedPageCount, vspaceY0, vspaceY1,
                          vspaceY2, static_cast<int>(currentPageNextY), blockStyle.marginTop, blockStyle.paddingTop,
-                         blockStyle.marginBottom, blockStyle.paddingBottom,
-                         extraParagraphSpacing ? lineHeight / 2 : 0, static_cast<unsigned>(vspaceLines_), lineHeight,
+                         blockStyle.marginBottom, blockStyle.paddingBottom, extraParagraphSpacing ? lineHeight / 2 : 0,
+                         static_cast<unsigned>(vspaceLines_), lineHeight,
                          static_cast<unsigned long>(visibleTextOffset));
   }
 }

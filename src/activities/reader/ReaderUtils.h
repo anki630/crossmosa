@@ -142,9 +142,7 @@ inline bool isTouchMenuGesture(const MappedInputManager& input) {
 
 // v186：週期清殘影是否走 scrub（bench 哨兵，或面板驅動擔保的實證 bank）。EpubReader 的圖片頁
 // 證人與 displayWithRefreshCycle 用同一個判準，log 才對得起來。
-inline bool scrubCleanActive(const GfxRenderer& renderer) {
-  return BenchFlags::scrub || renderer.prefersScrubClean();
-}
+inline bool scrubCleanActive(const GfxRenderer& renderer) { return BenchFlags::scrub || renderer.prefersScrubClean(); }
 
 // One helper, blocking or deferred: the async form starts the refresh and
 // returns so the caller can overlap CPU work with the panel's refresh time.

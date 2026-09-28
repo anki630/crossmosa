@@ -26,7 +26,6 @@ class SdCardFontManager {
   // 這裡回傳裸指標：呼叫端只在 render task 的當前迭代內使用，不得跨 ensureLoaded 持有。
   SdCardFont* currentFontForStats() const { return loaded_.empty() ? nullptr : loaded_.front().font; }
 
-
   // Additively load the .cpfont of `family` at the exact physical `pointSize`
   // (used for size-matched CJK UI fallback alongside the reader-size font).
   // Does not unload anything. If a font of that size is already loaded its id

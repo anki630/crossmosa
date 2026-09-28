@@ -120,18 +120,18 @@ class HalGPIO {
     // 255=沒執行（reason 不是 PowerButton）；0=通過 1=等不到 isPressed 2=握持不足 3=快速路徑
     // ⚠️ 不要讓 0 同時代表「通過」與「沒跑過」—— v191 的哨兵撞號就是這樣來的。
     uint8_t outcome = 255;
-    uint16_t waitedMs = 0; // 等 isPressed 花的毫秒
-    uint16_t heldMs = 0;   // getPowerButtonHeldTime() 的最終值
-    uint16_t requiredMs = 0;      // 設定值（400 或 10）
-    uint16_t calibratedMs = 0;    // 實際比較的門檻 = required - millis()，下限 1
+    uint16_t waitedMs = 0;      // 等 isPressed 花的毫秒
+    uint16_t heldMs = 0;        // getPowerButtonHeldTime() 的最終值
+    uint16_t requiredMs = 0;    // 設定值（400 或 10）
+    uint16_t calibratedMs = 0;  // 實際比較的門檻 = required - millis()，下限 1
   };
   // v295：earlyEvidenceSatisfied ＝「開機早期的取樣已經證明按住夠久」（main.cpp 的
   // powerHeldEvidenceMs()）。它**只縮短等待上限**，不改變任何判定：
   //   還按著 → 實測 9–11ms 內就偵測到（716/716 次），遠低於縮短後的上限 → 行為完全相同
   //   已放開 → 提早放棄，而那正是 v294 會用證據救回來的情況，結論一樣、只是早 0.94 秒
   // ⚠️ 傳 false（預設）即維持 v294 行為，逐行等價。
-  bool verifyPowerButtonWakeup(uint16_t requiredDurationMs, bool shortPressAllowed,
-                               PowerVerifyDiag* diag = nullptr, bool earlyEvidenceSatisfied = false);
+  bool verifyPowerButtonWakeup(uint16_t requiredDurationMs, bool shortPressAllowed, PowerVerifyDiag* diag = nullptr,
+                               bool earlyEvidenceSatisfied = false);
 
   // Check if USB is connected
   bool isUsbConnected() const;

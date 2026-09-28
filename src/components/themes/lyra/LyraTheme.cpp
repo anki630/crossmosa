@@ -1,6 +1,5 @@
 #include "LyraTheme.h"
 
-
 #include <FsHelpers.h>
 #include <GfxRenderer.h>
 #include <HalGPIO.h>
@@ -16,7 +15,6 @@
 
 #include "RecentBooksStore.h"
 #include "components/UITheme.h"
-#include "components/themes/HintPillLayout.h"
 #include "components/icons/book.h"
 #include "components/icons/book24.h"
 #include "components/icons/bookmark.h"
@@ -32,6 +30,7 @@
 #include "components/icons/text24.h"
 #include "components/icons/transfer.h"
 #include "components/icons/wifi.h"
+#include "components/themes/HintPillLayout.h"
 #include "fontIds.h"
 
 // Internal constants
@@ -108,8 +107,7 @@ const uint8_t* LyraTheme::iconForName(UIIcon icon, int size) {
   return nullptr;
 }
 
-namespace {
-}  // namespace
+namespace {}  // namespace
 
 void LyraTheme::fillBatteryIcon(const GfxRenderer& renderer, Rect rect, uint16_t percentage) const {
   const bool charging = gpio.isUsbConnected();
@@ -282,7 +280,8 @@ void LyraTheme::drawTabBar(const GfxRenderer& renderer, Rect rect, const std::ve
   }
 }
 
-void LyraTheme::drawEmptyCoverPlaceholder(const GfxRenderer& renderer, const int x, const int y, const int w, const int h) {
+void LyraTheme::drawEmptyCoverPlaceholder(const GfxRenderer& renderer, const int x, const int y, const int w,
+                                          const int h) {
   constexpr int kSpineInset = 12;     // 書脊線距左緣
   constexpr int kSpineEndInset = 10;  // 上下留白;必須 > cornerRadius(6),否則線頭會被圓角遮罩咬掉
   constexpr int kIconSize = 32;
@@ -328,8 +327,8 @@ void drawClippedQuarterArc(const GfxRenderer& renderer, const int cx, const int 
 }
 
 // 點陣格（裝飾）：pitch 像素一點。
-void drawDotGrid(const GfxRenderer& renderer, const int x0, const int y0, const int cols, const int rows, const int pitch,
-                 const int clipX, const int clipY, const int clipW, const int clipH) {
+void drawDotGrid(const GfxRenderer& renderer, const int x0, const int y0, const int cols, const int rows,
+                 const int pitch, const int clipX, const int clipY, const int clipW, const int clipH) {
   for (int r = 0; r < rows; r++) {
     for (int c = 0; c < cols; c++) {
       const int px = x0 + c * pitch;
@@ -362,16 +361,16 @@ void LyraTheme::drawTitleCoverPlaceholder(GfxRenderer& renderer, const int x, co
   const int bigR = innerW * 3 / 5;
   const int smallR = innerW * 3 / 10;
   if (variant == 0) {
-    drawClippedQuarterArc(renderer, x + w - 1, y, bigR, 1, innerX, y, innerW, h);                // 右上角，弧朝左下
-    drawClippedQuarterArc(renderer, innerX, y + h - 1, smallR, 3, innerX, y, innerW, h);         // 左下角，弧朝右上
+    drawClippedQuarterArc(renderer, x + w - 1, y, bigR, 1, innerX, y, innerW, h);         // 右上角，弧朝左下
+    drawClippedQuarterArc(renderer, innerX, y + h - 1, smallR, 3, innerX, y, innerW, h);  // 左下角，弧朝右上
     drawDotGrid(renderer, x + w - 6 - 4 * 6, y + bigR + 8, 5, 4, 6, innerX, y, innerW, h);
   } else if (variant == 1) {
-    drawClippedQuarterArc(renderer, innerX, y, bigR, 0, innerX, y, innerW, h);                   // 左上角，弧朝右下
-    drawClippedQuarterArc(renderer, x + w - 1, y + h - 1, smallR, 2, innerX, y, innerW, h);      // 右下角，弧朝左上
+    drawClippedQuarterArc(renderer, innerX, y, bigR, 0, innerX, y, innerW, h);               // 左上角，弧朝右下
+    drawClippedQuarterArc(renderer, x + w - 1, y + h - 1, smallR, 2, innerX, y, innerW, h);  // 右下角，弧朝左上
     drawDotGrid(renderer, x + w - 6 - 4 * 6, y + 8, 5, 4, 6, innerX, y, innerW, h);
   } else {
-    drawClippedQuarterArc(renderer, x + w - 1, y + h - 1, bigR, 2, innerX, y, innerW, h);        // 右下角，弧朝左上
-    drawClippedQuarterArc(renderer, innerX, y, smallR, 0, innerX, y, innerW, h);                 // 左上角，弧朝右下
+    drawClippedQuarterArc(renderer, x + w - 1, y + h - 1, bigR, 2, innerX, y, innerW, h);  // 右下角，弧朝左上
+    drawClippedQuarterArc(renderer, innerX, y, smallR, 0, innerX, y, innerW, h);           // 左上角，弧朝右下
     drawDotGrid(renderer, x + w - 6 - 4 * 6, y + 8, 5, 4, 6, innerX, y, innerW, h);
   }
 
@@ -565,7 +564,6 @@ void LyraTheme::drawList(const GfxRenderer& renderer, Rect rect, int itemCount, 
                         valueY, valueText.c_str(), true);
     }
   }
-
 }
 
 void LyraTheme::drawButtonHints(GfxRenderer& renderer, const char* btn1, const char* btn2, const char* btn3,

@@ -1,23 +1,21 @@
-#include <esp_heap_caps.h>
-#include <esp_timer.h>
 #include "Section.h"
 
-#include <ZhuyinActive.h>
-#include <ZhuyinData.h>
-#include <ZhuyinIdentity.h>
-
 #include <Breadcrumb.h>
+#include <GfxRenderer.h>
 #include <HalStorage.h>
 #include <Logging.h>
 #include <Memory.h>
 #include <Serialization.h>
+#include <ZhuyinActive.h>
+#include <ZhuyinData.h>
+#include <ZhuyinIdentity.h>
+#include <esp_heap_caps.h>
+#include <esp_timer.h>
 
 #include "Epub/css/CssParser.h"
 #include "Page.h"
 #include "ParsedText.h"
 #include "hyphenation/Hyphenator.h"
-#include <GfxRenderer.h>
-
 #include "parsers/ChapterHtmlSlimParser.h"
 
 namespace {
@@ -79,7 +77,8 @@ namespace {
 // （置中／貼欄尾）。兩者都改變版面。
 // v218：110 → 111。混合 token 依「漢字段／ASCII 段」拆開、縦中横規則放寬到「一到三位
 // 數字＋可選結尾標點」。兩者都改變 unit 切分，也就改變版面。
-constexpr uint8_t SECTION_FILE_VERSION = 130;  // v285：檔頭新增凍結的 emFP 欄位（佈局改變），且行距檔位回到快取身分裡，v284 是 129
+// v285：檔頭新增凍結的 emFP 欄位（佈局改變），且行距檔位回到快取身分裡，v284 是 129
+constexpr uint8_t SECTION_FILE_VERSION = 130;
 // v187 檔頭的 cssState 欄位：0 = 沒用 CSS（embeddedStyle 關或載入失敗）、1 = 規則全載、
 // 2 = 撞記憶體地板被截斷（樣式打折的版面）。loadSectionFile 看到 2 且此刻記憶體寬裕就重排。
 constexpr uint8_t CSS_STATE_NONE = 0;
@@ -111,12 +110,11 @@ constexpr uint8_t SECTION_FILE_PARTIAL_VERSION = 0xFE - (SECTION_FILE_VERSION - 
 static_assert(SECTION_FILE_PARTIAL_VERSION != SECTION_FILE_VERSION,
               "SECTION_FILE_PARTIAL_VERSION collides with SECTION_FILE_VERSION (they meet at 141)");
 constexpr uint32_t HEADER_SIZE = sizeof(uint8_t) + sizeof(int) + sizeof(float) + sizeof(int32_t) /*v284 emFP*/ +
-                                 sizeof(bool) + sizeof(uint8_t) +
-                                 sizeof(uint16_t) + sizeof(uint16_t) + sizeof(uint16_t) + sizeof(bool) + sizeof(bool) +
-                                 sizeof(uint8_t) + sizeof(bool) + sizeof(bool) /*boldBodyText*/ +
-                                 sizeof(bool) /*verticalLayout*/ + sizeof(uint8_t) /*columnPitchTier*/ +
-                                 sizeof(uint8_t) /*cssState*/ + sizeof(uint32_t) + sizeof(uint32_t) +
-                                 sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint32_t);
+                                 sizeof(bool) + sizeof(uint8_t) + sizeof(uint16_t) + sizeof(uint16_t) +
+                                 sizeof(uint16_t) + sizeof(bool) + sizeof(bool) + sizeof(uint8_t) + sizeof(bool) +
+                                 sizeof(bool) /*boldBodyText*/ + sizeof(bool) /*verticalLayout*/ +
+                                 sizeof(uint8_t) /*columnPitchTier*/ + sizeof(uint8_t) /*cssState*/ + sizeof(uint32_t) +
+                                 sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint32_t);
 // v187：五個「只讀檔頭尾段」的讀取點（loadPageAt／anchor／paragraph／li）原本不驗版號——跳號後
 // 還沒重開的舊 .bin 會被用舊偏移讀，拿到的是別的欄位（KOReader 同步的 ProgressMapper 會經過這條路）。
 bool headerVersionOk(HalFile& f) {
@@ -151,7 +149,8 @@ uint32_t Section::onPageComplete(std::unique_ptr<Page> page) {
 
   const uint32_t position = file.position();
   // 注音：帶清單的行綁著這一頁在章節裡的位置（載入時要相同才換，codex 複查 ③ 第二輪 F4）
-  if (!page->serialize(file, zhuyin::PagePlace{static_cast<uint16_t>(spineIndex), static_cast<uint16_t>(builtPageCount_)})) {
+  if (!page->serialize(file,
+                       zhuyin::PagePlace{static_cast<uint16_t>(spineIndex), static_cast<uint16_t>(builtPageCount_)})) {
     LOG_ERR("SCT", "Failed to serialize page %d", builtPageCount_);
     return 0;
   }
@@ -185,16 +184,15 @@ void Section::writeSectionFileHeader(const ReaderRenderSpec& spec) {
     LOG_DBG("SCT", "File not open for writing header");
     return;
   }
-  static_assert(HEADER_SIZE == sizeof(SECTION_FILE_VERSION) + sizeof(spec.fontId) + sizeof(spec.lineHeightEm) + sizeof(int32_t) /* v284：凍結的 emFP */ +
-                                   sizeof(spec.extraParagraphSpacing) + sizeof(spec.paragraphAlignment) +
-                                   sizeof(spec.viewportWidth) + sizeof(spec.viewportHeight) + sizeof(pageCount) +
-                                   sizeof(spec.hyphenationEnabled) + sizeof(spec.embeddedStyle) +
-                                   sizeof(spec.imageRendering) + sizeof(spec.focusReadingEnabled) +
-                                   sizeof(spec.boldBodyText) + sizeof(spec.verticalLayout) +
-                                   sizeof(spec.columnPitchTier) +
-                                   sizeof(uint8_t) + sizeof(uint32_t) +
-                                   sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint32_t),
-                "Header size mismatch");
+  static_assert(
+      HEADER_SIZE == sizeof(SECTION_FILE_VERSION) + sizeof(spec.fontId) + sizeof(spec.lineHeightEm) +
+                         sizeof(int32_t) /* v284：凍結的 emFP */ + sizeof(spec.extraParagraphSpacing) +
+                         sizeof(spec.paragraphAlignment) + sizeof(spec.viewportWidth) + sizeof(spec.viewportHeight) +
+                         sizeof(pageCount) + sizeof(spec.hyphenationEnabled) + sizeof(spec.embeddedStyle) +
+                         sizeof(spec.imageRendering) + sizeof(spec.focusReadingEnabled) + sizeof(spec.boldBodyText) +
+                         sizeof(spec.verticalLayout) + sizeof(spec.columnPitchTier) + sizeof(uint8_t) +
+                         sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint32_t),
+      "Header size mismatch");
   // Written as the incomplete sentinel; finalizeBuild() patches it to
   // SECTION_FILE_VERSION as the last step, committing the file.
   serialization::writePod(file, SECTION_FILE_INCOMPLETE_VERSION);
@@ -223,7 +221,7 @@ void Section::writeSectionFileHeader(const ReaderRenderSpec& spec) {
   serialization::writePod(file, spec.verticalLayout);
   serialization::writePod(file, spec.columnPitchTier);
   serialization::writePod(file, CSS_STATE_NONE);  // 佔位，commitBuildFile 補成這次建置的實際狀態
-  serialization::writePod(file, pageCount);  // Placeholder for page count (will be initially 0, patched later)
+  serialization::writePod(file, pageCount);       // Placeholder for page count (will be initially 0, patched later)
   serialization::writePod(file, static_cast<uint32_t>(0));  // Placeholder for LUT offset (patched later)
   serialization::writePod(file, static_cast<uint32_t>(0));  // Placeholder for anchor map offset (patched later)
   serialization::writePod(file, static_cast<uint32_t>(0));  // Placeholder for paragraph LUT offset (patched later)
@@ -300,8 +298,7 @@ bool Section::loadSectionFile(const ReaderRenderSpec& spec) {
     lastFileEmFP_ = fileEmFP;  // v309 證人：讓上層能印出「存檔裡的 em」
     if (!zhuyin::sectionIdentityAccepted(fileFontId, spec.fontId, spec.zhuyinIdentity, spec.zhuyinOffIdentity,
                                          spec.zhuyinOnIdentity) ||
-        spec.lineHeightEm != fileLineHeightEm ||
-        renderer.probeEmFP(spec.fontId) != fileEmFP ||
+        spec.lineHeightEm != fileLineHeightEm || renderer.probeEmFP(spec.fontId) != fileEmFP ||
         spec.extraParagraphSpacing != fileExtraParagraphSpacing || spec.paragraphAlignment != fileParagraphAlignment ||
         spec.viewportWidth != fileViewportWidth || spec.viewportHeight != fileViewportHeight ||
         spec.hyphenationEnabled != fileHyphenationEnabled || spec.embeddedStyle != fileEmbeddedStyle ||
@@ -495,7 +492,8 @@ bool Section::startBuild(const ReaderRenderSpec& spec, const std::function<void(
 
     if (!streamed) {
       LOG_ERR("SCT", "Failed to stream item contents to temp file after retries");
-      if (heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT) < 16 * 1024) lastBuildWasLowMemory_ = true;  // v175：見下
+      if (heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT) < 16 * 1024)
+        lastBuildWasLowMemory_ = true;  // v175：見下
       return false;
     }
 
@@ -549,8 +547,9 @@ bool Section::startBuild(const ReaderRenderSpec& spec, const std::function<void(
       LOG_ERR("SCT", "Failed to load CSS from cache");
       ctx->cssState = cssRetry_ ? CSS_STATE_TRUNCATED_FINAL : CSS_STATE_TRUNCATED;
     } else if (ctx->cssParser) {
-      ctx->cssState = !ctx->cssParser->lastLoadTruncated_ ? CSS_STATE_FULL
-                      : (cssRetry_ ? CSS_STATE_TRUNCATED_FINAL : CSS_STATE_TRUNCATED);
+      ctx->cssState = !ctx->cssParser->lastLoadTruncated_
+                          ? CSS_STATE_FULL
+                          : (cssRetry_ ? CSS_STATE_TRUNCATED_FINAL : CSS_STATE_TRUNCATED);
     }
   }
 
@@ -573,9 +572,9 @@ bool Section::startBuild(const ReaderRenderSpec& spec, const std::function<void(
   // context for the parser's whole lifetime.
   BuildContext* ctxPtr = ctx.get();
   ctx->parser = makeUniqueNoThrow<ChapterHtmlSlimParser>(
-      epub, ctxPtr->parsePath, renderer, spec.fontId, lineHeightPxFor(spec, frozenEmFP_), frozenEmFP_, spec.extraParagraphSpacing,
-      spec.paragraphAlignment, spec.viewportWidth, spec.viewportHeight, spec.hyphenationEnabled,
-      spec.focusReadingEnabled,
+      epub, ctxPtr->parsePath, renderer, spec.fontId, lineHeightPxFor(spec, frozenEmFP_), frozenEmFP_,
+      spec.extraParagraphSpacing, spec.paragraphAlignment, spec.viewportWidth, spec.viewportHeight,
+      spec.hyphenationEnabled, spec.focusReadingEnabled,
       [this, ctxPtr](std::unique_ptr<Page> page, const uint16_t paragraphIndex, const uint16_t listItemIndex,
                      const uint32_t visibleTextOffset) {
         ctxPtr->lut.push_back(
@@ -849,8 +848,8 @@ bool Section::commitBuildFile(const uint8_t version, const uint32_t bytesConsume
   serialization::writePod(file, visibleLutFileOffset);
   // 注音：身分補成這次建置實際用的模式（在版號之前寫 → 斷電時版號仍是 0，這一份不算數）
   if (zyHeaderOn_) {
-    const bool degraded = !zyBuildOn_ || build_->parser->zhuyinDegraded() ||
-                          zhuyin::activeEngine().generation != zyGenAtStart_;
+    const bool degraded =
+        !zyBuildOn_ || build_->parser->zhuyinDegraded() || zhuyin::activeEngine().generation != zyGenAtStart_;
     if (degraded) {
       // ⚠️ 寫不進去就整個不提交（codex 整合複查 A8）：留著「開」的身分 ＝ 缺注音的行永遠不重排
       if (!file.seek(sizeof(uint8_t)) || !serialization::writePodChecked(file, zyOffIdentity_)) {
@@ -933,8 +932,7 @@ void Section::suspendBuild() {
     lastPoisonAvoidedSpine = spineIndex;
     LOG_ERR("SCT", "SECTPOISON avoided spine=%d", spineIndex);
   }
-  const bool worthKeeping =
-      !aborted && builtPageCount_ > 0 && (!partial_ || builtPageCount_ > partialPageCount_);
+  const bool worthKeeping = !aborted && builtPageCount_ > 0 && (!partial_ || builtPageCount_ > partialPageCount_);
 
   bool committed = false;
   if (worthKeeping) {

@@ -12,7 +12,8 @@
 // ⭐ 誰贏（codex 第一輪否決了「NVS 有效就贏」：NVS 寫失敗後的 SD 退路、降版後讀書、清快取、換卡、v331 的影子，
 //   都能讓 SD 比 NVS 新）—— 規則改成【配對】：NVS 那格記著「它對應的 SD 那份」的指紋；開機／開書時指紋對得上
 //   （＝SD 那份自我們上次寫之後沒被別人動過）NVS 才贏，否則 SD 贏。
-//   - APP_STATE：state.json 帶一個隨機 nonce（每次寫 SD 換新），StateBlob 記 sdNonce；v330 重寫 JSON 會把 nonce 丟掉 → 對不上。
+//   - APP_STATE：state.json 帶一個隨機 nonce（每次寫 SD 換新），StateBlob 記 sdNonce；v330 重寫 JSON 會把 nonce 丟掉 →
+//   對不上。
 //   - 閱讀位置：ProgBlob 記 progress.bin 的內容指紋與長度（開書時本來就讀進 RAM，零成本），txt 另記檔案大小。
 //   代價：升級後第一次 saveDurable（離開書／睡一次）之前，NVS-only 的更新在開機時不被採信（一次性、有界）。
 //
@@ -42,24 +43,25 @@ struct StateBlob {
   uint8_t lastSleepFromReader;
   uint8_t pathTrunc;  // openEpubPath 放不進 path[] 時為 1 → 這份不完整：save() 會連 SD 一起寫、load() 選 SD
   uint16_t recent[16];
-  char path[160];  // openEpubPath（實機 path-len 84；UTF-8 中文路徑 3 bytes/字）；最後一個 byte 永遠 0
+  char path[160];    // openEpubPath（實機 path-len 84；UTF-8 中文路徑 3 bytes/字）；最後一個 byte 永遠 0
   uint32_t sdNonce;  // 這份 NVS 對應的 state.json 的 nonce（0＝還沒配對過 → 不採信）
 };
 static_assert(sizeof(StateBlob) == 4 + 4 + 4 + 4 + 32 + 160 + 4, "StateBlob layout drifted");
 
-constexpr uint8_t PROG_HAS_OFFSET = 1;  // ProgBlob::flags：offset 有效（v1 用 0 當「沒有」，會把章首當真 offset；codex）
+// ProgBlob::flags：offset 有效（v1 用 0 當「沒有」，會把章首當真 offset；codex）
+constexpr uint8_t PROG_HAS_OFFSET = 1;
 
 // 閱讀位置（單一槽＝最後一本書）：每一次真的翻頁寫一次。v2（v332）：flags、sdHash／sdLen、identity；v1 不採信。
 //   開書時 sdLen==0（沒有 progress.bin）一律不採信 —— 第一次翻頁會先寫一次 progress.bin 當錨（codex 第三輪）。
 struct ProgBlob {
-  uint8_t magic;    // 'P'
-  uint8_t version;  // 2
-  uint8_t kind;     // 1=epub 2=txt
-  uint8_t flags;    // PROG_HAS_OFFSET
+  uint8_t magic;      // 'P'
+  uint8_t version;    // 2
+  uint8_t kind;       // 1=epub 2=txt
+  uint8_t flags;      // PROG_HAS_OFFSET
   uint32_t bookHash;  // fnv1a(書的路徑)|1，開書時算一次
   uint32_t seq;
   uint16_t spine;
-  uint16_t page;      // 寫入端夾在 0xFFFE 以內；0xFFFF 留給導覽用的哨兵，讀到就不採信
+  uint16_t page;  // 寫入端夾在 0xFFFE 以內；0xFFFF 留給導覽用的哨兵，讀到就不採信
   uint16_t pageCount;
   uint16_t sdLen;     // 對應的 progress.bin 長度（0＝沒有檔）
   uint32_t offset;    // epub：頁首可見文字 offset（flags 說有效才算）；txt：pageStartOffset

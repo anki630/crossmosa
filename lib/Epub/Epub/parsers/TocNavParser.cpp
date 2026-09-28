@@ -42,7 +42,8 @@ size_t TocNavParser::write(const uint8_t* buffer, const size_t size) {
     memcpy(buf, currentBufferPos, toRead);
     // v345（帳本 D14）：交給 expat 的是濾掉控制字元之後的長度；下面的剩餘量照原始長度算
 
-    if (XML_ParseBuffer(parser, static_cast<int>(xmlFilter_.apply(static_cast<char*>(buf), toRead)), remainingSize == toRead) == XML_STATUS_ERROR) {
+    if (XML_ParseBuffer(parser, static_cast<int>(xmlFilter_.apply(static_cast<char*>(buf), toRead)),
+                        remainingSize == toRead) == XML_STATUS_ERROR) {
       LOG_DBG("NAV", "Parse error at line %lu: %s", XML_GetCurrentLineNumber(parser),
               XML_ErrorString(XML_GetErrorCode(parser)));
       destroyXmlParser(parser);

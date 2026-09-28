@@ -114,14 +114,14 @@ void EpubReaderMenuActivity::loop() {
       return;
     }
 
-
     if (selectedAction == MenuAction::DELETE_CACHE) {
       // v184（維護者）：清快取時追加詢問 —— 只清快取（保留進度）／連進度一起重設。
       // v288 前閱讀選單是 12 項零餘裕，不能加項目，所以「連進度一起重設」做成詢問而不是另一列。
       // （v288 拔掉兩項之後有餘裕了，但這個形狀本身沒有不好 —— 不為了有空位就改它。）
-      optionPopup.show(StrId::STR_DELETE_CACHE, clearCacheLabels.data(), static_cast<int>(clearCacheLabels.size()),
-                       0, [this](int idx) {
-                         MenuResult r{.action = static_cast<int>(MenuAction::DELETE_CACHE), .orientation = pendingOrientation};
+      optionPopup.show(StrId::STR_DELETE_CACHE, clearCacheLabels.data(), static_cast<int>(clearCacheLabels.size()), 0,
+                       [this](int idx) {
+                         MenuResult r{.action = static_cast<int>(MenuAction::DELETE_CACHE),
+                                      .orientation = pendingOrientation};
                          r.resetProgress = idx == 1 ? 1 : 0;
                          setResult(std::move(r));
                          finish();
@@ -213,7 +213,7 @@ void EpubReaderMenuActivity::render(RenderLock&&) {
         const auto value = menuItems[index].action;
         if (value == MenuAction::ROTATE_SCREEN) {
           return I18N.get(orientationLabels[pendingOrientation]);
-                } else {
+        } else {
           return "";
         }
       },

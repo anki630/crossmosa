@@ -23,7 +23,7 @@ class JpegToBmpConverter {
     uint16_t srcW = 0, srcH = 0, decW = 0, decH = 0, outW = 0, outH = 0;
     uint8_t scale = 0;
     bool progressive = false;
-    bool memFail = false;  // 失敗原因是配置／堆積不夠（呼叫端可以釋放別的東西後再試）；成功或其他失敗為 false
+    bool memFail = false;    // 失敗原因是配置／堆積不夠（呼叫端可以釋放別的東西後再試）；成功或其他失敗為 false
     uint32_t needBytes = 0;  // v259：縮圖路徑第二段門檻算出的需求（緩衝＋16KB 保留）
     uint32_t decodeMs = 0;
   };

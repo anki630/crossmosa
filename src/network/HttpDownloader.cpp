@@ -1,12 +1,11 @@
 #include "HttpDownloader.h"
 
-#include <cstdio>  // snprintf -- lastError
-
 #include <Arduino.h>
 #include <Logging.h>
 #include <Memory.h>
 #include <base64.h>
 
+#include <cstdio>  // snprintf -- lastError
 #include <functional>
 #include <string>
 
@@ -108,7 +107,8 @@ HttpDownloader::DownloadError runGetWolf(const std::string& startUrl, const std:
     if (http.callbackAborted()) return HttpDownloader::FILE_ERROR;
     if (!http.responseComplete()) {
       LOG_ERR("HTTP", "wolfSSL incomplete: got %zu of %zu bytes", sink.downloaded, sink.total);
-      snprintf(HttpDownloader::lastError, sizeof(HttpDownloader::lastError), "wolfSSL incomplete: got %zu of %zu bytes", sink.downloaded, sink.total);
+      snprintf(HttpDownloader::lastError, sizeof(HttpDownloader::lastError), "wolfSSL incomplete: got %zu of %zu bytes",
+               sink.downloaded, sink.total);
       return HttpDownloader::HTTP_ERROR;
     }
     return HttpDownloader::OK;
@@ -174,7 +174,8 @@ HttpDownloader::DownloadError runGet(const std::string& url, const std::string& 
     err = esp_http_client_open(client, 0);
     if (err != ESP_OK) {
       LOG_ERR("HTTP", "redirect open failed: %s", esp_err_to_name(err));
-      snprintf(HttpDownloader::lastError, sizeof(HttpDownloader::lastError), "redirect open failed: %s", esp_err_to_name(err));
+      snprintf(HttpDownloader::lastError, sizeof(HttpDownloader::lastError), "redirect open failed: %s",
+               esp_err_to_name(err));
       esp_http_client_cleanup(client);
       return HttpDownloader::HTTP_ERROR;
     }
@@ -196,7 +197,8 @@ HttpDownloader::DownloadError runGet(const std::string& url, const std::string& 
   auto buf = makeUniqueNoThrow<char[]>(READ_CHUNK);
   if (!buf) {
     LOG_ERR("HTTP", "OOM: %u byte read buffer", (unsigned)READ_CHUNK);
-    snprintf(HttpDownloader::lastError, sizeof(HttpDownloader::lastError), "OOM: %u byte read buffer", (unsigned)READ_CHUNK);
+    snprintf(HttpDownloader::lastError, sizeof(HttpDownloader::lastError), "OOM: %u byte read buffer",
+             (unsigned)READ_CHUNK);
     esp_http_client_cleanup(client);
     return HttpDownloader::HTTP_ERROR;
   }
@@ -209,7 +211,8 @@ HttpDownloader::DownloadError runGet(const std::string& url, const std::string& 
     const int read = esp_http_client_read(client, buf.get(), READ_CHUNK);
     if (read < 0) {
       LOG_ERR("HTTP", "read error after %zu bytes", sink.downloaded);
-      snprintf(HttpDownloader::lastError, sizeof(HttpDownloader::lastError), "read error after %zu bytes", sink.downloaded);
+      snprintf(HttpDownloader::lastError, sizeof(HttpDownloader::lastError), "read error after %zu bytes",
+               sink.downloaded);
       esp_http_client_cleanup(client);
       return HttpDownloader::HTTP_ERROR;
     }
@@ -226,7 +229,8 @@ HttpDownloader::DownloadError runGet(const std::string& url, const std::string& 
   esp_http_client_cleanup(client);
   if (!complete) {
     LOG_ERR("HTTP", "incomplete: got %zu of %zu bytes", sink.downloaded, sink.total);
-    snprintf(HttpDownloader::lastError, sizeof(HttpDownloader::lastError), "incomplete: got %zu of %zu bytes", sink.downloaded, sink.total);
+    snprintf(HttpDownloader::lastError, sizeof(HttpDownloader::lastError), "incomplete: got %zu of %zu bytes",
+             sink.downloaded, sink.total);
     return HttpDownloader::HTTP_ERROR;
   }
   return HttpDownloader::OK;

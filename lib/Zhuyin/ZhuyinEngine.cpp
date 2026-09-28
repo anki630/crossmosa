@@ -69,7 +69,8 @@ void ZhuyinEngine::freeScratch() {
 LoadStatus ZhuyinEngine::prepare(BlockSource& src, uint16_t* failedCase, const OpenHooks* hooks) {
   registration_.release();
   prepared_ = false;
-  data_.unload();  // 資料的指標都指進 arena：放掉 arena 之前先清空（否則下面配暫存失敗就提早回去，留下「已載入」的懸空資料）
+  data_.unload();  // 資料的指標都指進 arena：放掉 arena
+                   // 之前先清空（否則下面配暫存失敗就提早回去，留下「已載入」的懸空資料）
   freeScratch();
   arena_.release();
   if (!allocScratch()) return LoadStatus::NoMemory;
@@ -91,7 +92,8 @@ LoadStatus ZhuyinEngine::prepare(BlockSource& src, uint16_t* failedCase, const O
 }
 
 bool ZhuyinEngine::publish(const int fontId) {
-  // 沒有完整成功的 prepare：不公開。prepared_ 另外擋「有人經過 data() 從外面把資料載好」—— 那時引擎沒有暫存，公開出去 session 會用到空指標
+  // 沒有完整成功的 prepare：不公開。prepared_ 另外擋「有人經過 data() 從外面把資料載好」—— 那時引擎沒有暫存，公開出去
+  // session 會用到空指標
   if (!prepared_ || !data_.loaded() || data_.stateSerial() != preparedSerial_) return false;
   registration_.attach(&data_, fontId, this);
   return true;

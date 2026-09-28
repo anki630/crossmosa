@@ -74,7 +74,8 @@ class ZhuyinData {
   // 只做結構載入（全部驗過）。⭐ 載入成功還【不能】查詢：要再過 ZhuyinResolver::selfTest（或直接用
   // ZhuyinResolver::open ＝ 載入＋自我測試）才會變成可用；自我測試沒過 → 狀態清空（codex P1.5 複查 4）。
   LoadStatus load(BlockSource& src, Arena& arena);
-  // 清空（回到沒載入）。⚠️ 放掉 arena 之前一定先叫：資料的指標都指進 arena，放掉之後還顯示「已載入」＝ 懸空（codex v339 第三輪）。
+  // 清空（回到沒載入）。⚠️ 放掉 arena 之前一定先叫：資料的指標都指進 arena，放掉之後還顯示「已載入」＝ 懸空（codex v339
+  // 第三輪）。
   void unload() { clearState(); }
   bool loaded() const { return state_ == State::Verified; }  // ＝ 可用（已通過自我測試）
   // 狀態每改變一次（清空、結構載入、通過自我測試）就加一。引擎登記處記下登記當時的序號：
@@ -100,8 +101,8 @@ class ZhuyinData {
   uint16_t defaultOut(uint32_t cp) const;
 
   // 規則：依表的順序，第一條符合的勝出。has* ＝ 那個位置有沒有字。
-  bool applyRules(uint32_t cp, bool hasPrev, uint32_t prev, bool hasPrev2, uint32_t prev2, bool hasNext,
-                  uint32_t next, uint16_t* out) const;
+  bool applyRules(uint32_t cp, bool hasPrev, uint32_t prev, bool hasPrev2, uint32_t prev2, bool hasNext, uint32_t next,
+                  uint16_t* out) const;
 
   uint16_t yi1() const { return yi1_; }
   uint16_t yi2() const { return yi2_; }
@@ -172,8 +173,8 @@ class ZhuyinData {
   LoadStatus checkSelfTest(BlockSource& src);
   LoadStatus loadWindowCrcs(BlockSource& src, Arena& arena);
   uint32_t altStart(uint32_t rank) const;  // 第 rank 個破音字的第一個替代讀音
-  bool polyBit(uint32_t cp) const;       // 不看 loaded_（載入途中要用）
-  uint32_t polyRank(uint32_t cp) const;  // 同上
+  bool polyBit(uint32_t cp) const;         // 不看 loaded_（載入途中要用）
+  uint32_t polyRank(uint32_t cp) const;    // 同上
   uint8_t polyByte(uint32_t i) const { return polyBits_[i / kUroChunkBytes][i % kUroChunkBytes]; }
   bool ownedOut(uint32_t cp, uint16_t out) const;
   static uint8_t* allocBytes(Arena& arena, size_t bytes, size_t align = 1);
@@ -210,13 +211,13 @@ class ZhuyinData {
   uint16_t puaCount_ = 0;
   const uint8_t* puaBits_ = nullptr;
 
-  const uint8_t* polyBits_[2] = {};       // 2 × 1,312 B：bit i ＝ U+4E00+i 是破音字
-  const uint8_t* polyPrefix_ = nullptr;   // 82 × u16（每 256 位元之前的破音字個數），載入時算
-  const uint8_t* polyExtras_ = nullptr;   // U+4E00–9FFF 以外的破音字，u16 遞增
-  const uint8_t* altCounts_ = nullptr;    // 每個破音字的替代讀音數（4 位元一個，依 rank），載入時從 PUAMAP 算
-  const uint8_t* altPrefix_ = nullptr;    // 每 32 個破音字之前的替代讀音總數（u16）
-  const uint8_t* windowCrc_ = nullptr;    // 每個定位點的讀卡窗口 CRC-32（載入時算）：讀卡後比對，卡在載入之後變了就不輸出
-  const uint8_t* toneExtras_ = nullptr;   // U+4E00–9FFF 以外、第四聲的單音字（u16 遞增）
+  const uint8_t* polyBits_[2] = {};      // 2 × 1,312 B：bit i ＝ U+4E00+i 是破音字
+  const uint8_t* polyPrefix_ = nullptr;  // 82 × u16（每 256 位元之前的破音字個數），載入時算
+  const uint8_t* polyExtras_ = nullptr;  // U+4E00–9FFF 以外的破音字，u16 遞增
+  const uint8_t* altCounts_ = nullptr;   // 每個破音字的替代讀音數（4 位元一個，依 rank），載入時從 PUAMAP 算
+  const uint8_t* altPrefix_ = nullptr;   // 每 32 個破音字之前的替代讀音總數（u16）
+  const uint8_t* windowCrc_ = nullptr;  // 每個定位點的讀卡窗口 CRC-32（載入時算）：讀卡後比對，卡在載入之後變了就不輸出
+  const uint8_t* toneExtras_ = nullptr;  // U+4E00–9FFF 以外、第四聲的單音字（u16 遞增）
   uint16_t toneExtraCount_ = 0;
   uint16_t polyExtraCount_ = 0;
   uint16_t polyUroTotal_ = 0;

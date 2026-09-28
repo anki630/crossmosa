@@ -1,11 +1,11 @@
 #pragma once
 #include <ArduinoJson.h>
-#include <cstdio>
 #include <DataDir.h>
 #include <Epub/ReaderRenderSpec.h>
 #include <PersistableStore.h>
 
 #include <cstdint>
+#include <cstdio>
 
 class CrossPointSettings : public PersistableStore<CrossPointSettings> {
  private:

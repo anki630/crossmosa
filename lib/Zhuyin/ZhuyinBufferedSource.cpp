@@ -8,8 +8,10 @@ bool BufferedSource::rawRead(const uint32_t off, void* dst, const uint32_t len) 
   const bool ok = raw_.read(off, dst, len);
   if (counting_) {
     rawReads_++;
-    if (ok) rawBytes_ += len;
-    else rawFails_++;
+    if (ok)
+      rawBytes_ += len;
+    else
+      rawFails_++;
   }
   return ok;
 }
@@ -59,7 +61,8 @@ bool BufferedSource::read(const uint32_t off, void* dst, const uint32_t len) {
     return true;
   }
   if (mode_ == Mode::Direct || len > cap_) return rawRead(off, dst, len);
-  const bool inside = bufLen_ > 0 && off >= bufStart_ && off - bufStart_ <= bufLen_ && len <= bufLen_ - (off - bufStart_);
+  const bool inside =
+      bufLen_ > 0 && off >= bufStart_ && off - bufStart_ <= bufLen_ && len <= bufLen_ - (off - bufStart_);
   if (!inside) {
     // 從 off 所在的 512 位元組邊界開始讀滿一個窗口（循序讀往後走）；對齊之後放不下 → 從 off 開始
     uint32_t start = off & ~static_cast<uint32_t>(511);

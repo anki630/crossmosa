@@ -225,7 +225,7 @@ void sanitizePathComponentForFat32(const char* input, char* output, size_t maxLe
         break;
       }
     }
-    if (!complete) break;                 // 續接位元組不齊（含被 \0 截斷）
+    if (!complete) break;                     // 續接位元組不齊（含被 \0 截斷）
     if (outLen + seqLen > maxLen - 1) break;  // 放不下整個字元，寧可短一點
 
     for (size_t k = 0; k < seqLen; k++) {

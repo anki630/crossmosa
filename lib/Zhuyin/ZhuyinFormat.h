@@ -21,17 +21,17 @@ constexpr uint16_t kFlagSandhi = 1;  // bit0：一、不標變調
 constexpr uint16_t kKnownFlags = kFlagSandhi;
 
 enum SectionId : uint16_t {
-  kSecPuaMap = 1,     // 載入時驗證，不常駐
-  kSecBigram = 2,     // 常駐
-  kSecCheckpoint = 3, // 常駐
-  kSecGroups = 4,     // 讀卡
-  kSecDefaults = 5,   // 常駐
-  kSecRules = 6,      // 常駐
-  kSecSandhi = 7,     // 常駐
-  kSecTone4 = 8,      // 常駐
-  kSecAttrib = 9,     // 不載入
-  kSecPoly = 10,      // 常駐：破音字集合（算 rank）
-  kSecSelfTest = 11,  // 不常駐：黃金句子＋參考模型的答案，載入後在裝置上跑一次（ZhuyinResolver::selfTest）
+  kSecPuaMap = 1,      // 載入時驗證，不常駐
+  kSecBigram = 2,      // 常駐
+  kSecCheckpoint = 3,  // 常駐
+  kSecGroups = 4,      // 讀卡
+  kSecDefaults = 5,    // 常駐
+  kSecRules = 6,       // 常駐
+  kSecSandhi = 7,      // 常駐
+  kSecTone4 = 8,       // 常駐
+  kSecAttrib = 9,      // 不載入
+  kSecPoly = 10,       // 常駐：破音字集合（算 rank）
+  kSecSelfTest = 11,   // 不常駐：黃金句子＋參考模型的答案，載入後在裝置上跑一次（ZhuyinResolver::selfTest）
 };
 
 constexpr uint32_t kHeaderSize = 28;
@@ -71,21 +71,21 @@ inline bool isIdeograph(uint32_t cp) {
 
 // 上限（與 zy_block.py 相同）：每一塊 RAM 配置都 ≤ 2 KB
 constexpr uint32_t kMaxBlockBytes = 131072;
-constexpr uint32_t kKeysPerChunk = 512;      // 雙字索引切塊：每塊 2 KB
-constexpr uint32_t kMaxKeys = 4096;          // 8 塊
-constexpr uint16_t kMaxCheckpoints = 255;    // × 8 B ≤ 2,040 B
-constexpr uint16_t kMaxDefaults = 512;       // × 4 B = 2 KB
+constexpr uint32_t kKeysPerChunk = 512;    // 雙字索引切塊：每塊 2 KB
+constexpr uint32_t kMaxKeys = 4096;        // 8 塊
+constexpr uint16_t kMaxCheckpoints = 255;  // × 8 B ≤ 2,040 B
+constexpr uint16_t kMaxDefaults = 512;     // × 4 B = 2 KB
 constexpr uint8_t kMaxRules = 64;
 constexpr uint32_t kMaxRulesBytes = 2048;
 constexpr uint32_t kMaxSandhiBytes = 512;
-constexpr uint32_t kMaxPua = 6400;           // BMP 私用區 U+E000–F8FF（位元 800 B）
-constexpr uint16_t kMaxPolyExtras = 64;      // U+4E00–9FFF 以外的破音字（字型裡有 1 個：䰰）
+constexpr uint32_t kMaxPua = 6400;       // BMP 私用區 U+E000–F8FF（位元 800 B）
+constexpr uint16_t kMaxPolyExtras = 64;  // U+4E00–9FFF 以外的破音字（字型裡有 1 個：䰰）
 constexpr uint32_t kMaxSelfTestBytes = 2048;
-constexpr uint16_t kMaxSelfTestLen = 64;     // 每句最多 64 字（跑的時候用堆疊緩衝）
-constexpr uint16_t kMinSelfTestCases = 16;   // 自我測試至少 16 句、至少一句比 kCommitLag 長（codex P1.5 複查 5）
-constexpr uint16_t kMaxToneExtras = 64;      // U+4E00–9FFF 以外、第四聲的單音字（TONE4 節尾端的清單）
-constexpr uint8_t kMaxAltCount = 15;         // 每個破音字最多 15 個替代讀音（歸屬表每字 4 位元）
-constexpr uint8_t kPendingExact = 32;        // 分批接續：前 32 個沒送出的碼位逐字比對，其餘看 64 位元雜湊
+constexpr uint16_t kMaxSelfTestLen = 64;    // 每句最多 64 字（跑的時候用堆疊緩衝）
+constexpr uint16_t kMinSelfTestCases = 16;  // 自我測試至少 16 句、至少一句比 kCommitLag 長（codex P1.5 複查 5）
+constexpr uint16_t kMaxToneExtras = 64;     // U+4E00–9FFF 以外、第四聲的單音字（TONE4 節尾端的清單）
+constexpr uint8_t kMaxAltCount = 15;        // 每個破音字最多 15 個替代讀音（歸屬表每字 4 位元）
+constexpr uint8_t kPendingExact = 32;       // 分批接續：前 32 個沒送出的碼位逐字比對，其餘看 64 位元雜湊
 constexpr uint32_t kMaxGroupBytes = 1536;
 constexpr uint32_t kMaxWindowBytes = kCheckpointBytes + kMaxGroupBytes;  // 2 KB
 

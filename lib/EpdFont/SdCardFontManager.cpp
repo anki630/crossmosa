@@ -1,8 +1,7 @@
 #include "SdCardFontManager.h"
 
-#include <FontCacheManager.h>
-
 #include <EpdFontFamily.h>
+#include <FontCacheManager.h>
 #include <GfxRenderer.h>
 #include <Logging.h>
 #include <SdCardFont.h>

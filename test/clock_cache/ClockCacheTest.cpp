@@ -1,5 +1,6 @@
 // v343（帳本 B12）：狀態列時鐘「可信時間」的判斷與快取（lib/hal/ClockCache.h）。
-// 裝置上這段邏輯由 HalClock 包著 I2C 與鎖呼叫；這裡只測純邏輯 —— 任何一條改壞（年份界線、欄位檢查、過期、往前推、溢位）都要變紅。
+// 裝置上這段邏輯由 HalClock 包著 I2C 與鎖呼叫；這裡只測純邏輯 ——
+// 任何一條改壞（年份界線、欄位檢查、過期、往前推、溢位）都要變紅。
 
 #include <gtest/gtest.h>
 
@@ -45,7 +46,7 @@ TEST(ClockTrust, DaysInMonthMatchesLibc) {
   // 獨立實作對照：libc 的 timegm 把「下個月 1 日的前一天」正規化出來的日
   for (uint16_t y = 2025; y <= 2099; ++y) {
     for (uint8_t m = 1; m <= 12; ++m) {
-      struct tm t {};
+      struct tm t{};
       t.tm_year = y - 1900 + (m == 12 ? 1 : 0);
       t.tm_mon = m == 12 ? 0 : m;
       t.tm_mday = 0;  // 0 ＝ 上個月的最後一天
@@ -127,7 +128,7 @@ TEST(ClockDates, EpochMatchesLibcTimegmEveryDayFrom1970To2106) {
   // 1970-01-01 起每一天（到 uint32 秒數的上限附近）：epochOf ＝ timegm，civilFromEpoch ＝ gmtime_r
   for (uint32_t day = 0; day < 49710; ++day) {
     const time_t t = static_cast<time_t>(day) * 86400 + 12 * 3600 + 34 * 60 + 56;
-    struct tm g {};
+    struct tm g{};
     gmtime_r(&t, &g);
     const uint32_t e = clockcache::epochOf(static_cast<uint16_t>(g.tm_year + 1900), static_cast<uint8_t>(g.tm_mon + 1),
                                            static_cast<uint8_t>(g.tm_mday), 12, 34, 56);
@@ -146,7 +147,7 @@ TEST(ClockDates, EpochMatchesLibcTimegmEveryDayFrom1970To2106) {
 
 TEST(ClockDates, KnownValues) {
   EXPECT_EQ(clockcache::epochOf(1970, 1, 1, 0, 0, 0), 0u);
-  EXPECT_EQ(clockcache::epochOf(2000, 1, 1, 0, 0, 0), 946684800u);  // 實機歸零的那個時刻
+  EXPECT_EQ(clockcache::epochOf(2000, 1, 1, 0, 0, 0), 946684800u);       // 實機歸零的那個時刻
   EXPECT_EQ(clockcache::epochOf(2024, 2, 29, 23, 59, 59), 1709251199u);  // 閏日
   EXPECT_EQ(clockcache::epochOf(2099, 12, 31, 23, 59, 59), 4102444799u);
 }

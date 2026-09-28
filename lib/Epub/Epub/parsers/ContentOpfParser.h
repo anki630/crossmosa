@@ -1,13 +1,12 @@
 #pragma once
 #include <Print.h>
+#include <XmlParserUtils.h>
 
 #include <algorithm>
 #include <deque>
 #include <vector>
 
 #include "Epub.h"
-#include <XmlParserUtils.h>
-
 #include "expat.h"
 
 class BookMetadataCache;

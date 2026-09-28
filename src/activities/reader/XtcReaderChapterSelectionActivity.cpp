@@ -82,7 +82,8 @@ void XtcReaderChapterSelectionActivity::loop() {
   const int contentY = isPortraitInverted ? 50 : 0;
   const int listTop = 60 + contentY;
   int row = -1;
-  const auto touch = mappedInput.rowTouch(row, listTop, 38, pageItems, contentX, contentX + contentWidth);  // 與渲染列高一致（v156 tab 教訓）
+  const auto touch = mappedInput.rowTouch(row, listTop, 38, pageItems, contentX,
+                                          contentX + contentWidth);  // 與渲染列高一致（v156 tab 教訓）
   if (touch != MappedInputManager::RowTouch::None) {
     const int touched = selectorIndex / pageItems * pageItems + row;
     if (touched >= 0 && touched < totalItems) {

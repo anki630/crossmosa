@@ -1,8 +1,6 @@
 #include "ReaderActivity.h"
 
-#include "util/DiagLog.h"
 #include <DataDir.h>
-
 #include <FsHelpers.h>
 #include <HalStorage.h>
 #include <I18n.h>
@@ -22,6 +20,7 @@
 #include "activities/util/BmpViewerActivity.h"
 #include "activities/util/FullScreenMessageActivity.h"
 #include "components/UITheme.h"
+#include "util/DiagLog.h"
 
 bool ReaderActivity::isXtcFile(const std::string& path) { return FsHelpers::hasXtcExtension(path); }
 
@@ -182,8 +181,9 @@ void ReaderActivity::onEnter() {
   const unsigned long enterTFont = millis();
   {
     const unsigned long transStart = activityManager.takeReaderTransitionStartMs();
-    DiagLog::line("READERENTER trans=%ld base=%lu font=%lu", transStart == 0 ? -1L : static_cast<long>(enterT0 - transStart),
-                  static_cast<unsigned long>(enterTBase - enterT0), static_cast<unsigned long>(enterTFont - enterTBase));
+    DiagLog::line(
+        "READERENTER trans=%ld base=%lu font=%lu", transStart == 0 ? -1L : static_cast<long>(enterT0 - transStart),
+        static_cast<unsigned long>(enterTBase - enterT0), static_cast<unsigned long>(enterTFont - enterTBase));
   }
 
   currentBookPath = initialBookPath;

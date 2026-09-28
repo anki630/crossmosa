@@ -143,7 +143,7 @@ void CrossPointState::toJson(JsonDocument& doc) const {
   doc["recentSleepFill"] = recentSleepFill;
   doc["readerActivityLoadCount"] = readerActivityLoadCount;
   doc["wakeFrameToken"] = wakeFrameToken;  // v293
-  doc["deepSleepStamp"] = deepSleepStamp;          // v312
+  doc["deepSleepStamp"] = deepSleepStamp;  // v312
   doc["lastSleepFromReader"] = lastSleepFromReader;
   doc["nonce"] = sdNonce_;  // v332：與 NVS 配對用；v330 重寫時會丟掉它（→ 開機時 NVS 對不上，選 SD）
 }
@@ -167,7 +167,7 @@ bool CrossPointState::fromJson(JsonVariantConst doc) {
   }
   readerActivityLoadCount = doc["readerActivityLoadCount"] | static_cast<uint8_t>(0);
   wakeFrameToken = doc["wakeFrameToken"] | static_cast<uint32_t>(0);  // v293
-  deepSleepStamp = doc["deepSleepStamp"] | false;                              // v312（舊檔沒有 → false → 照畫 logo）
+  deepSleepStamp = doc["deepSleepStamp"] | false;                     // v312（舊檔沒有 → false → 照畫 logo）
   lastSleepFromReader = doc["lastSleepFromReader"] | false;
   sdNonce_ = doc["nonce"] | static_cast<uint32_t>(0);  // v332
   return true;

@@ -10,9 +10,10 @@ HalClock halClock;  // Singleton instance
 
 // v343（codex 第四輪）：「校時交易進行中」也要撐過重開機 —— 晶片寫到一半、接著重開機（淺睡 30 分鐘後就真關機），
 //   RAM 裡的 _chipDistrusted 就不見了，那個看起來合理的錯時間會重新被信任；設定裡「已校時」是 1 → 自動校時也不會再跑。
-//   所以同一個標記也寫在 RTC 不初始化的記憶體（軟重開、panic、看門狗、深睡都保留；斷電不保留 —— 斷電時 DS3231 通常也一起沒電，
-//   OSF 會亮）。寫入前設、讀回驗證通過才清；開機讀到就維持不信，直到下一次校時成功。
-//   兩個值互為反碼（冷開機的隨機內容幾乎不可能湊成）；volatile 同 EpubReaderActivity 的預排保險絲（別讓編譯器當成死寫入）。
+//   所以同一個標記也寫在 RTC 不初始化的記憶體（軟重開、panic、看門狗、深睡都保留；斷電不保留 —— 斷電時 DS3231
+//   通常也一起沒電， OSF 會亮）。寫入前設、讀回驗證通過才清；開機讀到就維持不信，直到下一次校時成功。
+//   兩個值互為反碼（冷開機的隨機內容幾乎不可能湊成）；volatile 同 EpubReaderActivity
+//   的預排保險絲（別讓編譯器當成死寫入）。
 volatile RTC_NOINIT_ATTR uint32_t g_clockSyncDirtyMagic;
 volatile RTC_NOINIT_ATTR uint32_t g_clockSyncDirtyInv;
 constexpr uint32_t CLOCK_SYNC_DIRTY_MAGIC = 0x434C4B44u;  // "CLKD"
@@ -266,9 +267,9 @@ bool HalClock::syncFromNTP() {
         return false;
       }
       std::lock_guard<std::mutex> lk(_mu);  // 只包寫入與讀回（等 SNTP 的迴圈不持鎖）
-      _chipDistrusted = true;  // 交易開始：從現在起到讀回驗證通過之前，晶片給的時間都不信（見 HalClock.h）
-      setClockSyncDirty(true);  // 同一個標記也撐過重開機（codex 第四輪）
-      if (!_sdkRtc.set(dt)) {  // 寫到一半失敗 → 晶片可能被改了一半
+      _chipDistrusted = true;               // 交易開始：從現在起到讀回驗證通過之前，晶片給的時間都不信（見 HalClock.h）
+      setClockSyncDirty(true);              // 同一個標記也撐過重開機（codex 第四輪）
+      if (!_sdkRtc.set(dt)) {               // 寫到一半失敗 → 晶片可能被改了一半
         LOG_ERR("CLK", "RTC set failed");
         noteUntrusted();
         noteSyncFailed();

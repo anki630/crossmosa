@@ -1,11 +1,11 @@
 // v336：Formosa Pro 分頁列分段寬度（src/components/themes/TabSegmentLayout.h）的主機測試。
 //   窮舉 × 不變量，再加上 2026-09-23 從 ubuntu_10／ubuntu_14 glyph 表量出來的四種實機情況。
-#include "src/components/themes/TabSegmentLayout.h"
-
 #include <gtest/gtest.h>
 
 #include <algorithm>
 #include <string>
+
+#include "src/components/themes/TabSegmentLayout.h"
 
 namespace {
 
@@ -35,7 +35,8 @@ TEST(TabSegmentLayout, ExhaustiveInvariants) {
       for (int areaW : kAreas) {
         for (int gap : kGaps) {
           const Result r = run(natural, n, areaW, gap);
-          std::string ctx = "n=" + std::to_string(n) + " area=" + std::to_string(areaW) + " gap=" + std::to_string(gap) + " nat=";
+          std::string ctx =
+              "n=" + std::to_string(n) + " area=" + std::to_string(areaW) + " gap=" + std::to_string(gap) + " nat=";
           for (int i = 0; i < n; i++) ctx += std::to_string(natural[i]) + ",";
           int sumNat = 0, maxNat = 0;
           for (int i = 0; i < n; i++) {

@@ -221,9 +221,9 @@ inline bool isNoBreakAfterVertical(const uint32_t cp) {
 // ℹ️ 現況：V1 的直排走【追い出し】不走懸掛（見帳本），所以這個集合暫時無人呼叫，
 //    留著是因為 kinsoku_mode 的另一條路徑要用，而且它記錄了「為什麼只有三個」。
 inline bool isHangablePunctuation(const uint32_t cp) {
-  return cp == 0x3001    // 、頓號
-      || cp == 0xFF0C    // ，逗號
-      || cp == 0x3002;   // 。句號
+  return cp == 0x3001      // 、頓號
+         || cp == 0xFF0C   // ，逗號
+         || cp == 0x3002;  // 。句號
 }
 
 inline bool containsCjkBreakableCodepoint(const std::string& text) {

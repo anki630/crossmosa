@@ -11,9 +11,9 @@
 #include <memory>
 #include <new>
 
+#include "DecodeFile.h"
 #include "DirectPixelWriter.h"
 #include "DitherUtils.h"
-#include "DecodeFile.h"
 #include "PixelCache.h"
 
 namespace {
@@ -33,8 +33,8 @@ struct PngContext {
   int srcHeight{0};
   int dstWidth{0};
   int dstHeight{0};
-  int lastDstY{-1};  // Track last rendered destination Y to avoid duplicates
-  uint32_t lastYieldMs{0};  // yieldDuringDecode() 的節流狀態
+  int lastDstY{-1};          // Track last rendered destination Y to avoid duplicates
+  uint32_t lastYieldMs{0};   // yieldDuringDecode() 的節流狀態
   bool inputAborted{false};  // v260：回呼因按鍵中止解碼
 
   PixelCache cache;
@@ -439,18 +439,21 @@ bool PngToFramebufferConverter::decodeToFramebuffer(const std::string& imagePath
     return false;
   }
 
-  // v251：列緩衝＝剛好 requiredInternal（現在列＋前一列＋各自 16B 對齊，PNGdec DecodePNG 用到 2×pitch＋32，這裡 2×pitch＋34）。
+  // v251：列緩衝＝剛好 requiredInternal（現在列＋前一列＋各自 16B 對齊，PNGdec DecodePNG 用到 2×pitch＋32，這裡
+  // 2×pitch＋34）。
   //   放在 isSupportedBitDepth 之後：16-bit 樣本的 pitch 是 bytesPerPixelFromType 的兩倍，這個公式只對支援的深度成立。
   //   ⚠️ PNGdec 只有在 decode() 帶 PNG_FAST_PALETTE 時會用 ucPixels[PNG_MAX_BUFFERED_PIXELS-512] 當調色盤表 ——
   //   下面 decode(&ctx, 0) 沒帶；哪天要帶，這裡必須改回配滿 PNG_MAX_BUFFERED_PIXELS。
-  //   ⚠️ 必須清零：PNGdec 從不清「前一列」（第一列的 Up／Average／Paeth 濾波要讀到 0）—— 以前緩衝在 PNG 物件裡、open() 會 memset，
-  //   搬出來之後靠 makeUniqueNoThrow 的 value-init（new T[n]()）撐住。桌機用未清零的 malloc 會解出不同的圖（tools/decode-io-check/png_exact）。
-  //   尾端多留 16B（防禦用）：PNGdec 內建 zlib 的 ALLOWS_UNALIGNED 路徑一次搬 4 bytes、最多寫出目標尾端 3 bytes，
-  //   而 requiredInternal 在最壞對齊下只剩 2 bytes。⚠️ 裝置建置【沒有】定義它（用 riscv32 編譯器預處理 inffast.c／inflate.c 確認：
-  //   條件是 64 位元或 HAL_ESP32_HAL_H_，而 zlib 的 include 鏈不含 Arduino 標頭）→ 裝置逐 byte 複製、不溢出；
-  //   64 位元桌機測試會開，比裝置嚴苛。那條路徑在「兩列之間的對齊間隔 < 3」時理論上也會蓋到另一列（PNGdec 原本的配置，與緩衝大小無關）。
-  //   桌機（tools/decode-io-check/png_exact.sh）：裝置版 zlib＋ASan 1,312 次與滿大小逐位元組相同、越界 0；
-  //   一般編譯把兩塊緩衝前後填對抗內容、起點錯開，8,896 次與 PIL 逐位元組相同（滿大小對照組同樣全對）。
+  //   ⚠️ 必須清零：PNGdec 從不清「前一列」（第一列的 Up／Average／Paeth 濾波要讀到 0）—— 以前緩衝在 PNG 物件裡、open()
+  //   會 memset， 搬出來之後靠 makeUniqueNoThrow 的 value-init（new T[n]()）撐住。桌機用未清零的 malloc
+  //   會解出不同的圖（tools/decode-io-check/png_exact）。 尾端多留 16B（防禦用）：PNGdec 內建 zlib 的 ALLOWS_UNALIGNED
+  //   路徑一次搬 4 bytes、最多寫出目標尾端 3 bytes， 而 requiredInternal 在最壞對齊下只剩 2 bytes。⚠️
+  //   裝置建置【沒有】定義它（用 riscv32 編譯器預處理 inffast.c／inflate.c 確認： 條件是 64 位元或 HAL_ESP32_HAL_H_，而
+  //   zlib 的 include 鏈不含 Arduino 標頭）→ 裝置逐 byte 複製、不溢出； 64
+  //   位元桌機測試會開，比裝置嚴苛。那條路徑在「兩列之間的對齊間隔 < 3」時理論上也會蓋到另一列（PNGdec
+  //   原本的配置，與緩衝大小無關）。 桌機（tools/decode-io-check/png_exact.sh）：裝置版 zlib＋ASan 1,312
+  //   次與滿大小逐位元組相同、越界 0； 一般編譯把兩塊緩衝前後填對抗內容、起點錯開，8,896 次與 PIL
+  //   逐位元組相同（滿大小對照組同樣全對）。
   constexpr int kInflateOvershootGuard = 16;
   const size_t pixelBufBytes = static_cast<size_t>(requiredInternal + kInflateOvershootGuard);
   pixelBuf = makeUniqueNoThrow<uint8_t[]>(pixelBufBytes);

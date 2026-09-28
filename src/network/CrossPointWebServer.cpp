@@ -1,7 +1,4 @@
-#include "util/DiagLog.h"
 #include "CrossPointWebServer.h"
-
-#include "util/ProtectedPath.h"
 
 #include <ArduinoJson.h>
 #include <FsHelpers.h>
@@ -27,6 +24,8 @@
 #include "html/js/jszip_minJs.generated.h"
 #include "util/BookCacheUtils.h"
 #include "util/DeviceInfo.h"
+#include "util/DiagLog.h"
+#include "util/ProtectedPath.h"
 #include "util/TaskWatchdog.h"
 
 namespace {
@@ -746,7 +745,7 @@ void CrossPointWebServer::handleUpload(UploadState& state) const {
 
     // Open file for writing - this can be slow due to FAT cluster allocation
     resetTaskWatchdogIfSubscribed();
-        // v77：上傳完全沒有守衛 —— 同網段任何人都能往 /.crosspoint/ 寫檔，
+    // v77：上傳完全沒有守衛 —— 同網段任何人都能往 /.crosspoint/ 寫檔，
     // 覆蓋 settings.json、wifi.json、或塞一個假的 book.bin。
     // 逐段檢查【完整目標路徑】（不是只看檔名，也不是只看目錄）。
     if (isProtectedItemPath(filePath)) {
@@ -755,7 +754,7 @@ void CrossPointWebServer::handleUpload(UploadState& state) const {
       return;
     }
 
-if (!Storage.openFileForWrite("WEB", filePath, state.file)) {
+    if (!Storage.openFileForWrite("WEB", filePath, state.file)) {
       state.error = "Failed to create file on SD card";
       LOG_DBG("WEB", "[UPLOAD] FAILED to create file: %s", filePath.c_str());
       return;

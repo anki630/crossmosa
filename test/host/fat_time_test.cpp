@@ -12,10 +12,10 @@
 // Built and run by `make` / `make check` in this directory (see Makefile);
 // smb_smoke_test.py also runs the binary so a single command covers both.
 
-#include "util/FatTimestamp.h"
-
 #include <cstdint>
 #include <cstdio>
+
+#include "util/FatTimestamp.h"
 
 namespace {
 
@@ -59,8 +59,7 @@ int main() {
   // --- FAT's two-second resolution: an odd second is not representable and
   // truncates DOWN, never up (rounding up would report a file as modified
   // after it was).
-  expectEq("odd seconds truncate down", toUnixSeconds(fatDate(2000, 1, 1), fatTime(13, 45, 31)),
-           946684800LL + 49530);
+  expectEq("odd seconds truncate down", toUnixSeconds(fatDate(2000, 1, 1), fatTime(13, 45, 31)), 946684800LL + 49530);
 
   // --- Century rule. 2000 IS a leap year (divisible by 400) and 1900 is not,
   // which is the case a naive `year % 4` gets wrong -- and 2100 (divisible by
@@ -111,8 +110,8 @@ int main() {
     for (unsigned month = 1; month <= 12; ++month) {
       const int64_t s = toUnixSeconds(fatDate(year, month, 1), fatTime(0, 0, 0));
       if (s <= prev) {
-        std::printf("FAIL (monotonic): %u-%02u-01 gave %lld, not greater than %lld\n", year, month,
-                    (long long)s, (long long)prev);
+        std::printf("FAIL (monotonic): %u-%02u-01 gave %lld, not greater than %lld\n", year, month, (long long)s,
+                    (long long)prev);
         sweepFailures++;
         gFailures++;
       }
@@ -142,9 +141,8 @@ int main() {
       // the filesystem would, so an odd input second comes back one lower.
       const int64_t want = t - (t % 2);
       if (back != want) {
-        std::printf("FAIL (round trip): %lld -> %04u-%02u-%02u %02u:%02u:%02u -> %lld, want %lld\n",
-                    (long long)t, f.year, f.month, f.day, f.hour, f.minute, f.second, (long long)back,
-                    (long long)want);
+        std::printf("FAIL (round trip): %lld -> %04u-%02u-%02u %02u:%02u:%02u -> %lld, want %lld\n", (long long)t,
+                    f.year, f.month, f.day, f.hour, f.minute, f.second, (long long)back, (long long)want);
         roundTripFailures++;
         break;
       }

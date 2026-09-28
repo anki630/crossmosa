@@ -172,8 +172,7 @@ BmpReaderError Bitmap::parseHeaders() {
       // v194：nothrow 配不到就退回無抖動量化，畫面繼續。
       atkinsonDitherer = new (std::nothrow) AtkinsonDitherer(width);
       if (!atkinsonDitherer || !atkinsonDitherer->ok()) {
-        const size_t bytes =
-            sizeof(AtkinsonDitherer) + (static_cast<size_t>(width) + 4) * sizeof(int16_t) * 3;
+        const size_t bytes = sizeof(AtkinsonDitherer) + (static_cast<size_t>(width) + 4) * sizeof(int16_t) * 3;
         noteDitherAllocFail("AtkinsonDitherer:Bitmap", bytes);
         delete atkinsonDitherer;
         atkinsonDitherer = nullptr;
@@ -181,8 +180,7 @@ BmpReaderError Bitmap::parseHeaders() {
     } else {
       fsDitherer = new (std::nothrow) FloydSteinbergDitherer(width);
       if (!fsDitherer || !fsDitherer->ok()) {
-        const size_t bytes =
-            sizeof(FloydSteinbergDitherer) + (static_cast<size_t>(width) + 2) * sizeof(int16_t) * 2;
+        const size_t bytes = sizeof(FloydSteinbergDitherer) + (static_cast<size_t>(width) + 2) * sizeof(int16_t) * 2;
         noteDitherAllocFail("FloydSteinbergDitherer:Bitmap", bytes);
         delete fsDitherer;
         fsDitherer = nullptr;

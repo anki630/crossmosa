@@ -46,8 +46,8 @@ namespace {
 //
 // ⚠️ 使用者在這個階段是【全盲】的 —— 面板要到 setupDisplayAndFonts() 才亮，而本函式
 //    在它之前一百多行。**任何以「畫面亮起」為信號的操作指示都是不可執行的。**
-constexpr int kSettleSamples = 16;   // 去彈跳暖機期間最多輪詢幾次（約 96ms）
-constexpr int kConfirmSamples = 5;   // 需要連續幾次成立（約 30 ms）
+constexpr int kSettleSamples = 16;  // 去彈跳暖機期間最多輪詢幾次（約 96ms）
+constexpr int kConfirmSamples = 5;  // 需要連續幾次成立（約 30 ms）
 constexpr int kPollDelayMs = 6;
 static_assert(kSettleSamples > kConfirmSamples, "去彈跳會吃掉第一次取樣，窗口必須有餘裕");
 

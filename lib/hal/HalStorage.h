@@ -5,7 +5,6 @@
 #include <freertos/semphr.h>
 
 #include <cassert>
-
 #include <memory>
 #include <string>
 #include <vector>

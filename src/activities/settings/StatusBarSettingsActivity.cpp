@@ -89,7 +89,8 @@ void StatusBarSettingsActivity::onEnter() {
 
   selectedIndex = 0;
   visibleItemCount = halClock.isAvailable() ? FULL_MENU_ITEMS : BASE_MENU_ITEMS;
-  // v343（帳本 B12）：「時鐘校時」標籤要知道現在的時間可不可信 —— 在這裡（主任務）探測一次，render 只讀結果（不在 render 裡打 I2C）
+  // v343（帳本 B12）：「時鐘校時」標籤要知道現在的時間可不可信 —— 在這裡（主任務）探測一次，render 只讀結果（不在
+  // render 裡打 I2C）
   clockTrusted = halClock.isAvailable() && halClock.probe() == HalClock::State::Ok;
 
   // Clamp statusBarProgressBar and statusBarTitle in case of corrupt/migrated data

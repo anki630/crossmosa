@@ -153,10 +153,10 @@ bool ZhuyinSession::process(bool final) {
 }
 
 uint16_t ZhuyinSession::outFor(uint32_t cp, uint8_t fl, uint16_t resolved) const {
-  if (fl & kFlagAnnotated) return 0;  // ruby 或其他選擇符號：出版社自己處理了
-  if (fl & kSelMask) {                // v342：bpmfvs 選擇符號 → 照書
+  if (fl & kFlagAnnotated) return 0;                        // ruby 或其他選擇符號：出版社自己處理了
+  if (fl & kSelMask) {                                      // v342：bpmfvs 選擇符號 → 照書
     const uint32_t k = ((fl & kSelMask) >> kSelShift) - 1;  // 0 ＝ VS17 ＝ 不標注音
-    return k == 0 ? 0 : d_.variantOut(cp, k);            // 字型沒有這個讀音 → 0（畫原字，不畫錯的注音）
+    return k == 0 ? 0 : d_.variantOut(cp, k);               // 字型沒有這個讀音 → 0（畫原字，不畫錯的注音）
   }
   if (docAnnotated_) return d_.variantOut(cp, 0);  // v342：預先標注的章節、沒有選擇符號 ＝ 第一個讀音（單音字 0）
   if (fl & kFlagLongRun) return 0;

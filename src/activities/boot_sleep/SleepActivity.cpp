@@ -1,6 +1,6 @@
 #include "SleepActivity.h"
-#include <DataDir.h>
 
+#include <DataDir.h>
 #include <Epub.h>
 #include <FsHelpers.h>
 #include <GfxRenderer.h>
@@ -10,6 +10,9 @@
 #include <Txt.h>
 #include <Xtc.h>
 
+#include <cstdio>
+#include <cstring>
+
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
 #include "activities/reader/ReaderUtils.h"
@@ -18,9 +21,6 @@
 #include "images/LogoBear240.h"
 #include "util/BenchFlags.h"
 #include "util/DiagLog.h"
-
-#include <cstdio>
-#include <cstring>
 
 // ─── v320：桌布平面快取 ──────────────────────────────────────────────────────
 // 實機（diag319）：按電源鍵休眠 → 真的睡著，中位 5.9 秒。其中約 3.8 秒是把【同一張 BMP 解碼三趟】
@@ -49,7 +49,7 @@ struct WallCacheSrc {
 };
 
 namespace {
-constexpr uint16_t WALLCACHE_VERSION = 1;        // 檔案佈局的版本
+constexpr uint16_t WALLCACHE_VERSION = 1;  // 檔案佈局的版本
 // ⚠️ 像素語意的版本：GfxRenderer::drawBitmap／drawBitmap1Bit／Bitmap 的抖色或平面對映改了就 +1，
 //    否則舊快取會用舊的算法顯示。v320 一度用韌體版號字串，但那讓【每次刷韌體】所有桌布都要重算——
 //    對每天刷機的人等於沒有快取。（GfxRenderer.cpp 的 drawBitmap 上方有指回這裡的註解。）
@@ -59,15 +59,15 @@ constexpr uint16_t WALLCACHE_MAX_FILES = 400;  // 約 63MB 上限
 struct WallCacheFooter {  // 放【檔尾】：寫入時不需要回頭 seek 改檔頭
   char magic[4];          // "CMWP"
   uint16_t version;
-  uint8_t planes;         // 1＝只有 BW；3＝BW＋LSB＋MSB
+  uint8_t planes;  // 1＝只有 BW；3＝BW＋LSB＋MSB
   // SD 卡上的檔案格式：保留欄位，程式不讀。
   // cppcheck-suppress unusedStructMember
   uint8_t reserved;
-  uint32_t bufSize;       // 每個平面的位元組數（＝renderer.getBufferSize()）
+  uint32_t bufSize;  // 每個平面的位元組數（＝renderer.getBufferSize()）
   uint32_t srcSize;
   uint32_t srcFingerprint;
-  uint32_t srcFullHash;   // 來源整檔 FNV-1a（畫完之後才驗）
-  uint32_t pathHash2;     // 第二個獨立的路徑雜湊：檔名用的那個 32-bit 撞號時認得出來
+  uint32_t srcFullHash;  // 來源整檔 FNV-1a（畫完之後才驗）
+  uint32_t pathHash2;    // 第二個獨立的路徑雜湊：檔名用的那個 32-bit 撞號時認得出來
   uint32_t pathLen;
   uint32_t paramsHash;
   uint32_t planeHash[3];
@@ -158,8 +158,8 @@ bool wcReadPlane(HalFile& f, uint8_t* dst, size_t len, uint32_t expectHash) {
 // 回傳 true＝整張由快取完成（含顯示）。false＝沒用到快取或中途失敗；呼叫端一律走完整解碼
 // （不拼接：黑白底若已上面板，解碼路徑會再刷一次——只在快取檔損壞時發生）。
 // *fullHashOut：命中時帶回檔尾記的來源整檔雜湊，給顯示之後的驗證用。
-bool wallCachePaint(GfxRenderer& renderer, const WallCacheSrc& src, uint32_t paramsHash, bool hasGray,
-                    const char** why, uint32_t* fullHashOut) {
+bool wallCachePaint(GfxRenderer& renderer, const WallCacheSrc& src, uint32_t paramsHash, bool hasGray, const char** why,
+                    uint32_t* fullHashOut) {
   *why = "off";
   if (gWcReadDisabled) return false;
   *why = "path";
@@ -174,8 +174,7 @@ bool wallCachePaint(GfxRenderer& renderer, const WallCacheSrc& src, uint32_t par
   WallCacheFooter ft{};
   const size_t want = static_cast<size_t>(planes) * bufSize + sizeof(ft);
   *why = "size";
-  bool ok = f.size() == want && f.seek(want - sizeof(ft)) &&
-            f.read(&ft, sizeof(ft)) == static_cast<int>(sizeof(ft));
+  bool ok = f.size() == want && f.seek(want - sizeof(ft)) && f.read(&ft, sizeof(ft)) == static_cast<int>(sizeof(ft));
   if (ok) {
     *why = "ident";
     ok = memcmp(ft.magic, "CMWP", 4) == 0 && ft.version == WALLCACHE_VERSION && ft.planes == planes &&
@@ -418,11 +417,11 @@ bool wallCacheFooterValid(const WallCacheSrc& src, const uint32_t paramsHash, co
   if (!Storage.openFileForRead("WPC", gWcPath, f)) return false;
   WallCacheFooter ft{};
   const size_t want = static_cast<size_t>(hasGray ? 3 : 1) * bufSize + sizeof(ft);
-  const bool ok = f.size() == want && f.seek(want - sizeof(ft)) && f.read(&ft, sizeof(ft)) == static_cast<int>(sizeof(ft)) &&
-                  memcmp(ft.magic, "CMWP", 4) == 0 && ft.version == WALLCACHE_VERSION &&
-                  ft.planes == (hasGray ? 3 : 1) && ft.bufSize == bufSize && ft.srcSize == src.fileSize &&
-                  ft.srcFingerprint == src.fingerprint && ft.pathHash2 == wallPathHash2(src.path) &&
-                  ft.pathLen == strlen(src.path) && ft.paramsHash == paramsHash;
+  const bool ok =
+      f.size() == want && f.seek(want - sizeof(ft)) && f.read(&ft, sizeof(ft)) == static_cast<int>(sizeof(ft)) &&
+      memcmp(ft.magic, "CMWP", 4) == 0 && ft.version == WALLCACHE_VERSION && ft.planes == (hasGray ? 3 : 1) &&
+      ft.bufSize == bufSize && ft.srcSize == src.fileSize && ft.srcFingerprint == src.fingerprint &&
+      ft.pathHash2 == wallPathHash2(src.path) && ft.pathLen == strlen(src.path) && ft.paramsHash == paramsHash;
   f.close();
   return ok;
 }
@@ -488,7 +487,8 @@ void SleepActivity::renderCustomSleepScreen() const {
   if (Storage.openFileForRead("SLP", "/sleep.bmp", file)) {
     // v320：身分取不到（讀取失敗）就不給 cacheSrc → 整張照原路解碼，不碰快取。
     WallCacheSrc cacheSrc{"/sleep.bmp", &file, static_cast<uint32_t>(file.size()), 0};
-    const bool cacheOk = wallFingerprint(file, renderer.getFrameBuffer(), renderer.getBufferSize(), &cacheSrc.fingerprint);
+    const bool cacheOk =
+        wallFingerprint(file, renderer.getFrameBuffer(), renderer.getBufferSize(), &cacheSrc.fingerprint);
     Bitmap bitmap(file, true);
     if (bitmap.parseHeaders() == BmpReaderError::Ok) {
       LOG_DBG("SLP", "Loading: /sleep.bmp");
@@ -548,7 +548,7 @@ void SleepActivity::renderCustomSleepScreen() const {
           break;
         }
       }
-      if (!found) break;  // 兩趟之間目錄變了 —— 這台機器上不會發生，但要有出口
+      if (!found) break;                                         // 兩趟之間目錄變了 —— 這台機器上不會發生，但要有出口
       const auto filename = std::string(sleepDir) + "/" + name;  // 冷路徑，只為選中的那一張組路徑
       HalFile randFile;
       if (Storage.openFileForRead("SLP", filename, randFile)) {
@@ -606,7 +606,7 @@ void SleepActivity::renderDefaultSleepScreen() const {
 }
 
 void SleepActivity::renderBitmapSleepScreen(const Bitmap& bitmap, const WallCacheSrc* cacheSrc,
-                                             const bool displayPlanes) const {
+                                            const bool displayPlanes) const {
   const auto pageWidth = renderer.getScreenWidth();
   const auto pageHeight = renderer.getScreenHeight();
   WallGeometry geom;
@@ -645,12 +645,13 @@ void SleepActivity::renderBitmapSleepScreen(const Bitmap& bitmap, const WallCach
   // ─── v320：先試桌布平面快取（見檔頭說明）。cacheSrc 只有自訂桌布那兩條路會給；書封路徑不快取。
   const unsigned long paintT0 = millis();
   const size_t bufSize = renderer.getBufferSize();
-  const uint32_t paramsHash =
-      wallParamsHash(bitmap, pageWidth, pageHeight, geom, hasGreyscale, static_cast<uint8_t>(renderer.getOrientation()), bufSize);
+  const uint32_t paramsHash = wallParamsHash(bitmap, pageWidth, pageHeight, geom, hasGreyscale,
+                                             static_cast<uint8_t>(renderer.getOrientation()), bufSize);
 
   const char* cacheWhy = "off";
   uint32_t expectFullHash = 0;
-  if (displayPlanes && cacheSrc && wallCachePaint(renderer, *cacheSrc, paramsHash, hasGreyscale, &cacheWhy, &expectFullHash)) {
+  if (displayPlanes && cacheSrc &&
+      wallCachePaint(renderer, *cacheSrc, paramsHash, hasGreyscale, &cacheWhy, &expectFullHash)) {
     const unsigned long shownMs = millis() - paintT0;
     // 使用者已經看到桌布了 —— 現在才驗來源整檔（借 framebuffer 當緩衝，它此刻已經沒人要用）。
     uint32_t got = 0;
@@ -817,4 +818,3 @@ void SleepActivity::renderBlankSleepScreen() const {
   renderer.clearScreen();
   renderer.displayBuffer(HalDisplay::HALF_REFRESH);
 }
-

@@ -1,13 +1,13 @@
 #include "ClearCacheActivity.h"
-#include <DataDir.h>
 
+#include <DataDir.h>
 #include <GfxRenderer.h>
 #include <HalStorage.h>
 #include <I18n.h>
 #include <Logging.h>
 
-#include <cstdio>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <string>
 
@@ -308,8 +308,8 @@ void ClearCacheActivity::clearCache(bool keepProgress) {
   // v292：一行把整件事講完。`dirs=` 是掃到的書籍快取資料夾（逐格式），
   //   `cleared=`／`failed=` 是實際處理的結果。txt 沒被刪到的話，看 `txt=` 是 0（沒掃到）
   //   還是 >0 而 `failed=` 也 >0（掃到了但刪不掉）—— 兩者的修法完全不同。
-  DiagLog::line("CACHECLEAR keep=%d dirs=epub:%u,txt:%u,xtc:%u other=%u cleared=%u failed=%u",
-                keepProgress ? 1 : 0, seenEpub, seenTxt, seenXtc, seenOther, clearedCount, failedCount);
+  DiagLog::line("CACHECLEAR keep=%d dirs=epub:%u,txt:%u,xtc:%u other=%u cleared=%u failed=%u", keepProgress ? 1 : 0,
+                seenEpub, seenTxt, seenXtc, seenOther, clearedCount, failedCount);
 
   if (!keepProgress) {
     // v192：重設時只把最近閱讀清單的百分比歸零，不准刪 recent.json 的項目本身。

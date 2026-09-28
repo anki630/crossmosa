@@ -1,5 +1,3 @@
-#include <cassert>
-#include <algorithm>
 #include "OpdsBookBrowserActivity.h"
 
 #include <Arduino.h>
@@ -9,6 +7,9 @@
 #include <Logging.h>
 #include <OpdsStream.h>
 #include <WiFi.h>
+
+#include <algorithm>
+#include <cassert>
 
 #include "CrossPointSettings.h"
 #include "MappedInputManager.h"
@@ -20,8 +21,8 @@
 #include "components/icons/search24.h"
 #include "fontIds.h"
 #include "network/HttpDownloader.h"
-#include "util/DiagLog.h"
 #include "util/BookCacheUtils.h"
+#include "util/DiagLog.h"
 #include "util/OpdsFilename.h"
 #include "util/StringUtils.h"
 #include "util/UrlUtils.h"
@@ -283,11 +284,10 @@ void OpdsBookBrowserActivity::render(RenderLock&&) {
     return;
   }
 
-  const char* confirmLabel =
-      (selectorIndex >= 0 && selectorIndex < static_cast<int>(entries.size()) &&
-       entries[selectorIndex].type == OpdsEntryType::BOOK)
-          ? tr(STR_DOWNLOAD)
-          : tr(STR_OPEN);  // v200：selectorIndex 在鎖外被寫，這裡自己夾限，不依賴它的時序
+  const char* confirmLabel = (selectorIndex >= 0 && selectorIndex < static_cast<int>(entries.size()) &&
+                              entries[selectorIndex].type == OpdsEntryType::BOOK)
+                                 ? tr(STR_DOWNLOAD)
+                                 : tr(STR_OPEN);  // v200：selectorIndex 在鎖外被寫，這裡自己夾限，不依賴它的時序
   const char* searchLabel = (!searchTemplate.empty() && selectorIndex == 0) ? tr(STR_SEARCH) : tr(STR_DIR_UP);
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), confirmLabel, searchLabel, tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
@@ -299,8 +299,8 @@ void OpdsBookBrowserActivity::render(RenderLock&&) {
     // 空 feed = 空狀態（不是錯誤）：告訴使用者現在能按什麼。
     // 根 feed 的 Back = 離開 OPDS（navigateBack→onGoHome），非根才是「回上一層」——文案依情境分流。
     const int midY = pageHeight / 2;
-    renderer.drawCenteredText(UI_12_FONT_ID, midY - renderer.getLineHeight(UI_12_FONT_ID) - 2,
-                              tr(STR_OPDS_EMPTY_FEED), true, EpdFontFamily::BOLD);
+    renderer.drawCenteredText(UI_12_FONT_ID, midY - renderer.getLineHeight(UI_12_FONT_ID) - 2, tr(STR_OPDS_EMPTY_FEED),
+                              true, EpdFontFamily::BOLD);
     renderer.drawCenteredText(UI_10_FONT_ID, midY + 2,
                               navigationHistory.empty() ? tr(STR_OPDS_EMPTY_HINT_ROOT) : tr(STR_OPDS_EMPTY_HINT));
   } else {
@@ -373,38 +373,38 @@ void OpdsBookBrowserActivity::fetchFeed(const std::string& path) {
     // 原子地一起換掉 —— drawList 拿的是 entries.size() 與 selectorIndex，兩者不一致就會
     // 索引越界。這一段全是記憶體操作，沒有 I/O，鎖的時間很短。
     RenderLock lock;
-  entries = std::move(parser).getEntries();
+    entries = std::move(parser).getEntries();
 
-  entries.reserve(entries.size() + (prevUrl.empty() ? 0 : 1) + (nextUrl.empty() ? 0 : 1));
-  if (!prevUrl.empty()) {
-    entries.insert(entries.begin(), OpdsEntry{OpdsEntryType::NAVIGATION, tr(STR_PREV_PAGE), "", prevUrl, ""});
-  }
-  if (!nextUrl.empty()) {
-    entries.push_back(OpdsEntry{OpdsEntryType::NAVIGATION, tr(STR_NEXT_PAGE), "", nextUrl, ""});
-  }
-  if (feedTruncated) {
-    LOG_INF("OPDS", "Feed truncated to fit memory");
-  }
+    entries.reserve(entries.size() + (prevUrl.empty() ? 0 : 1) + (nextUrl.empty() ? 0 : 1));
+    if (!prevUrl.empty()) {
+      entries.insert(entries.begin(), OpdsEntry{OpdsEntryType::NAVIGATION, tr(STR_PREV_PAGE), "", prevUrl, ""});
+    }
+    if (!nextUrl.empty()) {
+      entries.push_back(OpdsEntry{OpdsEntryType::NAVIGATION, tr(STR_NEXT_PAGE), "", nextUrl, ""});
+    }
+    if (feedTruncated) {
+      LOG_INF("OPDS", "Feed truncated to fit memory");
+    }
 
-  // v13/v156/v159：返回中的游標還原。必須在偽項目（上一頁/下一頁列）插入【之後】才套——
-  // 儲存時的 selectorIndex 是顯示座標（含偽項目）。夾限到實際筆數（feed 可能變了）；只消費一次。
-  // ⚠️ v156 把這段放在中段，被這裡原本的「selectorIndex = 0」無條件蓋掉——還原從未生效過。
-  selectorIndex = 0;
-  if (pendingRestoreIndex >= 0) {
-    if (!entries.empty()) {
-      selectorIndex = std::min(pendingRestoreIndex, static_cast<int>(entries.size()) - 1);
-      if (!pendingRestoreHref.empty()) {
-        for (size_t i = 0; i < entries.size(); i++) {
-          if (entries[i].href == pendingRestoreHref) {
-            selectorIndex = static_cast<int>(i);
-            break;
+    // v13/v156/v159：返回中的游標還原。必須在偽項目（上一頁/下一頁列）插入【之後】才套——
+    // 儲存時的 selectorIndex 是顯示座標（含偽項目）。夾限到實際筆數（feed 可能變了）；只消費一次。
+    // ⚠️ v156 把這段放在中段，被這裡原本的「selectorIndex = 0」無條件蓋掉——還原從未生效過。
+    selectorIndex = 0;
+    if (pendingRestoreIndex >= 0) {
+      if (!entries.empty()) {
+        selectorIndex = std::min(pendingRestoreIndex, static_cast<int>(entries.size()) - 1);
+        if (!pendingRestoreHref.empty()) {
+          for (size_t i = 0; i < entries.size(); i++) {
+            if (entries[i].href == pendingRestoreHref) {
+              selectorIndex = static_cast<int>(i);
+              break;
+            }
           }
         }
       }
+      pendingRestoreIndex = -1;
+      pendingRestoreHref.clear();
     }
-    pendingRestoreIndex = -1;
-    pendingRestoreHref.clear();
-  }
   }  // v200：RenderLock 作用域結束
   state = BrowserState::BROWSING;  // 空 feed 也是 BROWSING：render 畫空狀態版面（空分類≠錯誤）
   requestUpdate();
@@ -569,9 +569,9 @@ void OpdsBookBrowserActivity::performSearch(const std::string& query) {
   const size_t pos = url.find(placeholder);
   if (pos != std::string::npos) url.replace(pos, placeholder.length(), urlEncode(query));
 
-  navigationHistory.push_back({currentPath, selectorIndex,
-                               entries.empty() ? std::string() : entries[selectorIndex].href});
-  currentPath = url;                         // <-- add this
+  navigationHistory.push_back(
+      {currentPath, selectorIndex, entries.empty() ? std::string() : entries[selectorIndex].href});
+  currentPath = url;  // <-- add this
 
   state = BrowserState::LOADING;
   setStatus(tr(STR_LOADING));

@@ -97,10 +97,11 @@ bool ZipEntryReader::open(const std::string& zipPath, const char* entryName, con
     phys_ = 0;
   } else if (method_ == kMethodDeflated) {
     // v250：缺一不可的先配（inflate 狀態 8,364B＋視窗 32,768B），壓縮讀取緩衝最後配、配不到就減半。
-    // diag249：碎片化的 p2（空塊 52,092／24,576）上，解碼器物件進 24.5K 那塊，讀取緩衝 8KB＋狀態＋視窗三個全擠 52K 那塊，
+    // diag249：碎片化的 p2（空塊 52,092／24,576）上，解碼器物件進 24.5K 那塊，讀取緩衝 8KB＋狀態＋視窗三個全擠 52K
+    // 那塊，
     //   最後配的視窗要過 TLSF 取整（找 ≥34,816 的塊）—— v248 同佈局剩 52B 成功、v249 位移 200B 就全部退回抽圖。
-    //   桌機用 ESP-IDF 真的 tlsf.c 重播（工作區 tools/tlsf-stream-open-sim）：這個順序在 v249 佈局上成功（讀取緩衝退到 4KB），
-    //   原本的順序、只換順序不減半、縮小解碼器物件都失敗。
+    //   桌機用 ESP-IDF 真的 tlsf.c 重播（工作區 tools/tlsf-stream-open-sim）：這個順序在 v249 佈局上成功（讀取緩衝退到
+    //   4KB）， 原本的順序、只換順序不減半、縮小解碼器物件都失敗。
     if (!restartInflate()) {
       noteOpenFail(7);
       close();
@@ -147,7 +148,9 @@ void ZipEntryReader::close() {
   inflateDone_ = false;
 }
 
-size_t ZipEntryReader::fillThunk(void* ctx, const uint8_t** data) { return static_cast<ZipEntryReader*>(ctx)->fill(data); }
+size_t ZipEntryReader::fillThunk(void* ctx, const uint8_t** data) {
+  return static_cast<ZipEntryReader*>(ctx)->fill(data);
+}
 
 size_t ZipEntryReader::fill(const uint8_t** data) {
   if (compRemaining_ == 0) return 0;

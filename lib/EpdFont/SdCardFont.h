@@ -4,6 +4,7 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 #include <freertos/task.h>
+
 #include <cstdint>
 #include <deque>
 #include <memory>
@@ -64,6 +65,7 @@ class SdCardFont {
   static void openCjkScanWindow(bool (*abortFn)(void*), void* abortCtx);
   static void closeCjkScanWindow();
   static uint32_t advanceScanDeferred_;
+
  private:
  public:
   static constexpr uint16_t MAX_PAGE_GLYPHS = 512;
@@ -88,7 +90,16 @@ class SdCardFont {
   // 這是注音字型 —— 漢字與全形標點的字形是 1.5 em 的注音格（直排欄距要跟著放寬，見 vtext::columnPitchPx）。
   bool hasZhuyinMarker() const { return zyMarker_; }
   uint64_t zhuyinMarkerDataset() const { return zyDataset_; }
-  enum class ZhuyinEnable : uint8_t { Ready, NotZhuyin, LowStack, LowMemory, BadMarker, NoMemory, LoadFailed, PairMismatch };
+  enum class ZhuyinEnable : uint8_t {
+    Ready,
+    NotZhuyin,
+    LowStack,
+    LowMemory,
+    BadMarker,
+    NoMemory,
+    LoadFailed,
+    PairMismatch
+  };
   struct ZhuyinEnableResult {
     ZhuyinEnable status = ZhuyinEnable::NotZhuyin;
     uint8_t load = 0;         // zhuyin::LoadStatus（LoadFailed 時）
@@ -96,19 +107,19 @@ class SdCardFont {
     uint32_t ms = 0;
     uint32_t reads = 0;
     uint32_t resident = 0;
-    uint32_t stackFree = 0;   // 開始前：目前位置到堆疊底（不是歷史高水位）
+    uint32_t stackFree = 0;  // 開始前：目前位置到堆疊底（不是歷史高水位）
     uint32_t hwmBefore = 0, hwmAfter = 0;
     uint32_t freeBefore = 0, freeAfter = 0, maxBefore = 0, maxAfter = 0;
     // v339 讀卡證人（`ZY loadio`）：載入時間花在哪一段、哪一種讀卡上
-    uint32_t window = 0;           // 結構載入借的堆疊窗口（位元組；0 ＝ 直接讀）
-    uint32_t whole = 0;            // 自我測試用上了整塊緩衝（位元組；0 ＝ 沒借到或讀不到 → 直接讀）
-    uint32_t structMs = 0;         // 結構載入（CRC 掃描＋各節）
-    uint32_t preMs = 0;            // 整塊預讀（含讀卡）；自我測試 ＝ ms − structMs − preMs（含收尾）
-    uint32_t calls = 0;            // 載入對讀取層的呼叫次數（v338 ＝ 全部讀卡）
-    uint32_t cardStruct = 0, cardTest = 0;  // 真的讀卡的次數：結構段、之後（含整塊那一次）
-    uint32_t cardBytes = 0, cardFails = 0;  // 讀卡成功的位元組、失敗次數（經過緩衝的失敗之後改直接讀）
+    uint32_t window = 0;                          // 結構載入借的堆疊窗口（位元組；0 ＝ 直接讀）
+    uint32_t whole = 0;                           // 自我測試用上了整塊緩衝（位元組；0 ＝ 沒借到或讀不到 → 直接讀）
+    uint32_t structMs = 0;                        // 結構載入（CRC 掃描＋各節）
+    uint32_t preMs = 0;                           // 整塊預讀（含讀卡）；自我測試 ＝ ms − structMs − preMs（含收尾）
+    uint32_t calls = 0;                           // 載入對讀取層的呼叫次數（v338 ＝ 全部讀卡）
+    uint32_t cardStruct = 0, cardTest = 0;        // 真的讀卡的次數：結構段、之後（含整塊那一次）
+    uint32_t cardBytes = 0, cardFails = 0;        // 讀卡成功的位元組、失敗次數（經過緩衝的失敗之後改直接讀）
     uint32_t waitUs = 0, seekUs = 0, readUs = 0;  // 讀卡時間（見 ZyBlockSource 的註解：外層鎖／開檔＋seek／read）
-    uint32_t backSeeks = 0;        // 目標在檔柄目前位置之前的讀卡次數
+    uint32_t backSeeks = 0;                       // 目標在檔柄目前位置之前的讀卡次數
   };
   // 啟用引擎：只對閱讀字級那一個字型呼叫（SdCardFontSystem 決定），在字型載入的時機、主任務上
   // （自我測試約 1.9 KB 堆疊）。先看堆疊與記憶體夠不夠 → 載入＋自我測試 → 配對檢查（檔頭與區塊的資料集相同、
@@ -135,7 +146,8 @@ class SdCardFont {
   int buildAdvanceTable(const std::deque<std::string>& words, bool includeHyphen, uint8_t styleMask = 0x0F,
                         const char* extraText = nullptr);
   // v254：逐字字重版 —— 每個實際字面只準備自己那些字（wordStyles 與 words 平行）。排版引擎（橫排／直排）用這個。
-  // v262：cpFilter 非空時只收它回 true 的碼位（空白照舊一律準備；includeHyphen 時的連字號也照舊）。直排用它跳過漢字 —— 直排的漢字一律佔 em 格、
+  // v262：cpFilter 非空時只收它回 true 的碼位（空白照舊一律準備；includeHyphen 時的連字號也照舊）。直排用它跳過漢字 ——
+  // 直排的漢字一律佔 em 格、
   //   不量 advance（ParsedTextVertical::planToken），替它們逐字讀 SD 是白工（diag261：一章 fetchms 1.3–1.6 秒）。
   //   表裡少哪些字只影響速度：讀字寬的地方查不到都會退回讀字形紀錄（v254）。
   int buildAdvanceTable(const std::deque<std::string>& words, const std::vector<EpdFontFamily::Style>& wordStyles,
@@ -428,9 +440,9 @@ class SdCardFont {
     uint16_t uniform = 0;  // 12.4 fixed-point
     uint16_t exceptionCount = 0;
     uint16_t verified = 0;
-    uint32_t covered = 0;     // 範圍內字型有的碼位數
+    uint32_t covered = 0;  // 範圍內字型有的碼位數
     uint32_t scanMs = 0;
-    uint32_t oldPathCjk = 0;  // 觸發條件：舊路徑為這個字面【成功】從 SD 讀到的範圍內碼位累計
+    uint32_t oldPathCjk = 0;                           // 觸發條件：舊路徑為這個字面【成功】從 SD 讀到的範圍內碼位累計
     CjkException exceptions[CJK_MAX_EXCEPTIONS] = {};  // 依 cpOffset 排序；只有 READY 時才被讀
   };
   CjkAdvance cjk_[MAX_STYLES] = {};
@@ -454,7 +466,8 @@ class SdCardFont {
   std::unique_ptr<ZyBlockSource> zySource_;
   std::unique_ptr<zhuyin::BufferedSource> zyBuffered_;  // 包在 zySource_ 外面（v339）；資料留著它的指標做執行期查詢
   std::unique_ptr<zhuyin::ZhuyinEngine> zyEngine_;
-  bool prepareZhuyinEngine(ZhuyinEnableResult& r, bool stackWindow);  // 載入＋自我測試、不公開；true ＝ Ok（r.load 記原因）
+  bool prepareZhuyinEngine(ZhuyinEnableResult& r,
+                           bool stackWindow);  // 載入＋自我測試、不公開；true ＝ Ok（r.load 記原因）
   bool coversAll(uint32_t first, uint32_t last) const;
 
   // Per-style helpers

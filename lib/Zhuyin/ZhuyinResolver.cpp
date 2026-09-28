@@ -27,7 +27,7 @@ void ZhuyinResolver::reset() {
 
 uint64_t ZhuyinResolver::hashCps(const uint32_t* cps, size_t n) {
   uint64_t h = 0xCBF29CE484222325ull;  // FNV-1a 64，逐碼位 4 位元組。呼叫端是自己的韌體、不是攻擊者：
-  for (size_t i = 0; i < n; i++) {      // 這裡擋的是整合錯誤（接錯批次），前 kPendingExact 個碼位另外逐字比
+  for (size_t i = 0; i < n; i++) {     // 這裡擋的是整合錯誤（接錯批次），前 kPendingExact 個碼位另外逐字比
     for (int b = 0; b < 4; b++) {
       h ^= (cps[i] >> (8 * b)) & 0xFFu;
       h *= 0x100000001B3ull;

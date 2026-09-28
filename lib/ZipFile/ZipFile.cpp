@@ -1,7 +1,7 @@
 #include "ZipFile.h"
 
-#include <HalStorage.h>
 #include <Arduino.h>
+#include <HalStorage.h>
 #include <InflateStream.h>
 #include <Logging.h>
 
@@ -46,7 +46,8 @@ class ScopedOpenClose final {
 
 // v251：抽圖（readFileToStream）失敗的證人 —— 與 ZipEntryReader 共用 g_zipStreamStats.openFailStage／openFailMax，
 // 由 ImageBlock 印在 IMGFAIL render-extract 那一行。必須在釋放任何東西之前呼叫（量的是失敗當下）。
-// 步驟：2 開 zip 3 找項目 4 資料偏移 5 方法不支援 6 跳位 7 inflate 狀態／視窗 8 讀取緩衝 9 輸出緩衝 10 讀不到 11 寫不進 12 大小不符 13 解壓錯誤
+// 步驟：2 開 zip 3 找項目 4 資料偏移 5 方法不支援 6 跳位 7 inflate 狀態／視窗 8 讀取緩衝 9 輸出緩衝 10 讀不到 11 寫不進
+// 12 大小不符 13 解壓錯誤
 void noteExtractFail(const uint8_t stage) {
   if (g_zipStreamStats.openFailStage != 0) return;  // 先到先得
   g_zipStreamStats.openFailStage = stage;
@@ -583,8 +584,7 @@ bool ZipFile::readFileToStream(const char* filename, Print& out, const size_t ch
       const uint32_t readBefore = g_zipStreamStats.readUs;  // v247 儀器：readAtMost 內含 fill 讀取
       const uint32_t ti = static_cast<uint32_t>(micros());
       const InflateStream::Status status = inflate.readAtMost(outputBuffer, outSize, &produced);
-      g_zipStreamStats.inflateUs +=
-          (static_cast<uint32_t>(micros()) - ti) - (g_zipStreamStats.readUs - readBefore);
+      g_zipStreamStats.inflateUs += (static_cast<uint32_t>(micros()) - ti) - (g_zipStreamStats.readUs - readBefore);
 
       totalProduced += produced;
       if (totalProduced > static_cast<size_t>(inflatedDataSize)) {

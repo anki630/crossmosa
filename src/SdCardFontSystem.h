@@ -85,7 +85,8 @@ class SdCardFontSystem {
   // 注音（P2）：閱讀字型是注音字型、引擎還沒好 → 試著啟用（ensureLoaded 的每一個出口都呼叫；開機的 begin 不做，
   // 開機路徑一行都不動）。資料或配對壞了 → 記住這個字型檔（內容雜湊）別再試；記憶體或堆疊不夠 → 下次進閱讀器再試。
   void ensureZhuyin();
-  // readerRenderSpec 用：這個字型（必須是目前的閱讀字型）現在的注音身分、「引擎沒開」與「引擎開著」時的身分；非注音 → 0／0／0
+  // readerRenderSpec 用：這個字型（必須是目前的閱讀字型）現在的注音身分、「引擎沒開」與「引擎開著」時的身分；非注音 →
+  // 0／0／0
   void zhuyinIdentities(int fontId, uint32_t* current, uint32_t* off, uint32_t* on) const;
 
   SdCardFontRegistry registry_;

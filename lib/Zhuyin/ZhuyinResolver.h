@@ -15,8 +15,9 @@
 //   - 跨過送出點的詞，把後半的輸出帶到下一批的開頭；規則要看的前兩個字也帶過去。
 //   → 任何切法的結果都與整段一次解析相同（測試逐切點驗證，含任意長的一不串）。
 // 不配記憶體：out／covered 由呼叫端給，長度至少 n。
-// 失敗（沒載入、參數錯、讀卡失敗、接續不符、輸出不屬於那個字）回 false，分批狀態（前文、帶過去的詞、待接續的部分）不變；
-// 診斷計數與讀卡快取可能已經變動。⭐ 每一批交出去之前，逐位置再查一次「輸出屬於那個字」（v2 不變量的最後一道）。
+// 失敗（沒載入、參數錯、讀卡失敗、接續不符、輸出不屬於那個字）回
+// false，分批狀態（前文、帶過去的詞、待接續的部分）不變； 診斷計數與讀卡快取可能已經變動。⭐
+// 每一批交出去之前，逐位置再查一次「輸出屬於那個字」（v2 不變量的最後一道）。
 
 #include <cstddef>
 #include <cstdint>
@@ -77,8 +78,8 @@ class ZhuyinResolver {
   ZhuyinData& d_;
   uint32_t prev_[2] = {0, 0};  // 這一批之前的兩個字：prev_[1] 緊鄰、prev_[0] 更前面
   uint8_t prevLen_ = 0;
-  Carry carry_ = {{}, 0};      // 上一批跨界詞的後半輸出
-  size_t pendingLen_ = 0;      // 上一批沒送出的長度、前 kPendingExact 個碼位與 64 位元雜湊：這一批必須以它開頭
+  Carry carry_ = {{}, 0};  // 上一批跨界詞的後半輸出
+  size_t pendingLen_ = 0;  // 上一批沒送出的長度、前 kPendingExact 個碼位與 64 位元雜湊：這一批必須以它開頭
   uint64_t pendingHash_ = 0;
   uint32_t pendingHead_[kPendingExact] = {};
   // 上一次 resolveWindow（commit 要核對的就是它）

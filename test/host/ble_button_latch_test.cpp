@@ -1,7 +1,7 @@
 // Host-side unit test for BleButtonLatch (pure logic, no HAL).
-#include "util/BleButtonLatch.h"
-
 #include <cstdio>
+
+#include "util/BleButtonLatch.h"
 
 namespace {
 int gFailures = 0;
@@ -15,7 +15,7 @@ void expectEq(const char* what, long long got, long long want) {
   gFailures++;
 }
 
-constexpr uint8_t kUp = 4;           // HalGPIO::BTN_UP mirror
+constexpr uint8_t kUp = 4;  // HalGPIO::BTN_UP mirror
 constexpr uint8_t kUpBit = 1u << 4;
 
 // Counts assertion phases over a scripted poll sequence.
@@ -137,7 +137,6 @@ int main() {
     expectEq("regression: 2+1 click", assertions, 2);
   }
 
-  std::printf(gFailures ? "ble_button_latch_test: %d FAILURE(S)\n" : "ble_button_latch_test: all passed\n",
-              gFailures);
+  std::printf(gFailures ? "ble_button_latch_test: %d FAILURE(S)\n" : "ble_button_latch_test: all passed\n", gFailures);
   return gFailures ? 1 : 0;
 }

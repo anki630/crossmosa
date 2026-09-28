@@ -67,7 +67,8 @@ class XmlControlCharFilter {
           // 第一塊只有這一個位元組、而且它本身就是要濾的字元（codex v345）：UTF-16 的開頭不會是它 → 照 UTF-8 濾掉
           decided_ = true;
         } else {
-          return n;  // 還判斷不了；這個位元組不是要濾的字元（或是 0x00）→ 原樣交出，下一塊再判斷（實務上第一塊都 ≥ 1KB）
+          return n;  // 還判斷不了；這個位元組不是要濾的字元（或是 0x00）→ 原樣交出，下一塊再判斷（實務上第一塊都 ≥
+                     // 1KB）
         }
       } else {
         decide(static_cast<unsigned char>(buf[0]));  // 第一個位元組是上一塊的
@@ -88,11 +89,11 @@ class XmlControlCharFilter {
   static bool droppable(const unsigned char c) { return c < 0x20 && c != 0x09 && c != 0x0A && c != 0x0D; }
   void decide(const unsigned char second) {
     decided_ = true;
-    utf16_ = (first_ == 0xFF && second == 0xFE) || (first_ == 0xFE && second == 0xFF) || first_ == 0x00 || second == 0x00;
+    utf16_ =
+        (first_ == 0xFF && second == 0xFE) || (first_ == 0xFE && second == 0xFF) || first_ == 0x00 || second == 0x00;
   }
   bool decided_ = false;
   bool haveFirst_ = false;
   bool utf16_ = false;
   unsigned char first_ = 0;
 };
-

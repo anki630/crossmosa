@@ -47,7 +47,7 @@ class OpdsBookBrowserActivity final : public Activity {
   std::string currentPath;
   std::string searchTemplate;
   bool consumeConfirm = false;
-  bool consumeBack = false;  // Added missing member
+  bool consumeBack = false;      // Added missing member
   bool didUnloadFonts_ = false;  // v185：onEnter 卸了 SD 字型、onExit 沒重啟就得自己重載
   int selectorIndex = 0;
   std::string errorMessage;

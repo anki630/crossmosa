@@ -27,8 +27,16 @@ class TxtReaderMenuActivity final : public Activity {
   // 是重複的」。同 v130 砍 EPUB 兩項真重複的判準（docs/specs/2026-08-12-reader-menu-ia.md）。
   // ⚠️ 連帶把點數集、標籤、pendingFontSize 一起拔掉 —— 拔功能要連入口與管線一起拔
   //    （教訓 27 的反向：留著死碼 flash 收不回來，而這顆晶片的 app 槽已用 97.4%）。
-  enum class MenuAction { GO_TO_PERCENT, BOOKMARKS, TOGGLE_BOOKMARK, TEXT_SETTINGS, ROTATE_SCREEN, SCREENSHOT, DISPLAY_QR,
-                         DELETE_CACHE };
+  enum class MenuAction {
+    GO_TO_PERCENT,
+    BOOKMARKS,
+    TOGGLE_BOOKMARK,
+    TEXT_SETTINGS,
+    ROTATE_SCREEN,
+    SCREENSHOT,
+    DISPLAY_QR,
+    DELETE_CACHE
+  };
 
   explicit TxtReaderMenuActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, const std::string& title,
                                  float bookProgressPercent, uint8_t currentOrientation, bool hasBookmarks);
@@ -53,7 +61,7 @@ class TxtReaderMenuActivity final : public Activity {
   // ⚠️ txt 的進度檔就住在快取資料夾裡（ProgressFile 寫在 getCachePath() 下），
   //    而 Txt::clearCache() 是整包 removeDir —— **不保護就會把閱讀進度一起刪掉**。
   const std::vector<StrId> clearCacheLabels = {StrId::STR_CLEAR_CACHE_KEEP_PROGRESS,
-                                              StrId::STR_CLEAR_CACHE_RESET_PROGRESS};
+                                               StrId::STR_CLEAR_CACHE_RESET_PROGRESS};
   ButtonNavigator buttonNavigator;
   OptionPopup optionPopup;
   std::string title;

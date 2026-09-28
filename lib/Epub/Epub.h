@@ -43,8 +43,9 @@ class Epub {
 
  public:
   // v258：generateThumbBmp 最近一次走哪條路、各段花多久（主畫面 THUMBGEN 證人；lib 不反向依賴 DiagLog）。
-  //   src：zip＝直接從書裡串流解碼／sd＝抽到 SD 再解／png／exists＝已有縮圖／none＝沒走到解碼（原因看 thumbFailReason）。
-  //   note：串流沒成功、退回 SD 的原因（mem-pre＝開之前記憶體就不夠／open／io／mem／size），沒退回為空。
+  //   src：zip＝直接從書裡串流解碼／sd＝抽到 SD 再解／png／exists＝已有縮圖／none＝沒走到解碼（原因看
+  //   thumbFailReason）。 note：串流沒成功、退回 SD
+  //   的原因（mem-pre＝開之前記憶體就不夠／open／io／mem／size），沒退回為空。
   //   openMs：zip＝開項目讀取器；sd＝把封面抽到 SD。convMs：轉檔器整段（讀取＋解碼＋縮放＋抖色＋寫 BMP）。
   struct ThumbStats {
     const char* src = "none";

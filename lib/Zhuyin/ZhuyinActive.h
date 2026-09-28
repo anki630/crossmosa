@@ -21,7 +21,8 @@ class ZhuyinEngine;
 
 struct ActiveEngine {
   ZhuyinData* data = nullptr;
-  ZhuyinEngine* engine = nullptr;  // 擁有 data 的引擎（排版端要它的 session 暫存與一行清單的緩衝）；測試直接登記資料時為空
+  // 擁有 data 的引擎（排版端要它的 session 暫存與一行清單的緩衝）；測試直接登記資料時為空
+  ZhuyinEngine* engine = nullptr;
   uint32_t generation = 0;
   uint32_t dataSerial = 0;  // 登記時的 data->stateSerial()
   int fontId = 0;           // 擁有這個引擎的閱讀字型
@@ -34,7 +35,8 @@ bool engineUsable(const ActiveEngine& e);
 // 這個引擎、這個位置的清單的綁定（e 必須可用）
 SwapBinding bindingOf(const ActiveEngine& e, const PagePlace& place = {});
 
-// RAII：跟引擎資料放在同一個物件裡、宣告在資料【之後】（比資料先解構）→ 資料放掉之前一定先從登記處拿掉，不會留下懸空指標。
+// RAII：跟引擎資料放在同一個物件裡、宣告在資料【之後】（比資料先解構）→
+// 資料放掉之前一定先從登記處拿掉，不會留下懸空指標。
 class EngineRegistration {
  public:
   EngineRegistration() = default;
@@ -64,14 +66,15 @@ struct SwapStats {
   uint32_t renderGated = 0;    // 繪製時閘門關著 → 整行畫原字；一頁畫 16 趟，每趟都算
   uint32_t renderSkipped = 0;  // 繪製時某個字詞換不了（放不下暫存、前提不成立）→ 那個字詞畫原字
   // 排版端（ParsedText）：
-  uint32_t paragraphs = 0;     // 開了注音的段落
-  uint32_t degradedEvents = 0; // 段落因資源或 I/O 停止標注（配不到 session、暫存被拿走、讀卡失敗、引擎被換掉）→ 章節要寫「沒注音」
-  uint32_t contentStops = 0;   // 段落因內容停止標注（雙向重排、核對不符）→ 不算降級
-  uint32_t bidiStops = 0;      // 其中因為雙向重排（那一行是視覺順序）
-  uint32_t lineOverflow = 0;   // 一行的替換超過緩衝 → 那一行不換（照樣取出讀音保持對齊）
-  uint32_t heldLines = 0;      // 還沒定案、留到下一批的行（證人：分批的延遲有沒有在作用）
-  uint32_t queueMax = 0;       // session 佇列最深的一次（離容量多遠；不是累計 —— 閱讀器每次建置開始時歸零）
-  uint32_t stackStops = 0;     // 堆疊不夠跑解析器 → 那一段停止標注（記成降級；不是讓堆疊爆掉）
+  uint32_t paragraphs = 0;  // 開了注音的段落
+  // 段落因資源或 I/O 停止標注（配不到 session、暫存被拿走、讀卡失敗、引擎被換掉）→ 章節要寫「沒注音」
+  uint32_t degradedEvents = 0;
+  uint32_t contentStops = 0;         // 段落因內容停止標注（雙向重排、核對不符）→ 不算降級
+  uint32_t bidiStops = 0;            // 其中因為雙向重排（那一行是視覺順序）
+  uint32_t lineOverflow = 0;         // 一行的替換超過緩衝 → 那一行不換（照樣取出讀音保持對齊）
+  uint32_t heldLines = 0;            // 還沒定案、留到下一批的行（證人：分批的延遲有沒有在作用）
+  uint32_t queueMax = 0;             // session 佇列最深的一次（離容量多遠；不是累計 —— 閱讀器每次建置開始時歸零）
+  uint32_t stackStops = 0;           // 堆疊不夠跑解析器 → 那一段停止標注（記成降級；不是讓堆疊爆掉）
   uint32_t annotatedParagraphs = 0;  // v342：屬於預先標注章節（<head> 有 bpmfvs 標記）的段落
   uint32_t selectors = 0;            // v342：排版前拿掉的變體選擇符號（預先標注的讀音寫在這裡；任何字型都算）
 };

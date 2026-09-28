@@ -4,8 +4,8 @@
 #include <HalStorage.h>
 #include <Logging.h>
 #include <SdCardFont.h>
-#include <ZhuyinEngine.h>
 #include <ZhuyinActive.h>
+#include <ZhuyinEngine.h>
 #include <ZhuyinIdentity.h>
 #include <esp_heap_caps.h>
 #include <freertos/FreeRTOS.h>
@@ -71,10 +71,11 @@ void SdCardFontSystem::begin(GfxRenderer& renderer, const bool loadSelectedNow) 
   // 注音（codex 整合複查 A5、第二輪）：解析器每次進場前問「這個任務的堆疊還剩多少」。載入時的門檻只量到載入的那個任務，
   //   解析器之後在繪製任務（前景排版、TXT）與主任務（背景建置）裡跑，而且最深的一次是從排版裡面進來的
   //   （extractLine → zhuyinTake → session.finish → 解析器 → 讀資料群組 → SD）。
-  //   實量（韌體的編譯參數＋-fstack-usage，2026-09-24）：session＋解析器約 0.4 KB（addWord 64、process 80、resolveWindow 32、
-  //   run 144、matchLongest 64）；讀卡那一串約 0.6 KB（ZyBlockSource::read 48、HalFile::read 32、ExFatFile::read 80、快取 48、
-  //   readSectors 32、cardCommand 48、__spiTransferBytes 96、兩次互斥鎖）；檔柄出錯要重開再加幾百 → 最壞約 1.5 KB → 門檻 3 KB。
-  //   不夠 → 那一段不標（降級），不是爆堆疊。實際餘裕看 ZYPAGE／TXTPAGE 的 shwm=、ZYBUILD 的 hwm= 與 stk=（守衛擋下的次數）。
+  //   實量（韌體的編譯參數＋-fstack-usage，2026-09-24）：session＋解析器約 0.4 KB（addWord 64、process
+  //   80、resolveWindow 32、 run 144、matchLongest 64）；讀卡那一串約 0.6 KB（ZyBlockSource::read 48、HalFile::read
+  //   32、ExFatFile::read 80、快取 48、 readSectors 32、cardCommand 48、__spiTransferBytes
+  //   96、兩次互斥鎖）；檔柄出錯要重開再加幾百 → 最壞約 1.5 KB → 門檻 3 KB。 不夠 →
+  //   那一段不標（降級），不是爆堆疊。實際餘裕看 ZYPAGE／TXTPAGE 的 shwm=、ZYBUILD 的 hwm= 與 stk=（守衛擋下的次數）。
   //   前提：堆疊往低位址長、pxTaskGetStackStart ＝ 最低位址（FreeRTOS 的 portSTACK_GROWTH < 0，下面檢查）。
   static_assert(portSTACK_GROWTH < 0, "the zhuyin stack guard assumes a downward-growing stack");
   zhuyin::setStackGuard([]() -> bool {
@@ -192,8 +193,8 @@ void SdCardFontSystem::ensureZhuyin() {
   }
   const int fontId = manager_.getFontId(manager_.currentFamilyName());
   const auto r = f->enableZhuyin(fontId);
-  static const char* const kWhy[] = {"ready", "not-zhuyin", "low-stack", "low-memory", "bad-marker",
-                                     "no-memory", "load-failed", "pair-mismatch"};
+  static const char* const kWhy[] = {"ready",      "not-zhuyin", "low-stack",   "low-memory",
+                                     "bad-marker", "no-memory",  "load-failed", "pair-mismatch"};
   const auto st = static_cast<size_t>(r.status);
   DiagLog::line(
       "ZY load st=%s load=%u case=%u dataset=%08lx%08lx ms=%lu reads=%lu resident=%lu stack=%lu hwm=%lu->%lu "
@@ -206,19 +207,21 @@ void SdCardFontSystem::ensureZhuyin() {
       static_cast<unsigned long>(r.freeAfter), static_cast<unsigned long>(r.maxBefore),
       static_cast<unsigned long>(r.maxAfter));
   // v339：載入時間拆開（diag338 只有總數 ms=2035）。sms＝結構載入、pre＝整塊預讀、tms＝其餘（自我測試＋收尾）；
-  //   card＝真的讀卡的次數（結構段＋之後）、fail＝其中失敗（之後改直接讀）；calls＝載入對讀取層的呼叫次數（v338 每一次都讀卡）；
-  //   lock／seek／rd＝讀卡時間的三段（毫秒，定義見 SdCardFont.cpp 的 ZyBlockSource）；back＝目標在檔柄目前位置之前的讀卡次數。
+  //   card＝真的讀卡的次數（結構段＋之後）、fail＝其中失敗（之後改直接讀）；calls＝載入對讀取層的呼叫次數（v338
+  //   每一次都讀卡）； lock／seek／rd＝讀卡時間的三段（毫秒，定義見 SdCardFont.cpp 的
+  //   ZyBlockSource）；back＝目標在檔柄目前位置之前的讀卡次數。
   if (r.status != SdCardFont::ZhuyinEnable::NotZhuyin && r.calls > 0) {
     const uint32_t spent = r.structMs + r.preMs;
     DiagLog::line(
-        "ZY loadio win=%lu whole=%lu sms=%lu pre=%lu tms=%lu calls=%lu card=%lu+%lu fail=%lu kb=%lu lock=%lu seek=%lu rd=%lu back=%lu",
-        static_cast<unsigned long>(r.window), static_cast<unsigned long>(r.whole), static_cast<unsigned long>(r.structMs),
-        static_cast<unsigned long>(r.preMs), static_cast<unsigned long>(r.ms > spent ? r.ms - spent : 0),
-        static_cast<unsigned long>(r.calls), static_cast<unsigned long>(r.cardStruct),
-        static_cast<unsigned long>(r.cardTest), static_cast<unsigned long>(r.cardFails),
-        static_cast<unsigned long>(r.cardBytes / 1024), static_cast<unsigned long>(r.waitUs / 1000),
-        static_cast<unsigned long>(r.seekUs / 1000), static_cast<unsigned long>(r.readUs / 1000),
-        static_cast<unsigned long>(r.backSeeks));
+        "ZY loadio win=%lu whole=%lu sms=%lu pre=%lu tms=%lu calls=%lu card=%lu+%lu fail=%lu kb=%lu lock=%lu seek=%lu "
+        "rd=%lu back=%lu",
+        static_cast<unsigned long>(r.window), static_cast<unsigned long>(r.whole),
+        static_cast<unsigned long>(r.structMs), static_cast<unsigned long>(r.preMs),
+        static_cast<unsigned long>(r.ms > spent ? r.ms - spent : 0), static_cast<unsigned long>(r.calls),
+        static_cast<unsigned long>(r.cardStruct), static_cast<unsigned long>(r.cardTest),
+        static_cast<unsigned long>(r.cardFails), static_cast<unsigned long>(r.cardBytes / 1024),
+        static_cast<unsigned long>(r.waitUs / 1000), static_cast<unsigned long>(r.seekUs / 1000),
+        static_cast<unsigned long>(r.readUs / 1000), static_cast<unsigned long>(r.backSeeks));
   }
   DiagLog::mem("zy-load");
   using E = SdCardFont::ZhuyinEnable;
@@ -265,7 +268,7 @@ void SdCardFontSystem::unloadForLowMemory(GfxRenderer& renderer) {
 
 bool SdCardFontSystem::reloadReaderFontAfterRelief(GfxRenderer& renderer) {
   const char* wantedFamily = SETTINGS.sdFontFamilyName;
-  if (wantedFamily[0] == '\0') return true;  // 本來就沒選 SD 字型
+  if (wantedFamily[0] == '\0') return true;                       // 本來就沒選 SD 字型
   if (manager_.currentFamilyName() == wantedFamily) return true;  // 已載著（relief 沒真的卸）
   const auto* family = registry_.findFamily(wantedFamily);
   if (!family) return false;  // 卡不見了？不清設定，讓下次 ensureLoaded 走完整判斷

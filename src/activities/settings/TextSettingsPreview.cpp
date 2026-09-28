@@ -117,7 +117,8 @@ void renderPreview(const GfxRenderer& renderer, PreviewLayout& layout, int previ
                        .boldBodyText = SETTINGS.boldBodyText != 0};
   if (key != layout.key) {
     if (auto* fcm = renderer.getFontCacheManager()) {
-      fcm->prewarmCache(fontId, I18N.get(StrId::STR_FONT_PREVIEW_TEXT), (SETTINGS.focusReadingEnabled || SETTINGS.boldBodyText) ? 0x03 : 0x01);
+      fcm->prewarmCache(fontId, I18N.get(StrId::STR_FONT_PREVIEW_TEXT),
+                        (SETTINGS.focusReadingEnabled || SETTINGS.boldBodyText) ? 0x03 : 0x01);
     }
     // v149：低記憶體時 ParsedText 丟過字 —— 截斷的預覽【不要】以這個 key 快取，
     // 否則同一設定下永遠停在殘缺畫面。不更新 key = 下一輪重試。

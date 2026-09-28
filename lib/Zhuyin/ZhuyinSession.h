@@ -35,7 +35,7 @@ inline bool isVariationSelector(uint32_t cp) {
 
 // 引擎載入時配好（每塊 ≤ 2 KB）、每段重用。
 struct SessionScratch {
-  uint32_t* cps = nullptr;    // 解析窗口：還沒送出的＋新進來的碼位
+  uint32_t* cps = nullptr;  // 解析窗口：還沒送出的＋新進來的碼位
   uint16_t* out = nullptr;
   uint8_t* covered = nullptr;
   uint8_t* flags = nullptr;   // bit0 出版社標注、bit1 超長一不串
@@ -84,14 +84,14 @@ class ZhuyinSession {
   ZhuyinData& d_;
   SessionScratch& s_;
   ZhuyinResolver r_;
-  size_t n_ = 0;            // 窗口裡的碼位數
-  size_t runStart_ = 0;     // 窗口尾端那段連續「一／不」的起點（沒有 → runLen_ == 0）
+  size_t n_ = 0;         // 窗口裡的碼位數
+  size_t runStart_ = 0;  // 窗口尾端那段連續「一／不」的起點（沒有 → runLen_ == 0）
   size_t runLen_ = 0;
-  bool runLong_ = false;    // 目前這段「一／不」已經超過上限
+  bool runLong_ = false;  // 目前這段「一／不」已經超過上限
   size_t queueHead_ = 0, queueLen_ = 0;
   bool failed_ = false, degraded_ = false;
   bool docAnnotated_ = false;  // v342：預先標注的章節
-  uint32_t claim_ = 0;  // begin() 領到的暫存號碼
+  uint32_t claim_ = 0;         // begin() 領到的暫存號碼
   bool owns() {
     if (s_.owner == claim_ && claim_ != 0) return true;
     fail(true);  // 暫存被別的段落拿走了（資源問題，不是內容）→ 章節身分要寫「沒注音」

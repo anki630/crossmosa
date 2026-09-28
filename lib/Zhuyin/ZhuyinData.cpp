@@ -13,10 +13,12 @@ inline uint32_t rd32(const uint8_t* p) {
   return static_cast<uint32_t>(p[0]) | (static_cast<uint32_t>(p[1]) << 8) | (static_cast<uint32_t>(p[2]) << 16) |
          (static_cast<uint32_t>(p[3]) << 24);
 }
-inline uint64_t rd64(const uint8_t* p) { return static_cast<uint64_t>(rd32(p)) | (static_cast<uint64_t>(rd32(p + 4)) << 32); }
+inline uint64_t rd64(const uint8_t* p) {
+  return static_cast<uint64_t>(rd32(p)) | (static_cast<uint64_t>(rd32(p + 4)) << 32);
+}
 inline uint32_t popcount8(uint8_t v) { return static_cast<uint32_t>(__builtin_popcount(v)); }
 constexpr uint32_t kPolyBlocks = (kUroLast - kUroFirst + 1) / kPolyBlockBits;  // 82
-constexpr uint32_t kPolyBlockBytes = kPolyBlockBits / 8;                      // 32
+constexpr uint32_t kPolyBlockBytes = kPolyBlockBits / 8;                       // 32
 // 每一塊 RAM 配置 ≤ 2 KB（上限情況；目前的資料約 18 KB／21 塊）
 static_assert(kMaxCheckpoints * 8u <= 2048u && kMaxCheckpoints * 4u <= 2048u, "checkpoint tables");
 static_assert(kMaxDefaults * 4u <= 2048u && kKeysPerChunk * 4u <= 2048u, "defaults / key chunks");
@@ -106,29 +108,52 @@ inline LoadStatus scanFail(const SeqReader& r, LoadStatus structural) {
 
 const char* loadStatusName(LoadStatus s) {
   switch (s) {
-    case LoadStatus::Ok: return "ok";
-    case LoadStatus::TooSmall: return "too-small";
-    case LoadStatus::BadMagic: return "magic";
-    case LoadStatus::BadVersion: return "version";
-    case LoadStatus::BadFlags: return "flags";
-    case LoadStatus::BadReserved: return "reserved";
-    case LoadStatus::BadLength: return "length";
-    case LoadStatus::BadSectionTable: return "section-table";
-    case LoadStatus::MissingSection: return "missing-section";
-    case LoadStatus::BadCrc: return "crc";
-    case LoadStatus::BadDatasetId: return "dataset-id";
-    case LoadStatus::BadPuaMap: return "puamap";
-    case LoadStatus::BadBigram: return "bigram";
-    case LoadStatus::BadCheckpoint: return "checkpoint";
-    case LoadStatus::BadGroups: return "groups";
-    case LoadStatus::BadDefaults: return "defaults";
-    case LoadStatus::BadRules: return "rules";
-    case LoadStatus::BadSandhi: return "sandhi";
-    case LoadStatus::BadTone: return "tone";
-    case LoadStatus::BadPoly: return "poly";
-    case LoadStatus::BadSelfTest: return "selftest";
-    case LoadStatus::NoMemory: return "no-memory";
-    case LoadStatus::ReadError: return "read";
+    case LoadStatus::Ok:
+      return "ok";
+    case LoadStatus::TooSmall:
+      return "too-small";
+    case LoadStatus::BadMagic:
+      return "magic";
+    case LoadStatus::BadVersion:
+      return "version";
+    case LoadStatus::BadFlags:
+      return "flags";
+    case LoadStatus::BadReserved:
+      return "reserved";
+    case LoadStatus::BadLength:
+      return "length";
+    case LoadStatus::BadSectionTable:
+      return "section-table";
+    case LoadStatus::MissingSection:
+      return "missing-section";
+    case LoadStatus::BadCrc:
+      return "crc";
+    case LoadStatus::BadDatasetId:
+      return "dataset-id";
+    case LoadStatus::BadPuaMap:
+      return "puamap";
+    case LoadStatus::BadBigram:
+      return "bigram";
+    case LoadStatus::BadCheckpoint:
+      return "checkpoint";
+    case LoadStatus::BadGroups:
+      return "groups";
+    case LoadStatus::BadDefaults:
+      return "defaults";
+    case LoadStatus::BadRules:
+      return "rules";
+    case LoadStatus::BadSandhi:
+      return "sandhi";
+    case LoadStatus::BadTone:
+      return "tone";
+    case LoadStatus::BadPoly:
+      return "poly";
+    case LoadStatus::BadSelfTest:
+      return "selftest";
+    case LoadStatus::NoMemory:
+      return "no-memory";
+    case LoadStatus::ReadError:
+      return "read";
   }
   return "?";
 }
@@ -337,7 +362,7 @@ LoadStatus ZhuyinData::loadPoly(BlockSource& src, Arena& arena) {
     for (uint32_t j = 0; j < kPolyBlockBytes; j++) acc += popcount8(polyByte(b * kPolyBlockBytes + j));
   }
   polyPrefix_ = pre;
-  polyUroTotal_ = static_cast<uint16_t>(acc);  // ≤ 20,992
+  polyUroTotal_ = static_cast<uint16_t>(acc);    // ≤ 20,992
   polyCount_ = static_cast<uint16_t>(acc + ne);  // checkPuaMap 逐一核對
   return LoadStatus::Ok;
 }
@@ -515,8 +540,8 @@ LoadStatus ZhuyinData::checkPuaMap(BlockSource& src, Arena& arena) {
     uint16_t base, first;
     uint8_t count, pad;
     if (!r.u16(&base) || !r.u16(&first) || !r.u8(&count) || !r.u8(&pad)) return scanFail(r, LoadStatus::BadPuaMap);
-    if (pad != 0 || count == 0 || count > kMaxAltCount || !isIdeograph(base) || static_cast<int32_t>(base) <= lastBase ||
-        first != next) {
+    if (pad != 0 || count == 0 || count > kMaxAltCount || !isIdeograph(base) ||
+        static_cast<int32_t>(base) <= lastBase || first != next) {
       return LoadStatus::BadPuaMap;
     }
     if (!polyBit(base) || polyRank(base) != i) return LoadStatus::BadPoly;
@@ -619,7 +644,8 @@ LoadStatus ZhuyinData::scanGroups(BlockSource& src) {
       // 同長度的詞依碼位嚴格遞增（重複的詞會帶不同輸出、第一筆勝出 → 不收）
       if (sameLen) {
         int cmp = 0;
-        for (uint8_t t = 2; t < len && cmp == 0; t++) cmp = chars[t] < prevTail[t] ? -1 : (chars[t] > prevTail[t] ? 1 : 0);
+        for (uint8_t t = 2; t < len && cmp == 0; t++)
+          cmp = chars[t] < prevTail[t] ? -1 : (chars[t] > prevTail[t] ? 1 : 0);
         if (cmp <= 0) return LoadStatus::BadGroups;
       }
       for (uint8_t t = 2; t < len; t++) prevTail[t] = chars[t];

@@ -555,7 +555,8 @@ bool JpegToBmpConverter::jpegFileToBmpStreamInternal(const Source& source, Print
   if (ESP.getFreeHeap() < minFreeHeap) {
     LOG_ERR("JPG", "Not enough heap for JPEG decoder (%u free, need %u)", ESP.getFreeHeap(), minFreeHeap);
     sJpgLastInfo.memFail = true;
-    snprintf(sJpgLastErr, sizeof(sJpgLastErr), "heap %u<%u", static_cast<unsigned>(ESP.getFreeHeap()), static_cast<unsigned>(minFreeHeap));
+    snprintf(sJpgLastErr, sizeof(sJpgLastErr), "heap %u<%u", static_cast<unsigned>(ESP.getFreeHeap()),
+             static_cast<unsigned>(minFreeHeap));
     return false;
   }
 
@@ -644,8 +645,9 @@ bool JpegToBmpConverter::jpegFileToBmpStreamInternal(const Source& source, Print
   //   全解析度 15.0；格子 ≥1 倍（多半 1/8）16.2、最差 +4.7 —— 格子只比輸出大 1.1 倍時每個輸出像素只平均 1–2 格，
   //   權重不均；≥2 倍（多半 1/4）15.2、最差 +1.6，桌機時間 580→361ms。取後者。
   //   只給 allowDctScale 的呼叫端（主畫面 1-bit 縮圖）；待機封面等其他路徑不變。
-  //   ⚠️ 必須在上面算出 outWidth／outHeight【之後】（v258 桌機 harness 抓到：第一版放在前面，比到的是原圖尺寸＝永遠不縮放）。
-  //   格子大小與 JPEGDEC 自己算的一致：(w + 2^s − 1) >> s（jpeg.inl DecodeJPEG 的 iCurW／iCurH）。
+  //   ⚠️ 必須在上面算出 outWidth／outHeight【之後】（v258 桌機 harness
+  //   抓到：第一版放在前面，比到的是原圖尺寸＝永遠不縮放）。 格子大小與 JPEGDEC 自己算的一致：(w + 2^s − 1) >>
+  //   s（jpeg.inl DecodeJPEG 的 iCurW／iCurH）。
   int jpegScaleOption = 0;
   if (allowDctScale && !progressiveDecode && targetWidth > 0 && targetHeight > 0) {
     for (int shift = 3; shift >= 1; --shift) {
@@ -682,14 +684,15 @@ bool JpegToBmpConverter::jpegFileToBmpStreamInternal(const Source& source, Print
   const bool smoothUpscale =
       progressiveDecode && needsScaling && scaleSrcWidth <= outWidth && scaleSrcHeight <= outHeight;
 
-  // v259（codex）：縮圖路徑的第二段門檻 —— 用【實際】格子與輸出尺寸算出下面要配的緩衝，加上保留量，寫 BMP 檔頭之前檢查。
+  // v259（codex）：縮圖路徑的第二段門檻 —— 用【實際】格子與輸出尺寸算出下面要配的緩衝，加上保留量，寫 BMP
+  // 檔頭之前檢查。
   //   不靠「縮放後格子一定小」的推論（奇怪長寬比、不縮放的小圖、之後別的呼叫端都可能不成立）。
   if (allowDctScale) {
     const size_t w = static_cast<size_t>(outWidth);
     const size_t need = static_cast<size_t>(MAX_MCU_HEIGHT) * static_cast<size_t>(scaleSrcWidth)  // mcuBuf
-                        + (w + 3) / 4 * 4                                                         // bmpRow（取 8-bit 的最大者）
+                        + (w + 3) / 4 * 4  // bmpRow（取 8-bit 的最大者）
                         + (smoothUpscale ? w * 3 : (needsScaling ? w * 2 * sizeof(uint32_t) : 0))  // 縮放緩衝
-                        + (w + 4) * sizeof(int16_t) * 3 + 64                                      // 抖色誤差列＋物件
+                        + (w + 4) * sizeof(int16_t) * 3 + 64                                       // 抖色誤差列＋物件
                         + THUMB_RESERVE_BYTES;
     sJpgLastInfo.needBytes = static_cast<uint32_t>(need);
     if (ESP.getFreeHeap() < need) {
@@ -755,8 +758,8 @@ bool JpegToBmpConverter::jpegFileToBmpStreamInternal(const Source& source, Print
     ctx.smoothRows = makeUniqueNoThrow<uint8_t[]>(smoothRowsBytes);
     if (!ctx.smoothRows) {
       LOG_ERR("JPG", "OOM: progressive smoothing buffers");
-    sJpgLastInfo.memFail = true;
-    snprintf(sJpgLastErr, sizeof(sJpgLastErr), "oom:%s", "progressive smoothing buffers");
+      sJpgLastInfo.memFail = true;
+      snprintf(sJpgLastErr, sizeof(sJpgLastErr), "oom:%s", "progressive smoothing buffers");
       return false;
     }
     ctx.smoothPrevRow = ctx.smoothRows.get();
@@ -769,8 +772,8 @@ bool JpegToBmpConverter::jpegFileToBmpStreamInternal(const Source& source, Print
     ctx.rowCount = makeUniqueNoThrow<uint32_t[]>(outWidth);
     if (!ctx.rowAccum || !ctx.rowCount) {
       LOG_ERR("JPG", "OOM: scaling buffers");
-    sJpgLastInfo.memFail = true;
-    snprintf(sJpgLastErr, sizeof(sJpgLastErr), "oom:%s", "scaling buffers");
+      sJpgLastInfo.memFail = true;
+      snprintf(sJpgLastErr, sizeof(sJpgLastErr), "oom:%s", "scaling buffers");
       return false;
     }
     ctx.nextOutY_srcStart = scaleY_fp;
@@ -780,8 +783,7 @@ bool JpegToBmpConverter::jpegFileToBmpStreamInternal(const Source& source, Print
     ctx.atkinson1BitDitherer = makeUniqueNoThrow<Atkinson1BitDitherer>(outWidth);
     // v194：物件配到但 error row 沒配到 → 當失敗、退回無抖動量化，封面仍畫得出來。
     if (!ctx.atkinson1BitDitherer || !ctx.atkinson1BitDitherer->ok()) {
-      const size_t bytes =
-          sizeof(Atkinson1BitDitherer) + (static_cast<size_t>(outWidth) + 4) * sizeof(int16_t) * 3;
+      const size_t bytes = sizeof(Atkinson1BitDitherer) + (static_cast<size_t>(outWidth) + 4) * sizeof(int16_t) * 3;
       noteDitherAllocFail("Atkinson1BitDitherer:JpegToBmp", bytes);
       ctx.atkinson1BitDitherer.reset();
     }
@@ -789,16 +791,14 @@ bool JpegToBmpConverter::jpegFileToBmpStreamInternal(const Source& source, Print
     if (USE_ATKINSON) {
       ctx.atkinsonDitherer = makeUniqueNoThrow<AtkinsonDitherer>(outWidth);
       if (!ctx.atkinsonDitherer || !ctx.atkinsonDitherer->ok()) {
-        const size_t bytes =
-            sizeof(AtkinsonDitherer) + (static_cast<size_t>(outWidth) + 4) * sizeof(int16_t) * 3;
+        const size_t bytes = sizeof(AtkinsonDitherer) + (static_cast<size_t>(outWidth) + 4) * sizeof(int16_t) * 3;
         noteDitherAllocFail("AtkinsonDitherer:JpegToBmp", bytes);
         ctx.atkinsonDitherer.reset();
       }
     } else if (USE_FLOYD_STEINBERG) {
       ctx.fsDitherer = makeUniqueNoThrow<FloydSteinbergDitherer>(outWidth);
       if (!ctx.fsDitherer || !ctx.fsDitherer->ok()) {
-        const size_t bytes =
-            sizeof(FloydSteinbergDitherer) + (static_cast<size_t>(outWidth) + 2) * sizeof(int16_t) * 2;
+        const size_t bytes = sizeof(FloydSteinbergDitherer) + (static_cast<size_t>(outWidth) + 2) * sizeof(int16_t) * 2;
         noteDitherAllocFail("FloydSteinbergDitherer:JpegToBmp", bytes);
         ctx.fsDitherer.reset();
       }
@@ -842,7 +842,8 @@ bool JpegToBmpConverter::jpegFileToBmpStreamInternal(const Source& source, Print
 
   if (rc != 1 || ctx.error) {
     LOG_ERR("JPG", "JPEG decode failed (rc=%d, err=%d)", rc, jpeg->getLastError());
-    snprintf(sJpgLastErr, sizeof(sJpgLastErr), "decode rc=%d err=%d %dx%d", rc, jpeg->getLastError(), srcWidth, srcHeight);
+    snprintf(sJpgLastErr, sizeof(sJpgLastErr), "decode rc=%d err=%d %dx%d", rc, jpeg->getLastError(), srcWidth,
+             srcHeight);
     return false;
   }
 
@@ -861,13 +862,15 @@ bool JpegToBmpConverter::jpegFileToBmpStream(HalFile& jpegFile, Print& bmpOut, b
 // Convert with custom target size (for thumbnails, 2-bit)
 bool JpegToBmpConverter::jpegFileToBmpStreamWithSize(HalFile& jpegFile, Print& bmpOut, int targetMaxWidth,
                                                      int targetMaxHeight) {
-  return jpegFileToBmpStreamInternal(halFileSource(jpegFile), bmpOut, targetMaxWidth, targetMaxHeight, false, true, false);
+  return jpegFileToBmpStreamInternal(halFileSource(jpegFile), bmpOut, targetMaxWidth, targetMaxHeight, false, true,
+                                     false);
 }
 
 // Convert to 1-bit BMP (black and white only, no grays) for fast home screen rendering
 bool JpegToBmpConverter::jpegFileTo1BitBmpStreamWithSize(HalFile& jpegFile, Print& bmpOut, int targetMaxWidth,
                                                          int targetMaxHeight) {
-  return jpegFileToBmpStreamInternal(halFileSource(jpegFile), bmpOut, targetMaxWidth, targetMaxHeight, true, true, true);
+  return jpegFileToBmpStreamInternal(halFileSource(jpegFile), bmpOut, targetMaxWidth, targetMaxHeight, true, true,
+                                     true);
 }
 
 // v258：同上，但來源是抽象的（主畫面縮圖直接從書裡的項目串流，不先抽到 SD）。

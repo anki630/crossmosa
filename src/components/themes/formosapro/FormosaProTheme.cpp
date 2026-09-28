@@ -28,7 +28,7 @@ constexpr int maxListValueWidth = 200;
 constexpr int hairlineRightInset = 16;
 constexpr int chevronSize = 5;
 constexpr int chevronRightInset = 22;
-constexpr int selectionBarX = 6;   // 卡片左緣到豎條
+constexpr int selectionBarX = 6;  // 卡片左緣到豎條
 constexpr int selectionBarW = 3;
 constexpr int selectionBarVPad = 10;
 }  // namespace
@@ -71,8 +71,8 @@ void FormosaProTheme::drawHeader(const GfxRenderer& renderer, Rect rect, const c
   }
 
   if (title) {
-    const int maxTitleWidth = rect.width - m.contentSidePadding * 2 -
-                              (subtitle ? renderer.getTextWidth(UI_10_FONT_ID, subtitle) + 12 : 0);
+    const int maxTitleWidth =
+        rect.width - m.contentSidePadding * 2 - (subtitle ? renderer.getTextWidth(UI_10_FONT_ID, subtitle) + 12 : 0);
     auto truncatedTitle = renderer.truncatedText(UI_12_FONT_ID, title, maxTitleWidth, EpdFontFamily::BOLD);
     const int titleY = rect.y + m.batteryBarHeight + 3;
     renderer.drawText(UI_12_FONT_ID, rect.x + m.contentSidePadding, titleY, truncatedTitle.c_str(), true,
@@ -187,9 +187,8 @@ void FormosaProTheme::drawTabBar(const GfxRenderer& renderer, Rect rect, const s
 }
 
 // v336：點擊區＝每段自己的範圍，段與段之間的空隙對半分；最左段延伸到 rect 左緣、最右段延伸到右緣。
-bool FormosaProTheme::tabIndexFromPoint(const GfxRenderer& renderer, const Rect rect,
-                                        const std::vector<TabInfo>& tabs, const int x, const int y,
-                                        int& index) const {
+bool FormosaProTheme::tabIndexFromPoint(const GfxRenderer& renderer, const Rect rect, const std::vector<TabInfo>& tabs,
+                                        const int x, const int y, int& index) const {
   if (tabs.empty() || y < rect.y || y >= rect.y + rect.height) return false;
   const TabSegments s = layoutTabSegments(renderer, rect, tabs);
   if (s.n == 0) return LyraTheme::tabIndexFromPoint(renderer, rect, tabs, x, y, index);
@@ -212,8 +211,8 @@ void FormosaProTheme::drawGroupedRows(const GfxRenderer& renderer, const int car
                                       const std::function<std::string(int)>& subtitle,
                                       const std::function<UIIcon(int)>& icon,
                                       const std::function<std::string(int)>& value,
-                                      const std::function<bool(int)>& dimmed, const int firstIndex,
-                                      const bool chevrons, const std::function<bool(int)>& groupBreakBefore) const {
+                                      const std::function<bool(int)>& dimmed, const int firstIndex, const bool chevrons,
+                                      const std::function<bool(int)>& groupBreakBefore) const {
   renderer.drawSmoothRoundedRect(cardX, cardY, cardW, rowH * rowCount, 1, R, N, true);
   const bool hasIcons = static_cast<bool>(icon);
   const int textX = cardX + 16 + (hasIcons ? iconSize + 12 : 0);
@@ -248,8 +247,8 @@ void FormosaProTheme::drawGroupedRows(const GfxRenderer& renderer, const int car
       }
     }
     const std::string t = title(idx);
-    const auto shown = renderer.truncatedText(UI_12_FONT_ID, t.c_str(), rowTextW, isSel ? EpdFontFamily::BOLD
-                                                                                          : EpdFontFamily::REGULAR);
+    const auto shown = renderer.truncatedText(UI_12_FONT_ID, t.c_str(), rowTextW,
+                                              isSel ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR);
     renderer.drawText(UI_12_FONT_ID, textX, rowY + textYOff, shown.c_str(), true,
                       isSel ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR);
     if (dimmed && dimmed(idx) && !isSel) {
@@ -402,8 +401,9 @@ void FormosaProTheme::drawMenuList(const GfxRenderer& renderer, Rect rect, int i
   if (rows == 0) return;
   const int panelW = std::min(rect.width - 2 * m.contentSidePadding, 432);
   const int panelX = rect.x + (rect.width - panelW) / 2;
-  drawGroupedRows(renderer, panelX, rect.y, panelW, rowHeight, rows, selectedIndex >= 0 ? selectedIndex - pageStart : -1,
-                  0, rowTitle, nullptr, nullptr, rowValue, nullptr, pageStart, /*chevrons=*/false, groupBreakBefore);
+  drawGroupedRows(renderer, panelX, rect.y, panelW, rowHeight, rows,
+                  selectedIndex >= 0 ? selectedIndex - pageStart : -1, 0, rowTitle, nullptr, nullptr, rowValue, nullptr,
+                  pageStart, /*chevrons=*/false, groupBreakBefore);
 }
 
 // 單訊息彈窗：白底、1px 連續圓角框、文字置中（macOS alert 的留白）。回傳的 layout 給 fillPopupProgress 用，
@@ -435,11 +435,11 @@ void FormosaProTheme::drawOptionPopup(const GfxRenderer& renderer, const char* t
   constexpr int rowH = 40;
   constexpr int pad = 20;
   const int titleH = renderer.getLineHeight(UI_12_FONT_ID);
-  const int maxTextWidth = std::accumulate(
-      options.begin(), options.end(), renderer.getTextWidth(UI_12_FONT_ID, title, EpdFontFamily::BOLD),
-      [&renderer](const int acc, const std::string& opt) {
-        return std::max(acc, renderer.getTextWidth(UI_12_FONT_ID, opt.c_str(), EpdFontFamily::BOLD));
-      });
+  const int maxTextWidth =
+      std::accumulate(options.begin(), options.end(), renderer.getTextWidth(UI_12_FONT_ID, title, EpdFontFamily::BOLD),
+                      [&renderer](const int acc, const std::string& opt) {
+                        return std::max(acc, renderer.getTextWidth(UI_12_FONT_ID, opt.c_str(), EpdFontFamily::BOLD));
+                      });
   const int optionCount = static_cast<int>(options.size());
   const int dialogW =
       std::max(260, std::min(maxTextWidth + pad * 2 + 24, pageWidth - 2 * m.optionPopupDialogSideMargin));
@@ -470,8 +470,8 @@ void FormosaProTheme::drawOptionPopup(const GfxRenderer& renderer, const char* t
 }
 
 void FormosaProTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect, const std::vector<RecentBook>& recentBooks,
-                                           const int selectorIndex, bool& coverRendered, bool& coverBufferStored,
-                                           bool& bufferRestored, std::function<bool()> storeCoverBuffer) const {
+                                          const int selectorIndex, bool& coverRendered, bool& coverBufferStored,
+                                          bool& bufferRestored, std::function<bool()> storeCoverBuffer) const {
   const int tileWidth = (rect.width - 2 * FormosaProMetrics::values.contentSidePadding) / 3;
   const int tileY = rect.y;
   const bool hasContinueReading = !recentBooks.empty();
@@ -515,20 +515,19 @@ void FormosaProTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect, cons
         }
         // Draw either way
         // Pro：封面框連續曲率 R−4（與選取框 R 同心）；先把位元圖角落遮白再描框。
-        renderer.maskSmoothRoundedRectOutsideCorners(tileX + hPaddingInSelection, tileY + hPaddingInSelection,
-                                                     tileWidth - 2 * hPaddingInSelection,
-                                                     FormosaProMetrics::values.homeCoverHeight, innerR(4), N,
-                                                     Color::White);
+        renderer.maskSmoothRoundedRectOutsideCorners(
+            tileX + hPaddingInSelection, tileY + hPaddingInSelection, tileWidth - 2 * hPaddingInSelection,
+            FormosaProMetrics::values.homeCoverHeight, innerR(4), N, Color::White);
         renderer.drawSmoothRoundedRect(tileX + hPaddingInSelection, tileY + hPaddingInSelection,
                                        tileWidth - 2 * hPaddingInSelection, FormosaProMetrics::values.homeCoverHeight,
                                        1, innerR(4), N, true);
 
         if (!hasCover) {
           // v175（使用者的設計稿）：沒有封面（txt、封面缺失、尚未產生）一律畫「書名幾何封面」。
-          LyraTheme::drawTitleCoverPlaceholder(
-              renderer, tileX + hPaddingInSelection, tileY + hPaddingInSelection, tileWidth - 2 * hPaddingInSelection,
-              FormosaProMetrics::values.homeCoverHeight,
-              LyraTheme::displayTitleFor(recentBooks[i].title, recentBooks[i].path));
+          LyraTheme::drawTitleCoverPlaceholder(renderer, tileX + hPaddingInSelection, tileY + hPaddingInSelection,
+                                               tileWidth - 2 * hPaddingInSelection,
+                                               FormosaProMetrics::values.homeCoverHeight,
+                                               LyraTheme::displayTitleFor(recentBooks[i].title, recentBooks[i].path));
         }
 
         // v168（使用者拍板）：進度徽章畫在封面右下角 —— 白底黑字＋1px 框（蓋在封面上
@@ -582,7 +581,6 @@ void FormosaProTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect, cons
         renderer.drawText(UI_10_FONT_ID, tileX + hPaddingInSelection, currentY, line.c_str(), true);
         currentY += titleLineHeight;
       }
-
     }
   } else {
     drawEmptyRecents(renderer, rect);

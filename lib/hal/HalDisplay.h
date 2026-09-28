@@ -1,8 +1,9 @@
 #pragma once
 
-#include <atomic>
 #include <Arduino.h>
 #include <EInkDisplay.h>
+
+#include <atomic>
 
 class HalDisplay {
  public:

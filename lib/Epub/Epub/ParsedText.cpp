@@ -1,8 +1,3 @@
-#include <esp_heap_caps.h>
-#include <esp_timer.h>
-#include <cstdarg>
-#include <cstdio>
-
 #include "ParsedText.h"
 
 #include <BidiUtils.h>
@@ -15,10 +10,14 @@
 #include <ZhuyinSession.h>
 #include <ZhuyinTxtCursor.h>
 #include <ZhuyinUtf8.h>
+#include <esp_heap_caps.h>
+#include <esp_timer.h>
 
 #include <algorithm>
-#include <cstring>
 #include <cmath>
+#include <cstdarg>
+#include <cstdio>
+#include <cstring>
 #include <functional>
 #include <limits>
 #include <vector>
@@ -42,33 +41,33 @@ namespace {
 //   使用者的實例：「知識之聲」那一行因為兩個括號各佔了 0.6 格的空白而排不下一個字，只好拉字距。
 // ⚠️ ！？ 不在集合裡：clreq 的擠壓表沒有它們（它們不帶那半格 aki，墨水本來就窄）。
 inline bool isCompressibleOpenBracket(const uint32_t cp) {
-  return cp == 0x300C     // 「
-      || cp == 0x300E     // 『
-      || cp == 0xFF08     // （
-      || cp == 0x3014     // 〔
-      || cp == 0xFF3B     // ［
-      || cp == 0xFF5B     // ｛
-      || cp == 0x3008     // 〈
-      || cp == 0x300A     // 《
-      || cp == 0x3010     // 【
-      || cp == 0x3016;    // 〖
+  return cp == 0x300C      // 「
+         || cp == 0x300E   // 『
+         || cp == 0xFF08   // （
+         || cp == 0x3014   // 〔
+         || cp == 0xFF3B   // ［
+         || cp == 0xFF5B   // ｛
+         || cp == 0x3008   // 〈
+         || cp == 0x300A   // 《
+         || cp == 0x3010   // 【
+         || cp == 0x3016;  // 〖
 }
 inline bool isCompressibleCloseBracket(const uint32_t cp) {
-  return cp == 0x300D     // 」
-      || cp == 0x300F     // 』
-      || cp == 0xFF09     // ）
-      || cp == 0x3015     // 〕
-      || cp == 0xFF3D     // ］
-      || cp == 0xFF5D     // ｝
-      || cp == 0x3009     // 〉
-      || cp == 0x300B     // 》
-      || cp == 0x3011     // 】
-      || cp == 0x3017;    // 〗
+  return cp == 0x300D      // 」
+         || cp == 0x300F   // 』
+         || cp == 0xFF09   // ）
+         || cp == 0x3015   // 〕
+         || cp == 0xFF3D   // ］
+         || cp == 0xFF5D   // ｝
+         || cp == 0x3009   // 〉
+         || cp == 0x300B   // 》
+         || cp == 0x3011   // 】
+         || cp == 0x3017;  // 〗
 }
 inline bool isCompressiblePunctuation(const uint32_t cp) {
-  return isHangablePunctuation(cp)                    // 、，。
-      || cp == 0xFF1A || cp == 0xFF1B                 // ：；（與句讀同形：墨水置中）
-      || isCompressibleOpenBracket(cp) || isCompressibleCloseBracket(cp);
+  return isHangablePunctuation(cp)        // 、，。
+         || cp == 0xFF1A || cp == 0xFF1B  // ：；（與句讀同形：墨水置中）
+         || isCompressibleOpenBracket(cp) || isCompressibleCloseBracket(cp);
 }
 
 // v274：token **前面**那個開括號的位元組長度（0 ＝沒有，或整個 token 就是括號）。
@@ -101,7 +100,6 @@ inline size_t trailingCompressiblePunctOffset(const std::string& token) {
   if (n < 2 || !isCompressiblePunctuation(last)) return std::string::npos;
   return lastStart;
 }
-
 
 // Soft hyphen byte pattern used throughout EPUBs (UTF-8 for U+00AD).
 constexpr char SOFT_HYPHEN_UTF8[] = "\xC2\xAD";
@@ -155,10 +153,12 @@ bool mayContainVariationSelector(const std::string& s) {
   return false;
 }
 
-// 拿掉選擇符號：原地、不配記憶體（-fno-exceptions 下每個配置都是一個 abort 點，而預先標注的書幾乎每個字詞都會走到這裡）。
-// removedAt[i] ＝ 第 i 個拿掉的選擇符號前面留下了幾個碼位（遞增）；碼位照 utf8NextCodepoint 數，與 countCodepoints 同一把尺。
-// 留在原處不拿的（照舊畫成替代字形，等同 v341）：記不下的（字詞最多 200 位元組、選擇符號至少 3 位元組 → 最多 66 個，碰不到）、
-// 後面緊跟續位元組的（拿掉會讓前面一個斷掉的 UTF-8 序列跟後面的位元組接成一個原文沒有的字）。呼叫端保證沒有 NUL。
+// 拿掉選擇符號：原地、不配記憶體（-fno-exceptions 下每個配置都是一個 abort
+// 點，而預先標注的書幾乎每個字詞都會走到這裡）。 removedAt[i] ＝ 第 i
+// 個拿掉的選擇符號前面留下了幾個碼位（遞增）；碼位照 utf8NextCodepoint 數，與 countCodepoints 同一把尺。
+// 留在原處不拿的（照舊畫成替代字形，等同 v341）：記不下的（字詞最多 200 位元組、選擇符號至少 3 位元組 → 最多 66
+// 個，碰不到）、 後面緊跟續位元組的（拿掉會讓前面一個斷掉的 UTF-8
+// 序列跟後面的位元組接成一個原文沒有的字）。呼叫端保證沒有 NUL。
 constexpr size_t kMaxRemovedSelectors = 80;
 size_t stripVariationSelectorsInPlace(std::string& s, uint16_t* removedAt) {
   const auto* const base = reinterpret_cast<const unsigned char*>(s.c_str());
@@ -179,7 +179,8 @@ size_t stripVariationSelectorsInPlace(std::string& s, uint16_t* removedAt) {
       removedAt[n++] = kept;
       continue;
     }
-    if (w != static_cast<size_t>(start - base)) std::memmove(&s[w], start, len);  // 只往前搬：寫的位置永遠不超過讀的位置
+    if (w != static_cast<size_t>(start - base))
+      std::memmove(&s[w], start, len);  // 只往前搬：寫的位置永遠不超過讀的位置
     w += len;
     if (kept < UINT16_MAX) kept++;
   }
@@ -480,7 +481,8 @@ void ParsedText::setBoldBodyText(const bool enabled) { g_boldBodyText = enabled;
 
 // ---- 注音（P2 設計第 2 節）----
 // 讀音的來源：EPUB 是這一段自己的 session（字詞進來就餵），TXT 是整頁共用的游標。
-// 每一步都先核對「引擎還是當初那一個」（世代、字型）：引擎被換掉或撤銷 → session 的暫存可能已經放掉 → 一個位元組都不碰。
+// 每一步都先核對「引擎還是當初那一個」（世代、字型）：引擎被換掉或撤銷 → session 的暫存可能已經放掉 →
+// 一個位元組都不碰。
 struct ParsedText::ZhuyinState {
   zhuyin::ZhuyinEngine* engine = nullptr;
   std::unique_ptr<zhuyin::ZhuyinSession> session;  // EPUB
@@ -613,7 +615,8 @@ size_t ParsedText::zhuyinCoveredUnits(const std::vector<size_t>& breaks, const s
 bool ParsedText::zhuyinTake(const uint32_t cp, uint16_t* out) {
   if (zy_->cursor) {
     if (zy_->cursor->next(cp, out)) return true;
-    zhuyinStop(false);  // 游標自己失敗（核對不符、讀卡）→ 這一頁之後都不標（TXT 沒有快取、不必記降級；原因在 failReason）
+    zhuyinStop(
+        false);  // 游標自己失敗（核對不符、讀卡）→ 這一頁之後都不標（TXT 沒有快取、不必記降級；原因在 failReason）
     return false;
   }
   zhuyin::ZhuyinSession& s = *zy_->session;
@@ -685,8 +688,8 @@ size_t ParsedText::zhuyinCoveredColumns(const std::vector<uint16_t>& unitSrcWord
   return c;
 }
 
-zhuyin::SwapBatch ParsedText::zhuyinLineSwaps(const std::vector<std::string>& lineWords, const ZhuyinAnnotatedFn annotated,
-                                              const void* ctx) {
+zhuyin::SwapBatch ParsedText::zhuyinLineSwaps(const std::vector<std::string>& lineWords,
+                                              const ZhuyinAnnotatedFn annotated, const void* ctx) {
   zhuyin::SwapBatch b;
   if (!zy_ || !zhuyinLive()) return b;
   zhuyin::Swap* buf = zy_->engine->lineSwaps();
@@ -723,7 +726,8 @@ zhuyin::SwapBatch ParsedText::zhuyinLineSwaps(const std::vector<std::string>& li
 void ParsedText::addWord(std::string word, const EpdFontFamily::Style fontStyle, const bool underline,
                          const bool attachToPrevious, const uint32_t visibleTextOffset) {
   if (word.empty()) return;
-  // ⚠️ 字詞裡不准有 NUL：這個檔好幾個 `while (p < end) utf8NextCodepoint(&p)` 迴圈遇到 NUL 不會前進（它把 NUL 當字串結尾）
+  // ⚠️ 字詞裡不准有 NUL：這個檔好幾個 `while (p < end) utf8NextCodepoint(&p)` 迴圈遇到 NUL 不會前進（它把 NUL
+  // 當字串結尾）
   //    → 永遠卡住。EPUB 碰不到（XML 不准有 U+0000）；TXT 在餵入層就當成分隔（TxtEngineLayout 的 isSpace）。
   //    這裡是最後一道：換成空白（一個位元組換一個位元組，碼位數與位移都不變）。
   if (std::memchr(word.data(), 0, word.size()) != nullptr) std::replace(word.begin(), word.end(), '\0', ' ');
@@ -848,12 +852,10 @@ void ParsedText::addWord(std::string word, const EpdFontFamily::Style fontStyle,
   // whitespace separated the two words, that space is content and must be rendered: Korean
   // is a space-delimited script written in Hangul, which utf8IsCjkBreakable() covers.
   if (attachToPrevious && !words.empty() &&
-      hasCjkBreakOpportunityBetween(lastCodepoint(words.back()), firstCodepoint(word),
-                                    ParsedText::verticalKinsoku())) {
+      hasCjkBreakOpportunityBetween(lastCodepoint(words.back()), firstCodepoint(word), ParsedText::verticalKinsoku())) {
     effectiveAttachToPrevious = false;
     effectiveNoSpaceBefore = true;
   }
-
 
   if (auto breakOffsets = cjkCharacterBreakByteOffsets(word); !breakOffsets.empty()) {
     // CJK-heavy paragraphs can push hundreds of tiny tokens quickly when CSS toggles
@@ -1509,9 +1511,7 @@ std::vector<size_t> ParsedText::computeLineBreaks(const GfxRenderer& renderer, c
       compWidths.push_back(compressAmountAt(renderer, fontId, words, wordStyles, i));
     }
   }
-  const auto compAt = [&compWidths](const size_t idx) -> int {
-    return idx < compWidths.size() ? compWidths[idx] : 0;
-  };
+  const auto compAt = [&compWidths](const size_t idx) -> int { return idx < compWidths.size() ? compWidths[idx] : 0; };
 
   // DP table to store the minimum badness (cost) of lines starting at index i
   std::vector<int> dp(totalWordCount);

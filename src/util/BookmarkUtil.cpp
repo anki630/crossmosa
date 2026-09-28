@@ -1,4 +1,5 @@
 #include "BookmarkUtil.h"
+
 #include <DataDir.h>
 
 #include <algorithm>

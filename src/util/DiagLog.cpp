@@ -1,23 +1,23 @@
 #include "DiagLog.h"
-#include <BoardConfig.h>
-#include <BitmapHelpers.h>
-#include <Breadcrumb.h>
-#include <DataDir.h>
-#include <strings.h>  // strcasecmp -- isDiagnosticPath()
-
-#include "BootRecovery.h"
 
 #include <Arduino.h>
+#include <BitmapHelpers.h>
+#include <BoardConfig.h>
+#include <Breadcrumb.h>
+#include <DataDir.h>
 #include <HalGPIO.h>
 #include <HalStorage.h>
 #include <Logging.h>
 #include <esp_heap_caps.h>
+#include <esp_system.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
-#include <esp_system.h>
+#include <strings.h>  // strcasecmp -- isDiagnosticPath()
 
 #include <cstdio>
 #include <cstring>
+
+#include "BootRecovery.h"
 
 // v186：DataDir 搬回來了（維護者 2026-08-28 重啟：原廠韌體本身是 CrossPoint 分支、也寫 /.crosspoint，
 // 從原廠直接刷過來的人靠這一步保住進度）。資料目錄一律問 DataDir::path()；diagPath()/prevDiagPath()
@@ -50,10 +50,14 @@ const char* panelName() {
   // v333：X4 帶上開機探測的實際晶片。原本只寫 "x4" —— 分不出 SSD1677／UC8179／UC8279，
   //   而淺睡眠醒來發黑的根因只在 SSD1677（驅動沒 override requestResync，見 memory device-scope）。
   switch (BoardConfig::ACTIVE.displayController) {
-    case BoardConfig::DisplayController::SSD1677: return "x4-ssd1677";
-    case BoardConfig::DisplayController::UC8179: return "x4-uc8179";
-    case BoardConfig::DisplayController::UC8279: return "x4-uc8279";
-    default: return "x4-?";
+    case BoardConfig::DisplayController::SSD1677:
+      return "x4-ssd1677";
+    case BoardConfig::DisplayController::UC8179:
+      return "x4-uc8179";
+    case BoardConfig::DisplayController::UC8279:
+      return "x4-uc8279";
+    default:
+      return "x4-?";
   }
 }
 
@@ -137,8 +141,8 @@ constexpr size_t WRITE_CHECK_INTERVAL = 8 * 1024;
 // v249：append 的跨 task 鎖。每一行是 open(O_APPEND)／write／flush／close 四步，Storage 的鎖只包住每一步，
 // 整段沒鎖 —— render task 與 main loop 同時各開一個把手追加時，兩邊各自以為的檔尾與檔案大小會互蓋：
 // diag248.log 的 `IMGDEC … prog=0 fil` 被截在正好等於同時寫入的 IMGPAGE 那一行的長度、IMGPAGE 本身消失。
-// 在 begin()（setup，單執行緒）建立；FreeRTOS mutex 有優先權繼承。Storage 不會回頭呼叫 DiagLog（HAL 不碰它），不會死結。
-// 靜態配置（codex 複查）：diag 最有用的時候正是堆積吃緊的時候，不能因為配不到而悄悄退回無鎖。
+// 在 begin()（setup，單執行緒）建立；FreeRTOS mutex 有優先權繼承。Storage 不會回頭呼叫 DiagLog（HAL
+// 不碰它），不會死結。 靜態配置（codex 複查）：diag 最有用的時候正是堆積吃緊的時候，不能因為配不到而悄悄退回無鎖。
 StaticSemaphore_t g_appendMutexStorage;
 SemaphoreHandle_t g_appendMutex = nullptr;
 
@@ -242,8 +246,8 @@ bool append(const char* text) {
   size_t noticeLen = 0;
   const uint32_t noticeCount = g_dropNoticePending;
   if (noticeCount > 0 && len < sizeof(out) - 2) {
-    const int n = snprintf(out, sizeof(out) - len - 2, "%lu DIAGDROP lost=%lu\n",
-                           static_cast<unsigned long>(millis()), static_cast<unsigned long>(noticeCount));
+    const int n = snprintf(out, sizeof(out) - len - 2, "%lu DIAGDROP lost=%lu\n", static_cast<unsigned long>(millis()),
+                           static_cast<unsigned long>(noticeCount));
     if (n > 0 && static_cast<size_t>(n) < sizeof(out) - len - 2) noticeLen = static_cast<size_t>(n);
   }
   memcpy(out + noticeLen, text, len);
@@ -328,8 +332,8 @@ void DiagLog::begin() {
   // v334：帶 unit（哪一台，見 formatUnitId）。加在行尾：分析腳本只比對 `BOOT version=` 開頭。
   char unit[5];
   formatUnitId(unit);
-  line("BOOT version=%s rst=%d panel=%s unit=%s", CROSSPOINT_VERSION, static_cast<int>(esp_reset_reason()),
-       panelName(), unit);
+  line("BOOT version=%s rst=%d panel=%s unit=%s", CROSSPOINT_VERSION, static_cast<int>(esp_reset_reason()), panelName(),
+       unit);
   // v186：資料目錄的決定是這台機器上唯一的 SD 格式變更；LOG_* 在 X3 上等於丟掉，所以寫進 log。
   line("DATADIR active=%s outcome=%s", DataDir::path(), DataDir::outcomeName());
   // v151：CAPS 探測 —— v150 誤植進 setForced()（codex 警告過，我確認錯了），整版沒取到證。
@@ -398,9 +402,9 @@ void DiagLog::mem(const char* tag) {
   char buf[320];  // 逐池欄位 ~48 字元/池 + 聚合欄位;預留到 5 池不截斷
   int n = snprintf(buf, sizeof(buf), "%lu MEM %-14s", static_cast<unsigned long>(millis()), tag);
   for (int i = 0; i < ctx.count && n > 0 && n < static_cast<int>(sizeof(buf)); i++) {
-    n += snprintf(buf + n, sizeof(buf) - n, " p%d@%08x t=%u f=%u max=%u", i,
-                  static_cast<unsigned>(ctx.pools[i].start), static_cast<unsigned>(ctx.pools[i].total),
-                  static_cast<unsigned>(ctx.pools[i].free), static_cast<unsigned>(ctx.pools[i].largest));
+    n += snprintf(buf + n, sizeof(buf) - n, " p%d@%08x t=%u f=%u max=%u", i, static_cast<unsigned>(ctx.pools[i].start),
+                  static_cast<unsigned>(ctx.pools[i].total), static_cast<unsigned>(ctx.pools[i].free),
+                  static_cast<unsigned>(ctx.pools[i].largest));
   }
   // 聚合值一併留存,方便與歷史版本的 [MEM] log 對照(ESP.getHeapSize/getMaxAllocHeap 同源)
   if (n > 0 && n < static_cast<int>(sizeof(buf))) {

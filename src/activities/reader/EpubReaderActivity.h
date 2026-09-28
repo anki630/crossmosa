@@ -1,13 +1,11 @@
 #pragma once
-#include "util/NvsStore.h"  // v332：FNV1A_BASIS
-
-#include <atomic>
-#include <WarmIdentity.h>
-#include <ZhuyinActive.h>
 #include <Epub.h>
 #include <Epub/FootnoteEntry.h>
 #include <Epub/Section.h>
+#include <WarmIdentity.h>
+#include <ZhuyinActive.h>
 
+#include <atomic>
 #include <optional>
 
 #include "BookmarkEntry.h"
@@ -15,6 +13,7 @@
 #include "EpubReaderMenuActivity.h"
 #include "ProgressMapper.h"
 #include "activities/Activity.h"
+#include "util/NvsStore.h"  // v332：FNV1A_BASIS
 
 class EpubReaderActivity final : public Activity {
   std::shared_ptr<Epub> epub;
@@ -58,7 +57,9 @@ class EpubReaderActivity final : public Activity {
   float pendingSpineProgress = 0.0f;
   bool pendingScreenshot = false;
   bool imagePassAborted_ = false;
-  int32_t lastRenderTailMs_ = -1;  // v261：上一次 render 在 renderContents 之後的尾段毫秒（存進度＋預取等；render task；-1＝不知道）  // v260：這次 renderContents 的補圖那一遍被按鍵中止（render task；render() 尾端讀）
+  // v261：上一次 render 在 renderContents 之後的尾段毫秒（存進度＋預取等；render task；-1＝不知道）  //
+  int32_t lastRenderTailMs_ = -1;
+  // v260：這次 renderContents 的補圖那一遍被按鍵中止（render task；render() 尾端讀）
   bool pendingSyncSaveError = false;
   // Consecutive page-load failures. Each failure drops the section and rebuilds on the next render,
   // which recovers a transiently corrupt cache; capped so a persistently bad page can't spin forever.
@@ -95,9 +96,9 @@ class EpubReaderActivity final : public Activity {
   // 才量，pg=1–6 時為 0＝「沒量」不是「沒保留」）。純診斷，不改行為。
   uint8_t diagPfGate = 0;
   uint16_t diagPfMaxKb = 0;
-  uint16_t diagPfRetKb = 0;  // v189：預取當下保留中的 mini bitmap 容量（KB），pg=7 判讀用
+  uint16_t diagPfRetKb = 0;        // v189：預取當下保留中的 mini bitmap 容量（KB），pg=7 判讀用
   uint8_t pendingCacheReset_ = 0;  // v184：清快取詢問的答案（來自 MenuResult）
-  uint16_t lastCssLoadSeq = 0;  // v177：每次載入印一行 CSSLOAD（序號變動）
+  uint16_t lastCssLoadSeq = 0;     // v177：每次載入印一行 CSSLOAD（序號變動）
   // v177（使用者提議）：預取的基準頁與目標頁。按鍵把 currentPage 推到目標頁＝順向翻頁 → 不中止，
   // 讓預取跑完，緊接著的 render 就是命中。其他變動（往回、跳頁、連按）才中止。
   int lastRenderedPage_ = -1;  // renderContents 剛畫完的頁碼（render 尾端預取的基準）
@@ -140,18 +141,18 @@ class EpubReaderActivity final : public Activity {
   int lastSavedPage = -1;
   int lastSavedPageCount = -1;
   // v332：三層儲存 —— 閱讀位置的主檔是晶片 NVS（每一次真的翻頁寫，實測 3–4ms、GC 33ms）。progress.bin 只在：
-  //   離開書（onExit）、淺睡眠入口桌布之後的檢查點（flushProgressDurable）、NVS 寫失敗的退路（第一次立刻、之後每 10 次）、
-  //   還沒有 progress.bin 的書第一次翻頁（錨）。休眠前的 flush 只補 NVS。
-  //   開書時 NVS 贏的條件（codex 三輪）：有錨（progress.bin 存在）＋ 同路徑 hash ＋ 同身分（書名 hash ^ spine 數）＋
-  //   NVS 記的 progress.bin 指紋／長度＝現在讀到的（＝SD 那份自我們上次寫之後沒被別人動過）＋ spine／page 在範圍內。
-  //   否則用 SD。⚠️ 接受的殘餘：同路徑、同書名、同 spine 數、同 progress.bin 內容的不同檔案會對上（等於同一本書）。
-  //   ⚠️ 所有寫入仍在 RenderLock 下（render 尾段＝render task；onExit／flush／檢查點＝主任務持鎖）。
-  //   （v329 的「每 10 頁寫 SD」與換章寫 SD 一併拿掉；當機／斷電現在最多丟【一頁】。）
-  bool progressDirty_ = false;     // progress.bin 過期（離開／檢查點時補寫）
-  bool nvsProgDirty_ = false;      // NVS 那格不是目前位置（第一次 render、或 NVS 寫失敗）→ 休眠前補
+  //   離開書（onExit）、淺睡眠入口桌布之後的檢查點（flushProgressDurable）、NVS 寫失敗的退路（第一次立刻、之後每 10
+  //   次）、 還沒有 progress.bin 的書第一次翻頁（錨）。休眠前的 flush 只補 NVS。 開書時 NVS 贏的條件（codex
+  //   三輪）：有錨（progress.bin 存在）＋ 同路徑 hash ＋ 同身分（書名 hash ^ spine 數）＋ NVS 記的 progress.bin
+  //   指紋／長度＝現在讀到的（＝SD 那份自我們上次寫之後沒被別人動過）＋ spine／page 在範圍內。 否則用 SD。⚠️
+  //   接受的殘餘：同路徑、同書名、同 spine 數、同 progress.bin 內容的不同檔案會對上（等於同一本書）。 ⚠️ 所有寫入仍在
+  //   RenderLock 下（render 尾段＝render task；onExit／flush／檢查點＝主任務持鎖）。 （v329 的「每 10 頁寫 SD」與換章寫
+  //   SD 一併拿掉；當機／斷電現在最多丟【一頁】。）
+  bool progressDirty_ = false;                   // progress.bin 過期（離開／檢查點時補寫）
+  bool nvsProgDirty_ = false;                    // NVS 那格不是目前位置（第一次 render、或 NVS 寫失敗）→ 休眠前補
   uint32_t sdProgHash_ = NvsStore::FNV1A_BASIS;  // 這本書 progress.bin 的指紋（開書時讀到的／上次寫的）→ NVS 配對
   uint32_t sdProgLen_ = 0;                       // 同上的長度（0＝沒有檔）
-  uint8_t nvsFailStreak_ = 10;                   // NVS 失敗計數：第一次失敗立刻寫 SD，之後每 10 次一次（v329 節奏；codex）
+  uint8_t nvsFailStreak_ = 10;  // NVS 失敗計數：第一次失敗立刻寫 SD，之後每 10 次一次（v329 節奏；codex）
   int lastObservedSpine_ = -1;
   int lastObservedPage_ = -1;
   uint32_t lastRenderDlogMs_ = 0;  // 上一次 render（含尾段）花在 DiagLog append 的毫秒 → EPLAT dlog=
@@ -288,12 +289,12 @@ class EpubReaderActivity final : public Activity {
   int nextPrebuiltReadySpine_ = -1;  // 確認有完整快取的 spine（跨章預取與 CHAPTER 證人用）
   unsigned long nextBuildStartMs_ = 0;
   uint32_t nextBuildTicks_ = 0;
-  bool nextPrebuildWaiting_ = false;          // 堆積不夠而沒開始：退避中（不標記已嘗試，稍後再試）
-  unsigned long nextPrebuildWaitStartMs_ = 0;  // 退避起點（用差值比，millis 回捲安全）
-  bool nextBuildTurnSinceTick_ = true;         // 上一次預排 tick 之後讀者翻過頁 → 預排暫停中，預取照常
+  bool nextPrebuildWaiting_ = false;                            // 堆積不夠而沒開始：退避中（不標記已嘗試，稍後再試）
+  unsigned long nextPrebuildWaitStartMs_ = 0;                   // 退避起點（用差值比，millis 回捲安全）
+  bool nextBuildTurnSinceTick_ = true;                          // 上一次預排 tick 之後讀者翻過頁 → 預排暫停中，預取照常
   static constexpr unsigned long NEXT_PREBUILD_IDLE_MS = 2000;  // 翻頁之後至少停這麼久，預排才開始／繼續
   static constexpr unsigned long NEXT_PREBUILD_STEAL_DWELL_MS = 3000;  // v259：停這麼久之後，預取的字型快取讓路給預排
-  static constexpr uint32_t NEXT_PREBUILD_MAX_STEALS = 6;             // v259：每個預排最多讓幾次
+  static constexpr uint32_t NEXT_PREBUILD_MAX_STEALS = 6;              // v259：每個預排最多讓幾次
   static constexpr unsigned long NEXT_PREBUILD_MAX_AGE_MS = 10UL * 60UL * 1000UL;  // v259：預排壽命上限
   // codex（v257）：不只開始，【每一個】預排 tick 都要讀者停了 2 秒；註腳裡不跑。暫停時 skipLoopDelay 也回到省電。
   bool nextBuildTickDue() const {
@@ -312,9 +313,9 @@ class EpubReaderActivity final : public Activity {
   uint32_t nextBuildHeapBlocks_ = 0;
   uint32_t nextBuildHeapBlockedMs_ = 0;
   uint32_t nextBuildWarmBlocks_ = 0;
-  uint32_t nextBuildSteals_ = 0;        // v259：停留夠久、預取讓路給預排的次數（steal=次數/沒打開地板的次數）
+  uint32_t nextBuildSteals_ = 0;  // v259：停留夠久、預取讓路給預排的次數（steal=次數/沒打開地板的次數）
   uint32_t nextBuildStealsNoGain_ = 0;
-  bool nextBuildStealNoGain_ = false;   // 讓過一次卻沒打開地板 → 這個預排不再讓，被擋算真的缺記憶體
+  bool nextBuildStealNoGain_ = false;  // 讓過一次卻沒打開地板 → 這個預排不再讓，被擋算真的缺記憶體
   uint32_t nextBuildMinFreeKb_ = 0;
   uint32_t nextBuildMinMaxKb_ = 0;
   uint32_t nextBuildBlockedRunMs_ = 0;  // 從上一次成功 tick 之後連續被擋的累計（60 秒 stall 判準）
@@ -328,7 +329,7 @@ class EpubReaderActivity final : public Activity {
   void stopNextChapterPrebuild(const char* why);
   bool diagBuildActive = false;
   bool diagYieldRun = false;
-  int diagBuildSpine = -1;  // 建置開始時的章（章切換後 currentSpineIndex 已是新章）
+  int diagBuildSpine = -1;           // 建置開始時的章（章切換後 currentSpineIndex 已是新章）
   uint16_t diagBuildPagesBuilt = 0;  // tick 最後看到的 builtPageCount（section 已換掉或已 null 時 pages= 用它）
   // v189：設定變更的延遲重定位只該對「落地那一頁」生效。landingPending_ 在 section 建立時設起，
   // 落地頁定案後蓋成 deferredLandingPage_（第二輪驗證：原本每次 render 都蓋，比對永遠相等＝形同虛設）。
@@ -449,7 +450,7 @@ class EpubReaderActivity final : public Activity {
   // （舊視窗設計下這裡整章為真：4 次翻頁 3 次沒有 tick，CPU 卻整章全速。）
   bool skipLoopDelay() override { return (buildTickDue() || nextBuildTickDue()) && !buildHeapPaused; }
   bool isReaderActivity() const override { return true; }
-  int flushProgress() override;  // v329：休眠前把欠的進度寫掉；註腳中改存來源位置（同 onExit）。v332：只補 NVS
+  int flushProgress() override;         // v329：休眠前把欠的進度寫掉；註腳中改存來源位置（同 onExit）。v332：只補 NVS
   int flushProgressDurable() override;  // v332：淺睡眠入口桌布之後的 SD 檢查點（沒人等）
   bool handleForcedRefresh() override {
     {

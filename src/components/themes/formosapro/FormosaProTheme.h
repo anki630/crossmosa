@@ -65,8 +65,8 @@ class FormosaProTheme : public Lyra3CoversTheme {
                            std::function<bool()> storeCoverBuffer) const override;
 
  private:
-  static constexpr int R = 16;   // = FormosaProMetrics::values.cornerRadius
-  static constexpr int N = 60;   // = cornerSmoothing（百分比，v180 起）
+  static constexpr int R = 16;  // = FormosaProMetrics::values.cornerRadius
+  static constexpr int N = 60;  // = cornerSmoothing（百分比，v180 起）
   static int innerR(int inset) { return R - inset < 2 ? 2 : R - inset; }
   void drawChevron(const GfxRenderer& renderer, int x, int cy) const;
   void drawGroupedRows(const GfxRenderer& renderer, int cardX, int cardY, int cardW, int rowH, int rowCount,

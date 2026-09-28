@@ -1,17 +1,17 @@
-#include <esp_heap_caps.h>
-#include <esp_timer.h>
-#include <freertos/FreeRTOS.h>
-#include <freertos/semphr.h>
-#include <freertos/task.h>
-#include <Arduino.h>
 #include "SdCardFont.h"
 
+#include <Arduino.h>
 #include <Breadcrumb.h>
 #include <HalStorage.h>
 #include <Logging.h>
 #include <Utf8.h>
 #include <ZhuyinBufferedSource.h>
 #include <ZhuyinEngine.h>
+#include <esp_heap_caps.h>
+#include <esp_timer.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
+#include <freertos/task.h>
 
 #include <algorithm>
 #include <climits>
@@ -142,7 +142,7 @@ bool ensureArrayCapacity(T*& buf, CapT& capacity, const uint32_t needed) {
     grown = ((needed + kStep - 1) / kStep) * kStep;
   }
   if (grown > kCapMax) grown = kCapMax;
-  if (grown < needed) return false;               // needed 本身就超過 CapT 能表示：誠實失敗
+  if (grown < needed) return false;  // needed 本身就超過 CapT 能表示：誠實失敗
 
   delete[] buf;
   buf = new (std::nothrow) T[grown > 0 ? grown : 1];
@@ -157,8 +157,9 @@ bool ensureArrayCapacity(T*& buf, CapT& capacity, const uint32_t needed) {
 // → 最大塊每頁降 4KB（34,804 → 30,708 → 26,612 → 22,516），連續 18 頁降級。
 //
 // ⭐ 大小選「TLSF 區間邊界 − 12」（IDF 5.5.2 tlsf.c／multi_heap_poisoning.c 讀碼）：malloc(n) 在池內實際要 n＋12
-//   （CONFIG_HEAP_POISONING_LIGHT），mapping_search 把它【往上】取到區間邊界才去找；放掉的洞則歸在【往下】取整的那一格。
-//   n＋12 在邊界上時兩者同格，放掉再要回同樣大小一定找得到那個洞；不在邊界上時要看洞有沒有碰巧併到旁邊的碎片。
+//   （CONFIG_HEAP_POISONING_LIGHT），mapping_search
+//   把它【往上】取到區間邊界才去找；放掉的洞則歸在【往下】取整的那一格。 n＋12
+//   在邊界上時兩者同格，放掉再要回同樣大小一定找得到那個洞；不在邊界上時要看洞有沒有碰巧併到旁邊的碎片。
 //   `heap_caps_get_largest_free_block()` 回報的值（tlsf_fit_size − 12）天生就是這種大小；8KB 級距也是邊界
 //   （≤64KB 的區間寬 ≤2,048，都整除 8,192），所以取整成 8KB − 12。
 //   ⚠️ 12 綁著 sdkconfig 的 poisoning 等級；換掉只會失去這個性質，不影響正確性。
@@ -175,15 +176,16 @@ bool ensureArrayCapacity(T*& buf, CapT& capacity, const uint32_t needed) {
 // ✅ 桌機重播（工作區 tools/tlsf-minibitmap-sim：IDF 5.5.2 的 tlsf.c 原檔 ＋ poisoning 模型 ＋ 每頁
 //    「clearCache 清 miss ring → 載入下一頁排版物件 → prewarm → 放掉排版物件 → 被丟的字進 ring」的順序）：
 //    v243 策略逐位元組重現實機階梯（34,804 → 30,708 → 26,612 → 22,516 → 跳回）；這個策略在四種情境
-//    （有無小碎片 × v243 的 18 頁失敗序列／疏密交錯 72 頁）都不下降，失敗頁 12–35 → 9、每頁平均丟字 5.5–13.4KB → 2.2KB。
-//    ⚠️ 重播用的是【自己抄的一份策略】，不是編這個檔（它在匿名命名空間、帶 Arduino 相依）—— 改這裡要同步改那份。
+//    （有無小碎片 × v243 的 18 頁失敗序列／疏密交錯 72 頁）都不下降，失敗頁 12–35 → 9、每頁平均丟字 5.5–13.4KB
+//    → 2.2KB。 ⚠️ 重播用的是【自己抄的一份策略】，不是編這個檔（它在匿名命名空間、帶 Arduino 相依）——
+//    改這裡要同步改那份。
 //
 // 回傳值只給證人用；成敗看 buf／capacity 與 needed 的關係。
 constexpr uint32_t kPoisonOverhead = 12;
 
 struct MiniBitmapGrowth {
-  bool grabbed = false;   // 取整配不到，改吃下當下最大的一塊
-  size_t largest = 0;     // 吃之前的最大塊（已含剛放掉的舊 buffer）
+  bool grabbed = false;  // 取整配不到，改吃下當下最大的一塊
+  size_t largest = 0;    // 吃之前的最大塊（已含剛放掉的舊 buffer）
 };
 
 MiniBitmapGrowth growMiniBitmap(uint8_t*& buf, uint32_t& capacity, const uint32_t needed) {
@@ -248,8 +250,8 @@ constexpr size_t GLYPH_ADVANCE_OFFSET = offsetof(EpdGlyph, advanceX);
 
 enum : uint8_t {
   CJK_WHY_OK = 0,
-  CJK_WHY_NONE,     // 這個字面在範圍內沒有字
-  CJK_WHY_OPEN,     // 以下三個是 SD 讀取失敗（可重試一次）
+  CJK_WHY_NONE,  // 這個字面在範圍內沒有字
+  CJK_WHY_OPEN,  // 以下三個是 SD 讀取失敗（可重試一次）
   CJK_WHY_SEEK,
   CJK_WHY_READ,
   CJK_WHY_NOMAJ,    // 取樣找不到過半的字寬
@@ -262,8 +264,8 @@ enum : uint8_t {
   CJK_WHY_RUNTIME,  // 頁面預載讀到的字寬與快路徑不同（prewarmStyle 的核對）
   CJK_WHY_ABORT,    // v255：使用者按了鍵／有畫面在等 → 中止，不算失敗，下個允許的時機重來
 };
-constexpr const char* CJK_WHY_NAME[] = {"ok",  "none",   "open",  "seek", "read", "nomaj",  "zero",
-                                        "exc", "sum",    "verify", "vread", "slow", "runtime", "abort"};
+constexpr const char* CJK_WHY_NAME[] = {"ok",  "none", "open",   "seek",  "read", "nomaj",   "zero",
+                                        "exc", "sum",  "verify", "vread", "slow", "runtime", "abort"};
 }  // namespace
 
 char SdCardFont::lastAllocFail[128] = {0};
@@ -464,12 +466,13 @@ struct SdCardFont::SharedFileLock {
 SdCardFont::SdCardFont() { sharedFileMutex_ = xSemaphoreCreateRecursiveMutexStatic(&sharedFileMutexStorage_); }
 
 // 注音引擎讀檔尾的 ZYDB 區塊：走常駐的 sharedFile_（不開第二個 handle，SdCardFont.h 的前提），
-// 每次持 SharedFileLock、自己 seek（位置可能被別的使用者搬走）。鎖的順序：RenderLock → SharedFileLock（codex 修訂 14）；
-// 鎖內只讀卡，不寫診斷、不讓出。
-// v339 讀卡證人（`ZY loadio`；每次 enableZhuyin 都是新的物件 ＝ 歸零）—— diag338 的 2 秒只知道總數。
-//   lock ＝ 等外層 SharedFileLock 的經過時間（含被搶走 CPU 的時間）；seek ＝ ensureFileOpen＋seek（含 HalFile 內層 StorageLock 的等待）；
-//   rd ＝ read 呼叫本身（同樣含內層鎖）；back ＝ 目標在檔柄【目前位置】之前的次數（FAT32 得從檔頭沿著鏈走；位置可能是別人的讀取留下的）。
-//   計數都在 SharedFileLock 內更新（跨 task 也不會打架）；只在載入期間被讀取（引擎公開之前取值，見 zyBeforeAttach）。
+// 每次持 SharedFileLock、自己 seek（位置可能被別的使用者搬走）。鎖的順序：RenderLock → SharedFileLock（codex 修訂
+// 14）； 鎖內只讀卡，不寫診斷、不讓出。 v339 讀卡證人（`ZY loadio`；每次 enableZhuyin 都是新的物件 ＝ 歸零）—— diag338
+// 的 2 秒只知道總數。
+//   lock ＝ 等外層 SharedFileLock 的經過時間（含被搶走 CPU 的時間）；seek ＝ ensureFileOpen＋seek（含 HalFile 內層
+//   StorageLock 的等待）； rd ＝ read 呼叫本身（同樣含內層鎖）；back ＝ 目標在檔柄【目前位置】之前的次數（FAT32
+//   得從檔頭沿著鏈走；位置可能是別人的讀取留下的）。 計數都在 SharedFileLock 內更新（跨 task
+//   也不會打架）；只在載入期間被讀取（引擎公開之前取值，見 zyBeforeAttach）。
 struct SdCardFont::ZyBlockSource final : zhuyin::BlockSource {
   SdCardFont& font;
   uint32_t offset;
@@ -504,12 +507,14 @@ struct SdCardFont::ZyBlockSource final : zhuyin::BlockSource {
 
 namespace {
 // v339：引擎載入的讀取緩衝（為什麼分兩段借、各從哪裡借、為什麼要在公開之前還，見 ZhuyinBufferedSource.h）。
-constexpr uint32_t kZyStackWindow = 4096;        // 結構載入：堆疊上的窗口（電腦端：讀卡 423 → 42 次）
-constexpr uint32_t kZyTlsfMargin = 4096;         // 整塊配置的邊際（TLSF 取整律，硬限制第 6 條；同 BITMAP_BUDGET_MARGIN）
-constexpr uint32_t kZyWholeLeaveLargest = 20 * 1024;  // 整塊借走之後，最大連續塊至少還要這麼多（借用當下的觀測，不是保留）
-// 整塊的上限是 ZYDB 格式本身的上限（ZhuyinFormat.h，131,072 B），不是 arena 每塊 2 KB 的 ZhuyinEngine::kMaxBlockBytes ——
-// 兩個常數同名，codex 第二輪就誤判過一次；這一行釘住「用的是哪一個」。
-static_assert(zhuyin::kMaxBlockBytes >= 64 * 1024, "whole-block cap must be the ZYDB format limit, not the arena block cap");
+constexpr uint32_t kZyStackWindow = 4096;  // 結構載入：堆疊上的窗口（電腦端：讀卡 423 → 42 次）
+constexpr uint32_t kZyTlsfMargin = 4096;   // 整塊配置的邊際（TLSF 取整律，硬限制第 6 條；同 BITMAP_BUDGET_MARGIN）
+// 整塊借走之後，最大連續塊至少還要這麼多（借用當下的觀測，不是保留）
+constexpr uint32_t kZyWholeLeaveLargest = 20 * 1024;
+// 整塊的上限是 ZYDB 格式本身的上限（ZhuyinFormat.h，131,072 B），不是 arena 每塊 2 KB 的 ZhuyinEngine::kMaxBlockBytes
+// —— 兩個常數同名，codex 第二輪就誤判過一次；這一行釘住「用的是哪一個」。
+static_assert(zhuyin::kMaxBlockBytes >= 64 * 1024,
+              "whole-block cap must be the ZYDB format limit, not the arena block cap");
 
 struct ZyOpenCtx {
   zhuyin::ZhuyinEngine* engine;
@@ -551,14 +556,16 @@ void zyAfterStructural(void* p) {
   c.r->structMs = static_cast<uint32_t>((esp_timer_get_time() - c.t0) / 1000);
   c.r->cardStruct = c.buffered->rawReads();
   // 自我測試的查詢在字詞群組之間隨機跳（約 97 次）：窗口接不住（電腦端 97 → 94 次，卻多讀三倍位元組）
-  // → 整塊借堆積讀進來，自我測試跑完、引擎公開之前就還（zyBeforeAttach）。配不到、或借走之後剩的最大塊太小 → 直接讀（v338）。
+  // → 整塊借堆積讀進來，自我測試跑完、引擎公開之前就還（zyBeforeAttach）。配不到、或借走之後剩的最大塊太小 →
+  // 直接讀（v338）。
   //   結構段已經退回直接讀（degraded）→ 這一趟不再借（卡對大讀取不穩，別再試 53 KB）。
   const uint32_t n = c.blockLen;
   const size_t freeNow = heap_caps_get_free_size(MALLOC_CAP_DEFAULT);
   const size_t maxNow = heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT);
   if (!c.buffered->degraded() && n <= zhuyin::kMaxBlockBytes && maxNow >= static_cast<size_t>(n) + kZyTlsfMargin &&
       freeNow >= static_cast<size_t>(n) + c.heapReserve) {
-    c.whole = new (std::nothrow) uint8_t[n];  // new ＝ MALLOC_CAP_DEFAULT：上面、下面的檢查用同一個 caps（ESP32-C3 沒有外部 RAM）
+    c.whole = new (std::nothrow)
+        uint8_t[n];  // new ＝ MALLOC_CAP_DEFAULT：上面、下面的檢查用同一個 caps（ESP32-C3 沒有外部 RAM）
     // 借走之後再看一次（codex v339 複查 5）：總量夠不代表別人還拿得到一塊連續的；取整之後總量也可能掉到保留量以下。
     // 這只是借用當下的觀測（不是替別的 task 保留）—— 夠短（整塊一次讀＋自我測試）才借。
     if (c.whole && (heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT) < kZyWholeLeaveLargest ||
@@ -584,7 +591,8 @@ bool zyOpen(ZyOpenCtx& c, uint8_t* window, const uint32_t cap) {
   c.r->window = (c.buffered->mode() == zhuyin::BufferedSource::Mode::Window) ? cap : 0;  // 真的用上了才記（第二輪 11）
   const zhuyin::ZhuyinEngine::OpenHooks hooks{&c, &zyAfterStructural};
   const zhuyin::LoadStatus st = c.engine->prepare(*c.buffered, &c.r->failedCase, &hooks);
-  if (!c.structuralDone) c.r->structMs = static_cast<uint32_t>((esp_timer_get_time() - c.t0) / 1000);  // 結構段失敗（第二輪 10）
+  if (!c.structuralDone)
+    c.r->structMs = static_cast<uint32_t>((esp_timer_get_time() - c.t0) / 1000);  // 結構段失敗（第二輪 10）
   zySnapshot(c);
   zyReleaseBuffers(c);
   c.r->load = static_cast<uint8_t>(st);
@@ -621,8 +629,16 @@ void SdCardFont::disableZhuyin() {
 
 bool SdCardFont::prepareZhuyinEngine(ZhuyinEnableResult& r, const bool stackWindow) {
   static constexpr uint32_t kHeapReserve = 32 * 1024;  // 同 enableZhuyin：整塊借走之後也要留這麼多給別人
-  ZyOpenCtx c{zyEngine_.get(), zyBuffered_.get(), &zySource_->waitUs, &zySource_->seekUs, &zySource_->readUs,
-              &zySource_->backSeeks, &r, zySource_->size(), kHeapReserve, esp_timer_get_time()};
+  ZyOpenCtx c{zyEngine_.get(),
+              zyBuffered_.get(),
+              &zySource_->waitUs,
+              &zySource_->seekUs,
+              &zySource_->readUs,
+              &zySource_->backSeeks,
+              &r,
+              zySource_->size(),
+              kHeapReserve,
+              esp_timer_get_time()};
   return stackWindow ? zyOpenWithStackWindow(c) : zyOpen(c, nullptr, 0);
 }
 
@@ -634,9 +650,11 @@ SdCardFont::ZhuyinEnableResult SdCardFont::enableZhuyin(const int fontId) {
   //   這只是載入前的估計；載入之後的真實餘裕另有一關（freeAfter／maxAfter）。
   static constexpr uint32_t kStackNeed = 3072;
   // v339：夠才借堆疊窗口，不夠就直接讀。另加 2 KB：量測點在這個框的頂端，窗口底下還疊著 openZhuyinEngine／zyOpen／hook
-  //   與讀卡（HalFile → SdFat → SPI）的框，而且窗口在整個 open 期間都活著（codex v339 複查 2：只加 4096 的名義餘裕不到 1 KB）。
+  //   與讀卡（HalFile → SdFat → SPI）的框，而且窗口在整個 open 期間都活著（codex v339 複查 2：只加 4096 的名義餘裕不到
+  //   1 KB）。
   static constexpr uint32_t kStackNeedWindowed = kStackNeed + kZyStackWindow + 2048;
-  // v343：字型 v8（P6a＋P6b）常駐約 26.9 KB → 預算 28 KB（使用者 2026-09-26 核可）。v341 實機：字型 v7 載入後 free 102,892／最大塊 98,292。
+  // v343：字型 v8（P6a＋P6b）常駐約 26.9 KB → 預算 28 KB（使用者 2026-09-26 核可）。v341 實機：字型 v7 載入後 free
+  // 102,892／最大塊 98,292。
   static constexpr uint32_t kResidentBudget = 28 * 1024;
   static constexpr uint32_t kHeapReserve = 32 * 1024;
   ZhuyinEnableResult r;
@@ -693,7 +711,8 @@ SdCardFont::ZhuyinEnableResult SdCardFont::enableZhuyin(const int fontId) {
   r.hwmAfter = static_cast<uint32_t>(uxTaskGetStackHighWaterMark(nullptr));
   r.freeAfter = static_cast<uint32_t>(heap_caps_get_free_size(MALLOC_CAP_DEFAULT));
   r.maxAfter = static_cast<uint32_t>(heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT));
-  // 載入之後的餘裕要真的在（codex 整合複查 A10）：上面的門檻是用預估的常駐（kResidentBudget）算的；資料比預估大、或堆積被切碎，
+  // 載入之後的餘裕要真的在（codex 整合複查
+  // A10）：上面的門檻是用預估的常駐（kResidentBudget）算的；資料比預估大、或堆積被切碎，
   //   都要在這裡擋下 —— 不夠就不開（引擎讓記憶體，不是讓排版失敗）。
   if (r.freeAfter < kHeapReserve || r.maxAfter < 4096) {
     disableZhuyin();
@@ -733,7 +752,7 @@ void SdCardFont::freeAll() {
   cpScratch_ = nullptr;
   {
     const SharedFileLock fileLock(*this);  // v255：別的 task 正在用它讀的話，等讀完再關
-    sharedFile_ = HalFile{};  // 關閉共用檔柄（移動指派讓舊的解構→close）
+    sharedFile_ = HalFile{};               // 關閉共用檔柄（移動指派讓舊的解構→close）
   }
   clearOverflow();
   clearPersistentCache();  // v253：含掃描結果
@@ -1094,7 +1113,8 @@ bool SdCardFont::load(const char* path) {
   if (headerBuf[13] == 'Z' && headerBuf[14] == 'Y' && headerBuf[15] == 1 && memcmp(headerBuf + 28, "ZYE1", 4) == 0) {
     zyMarker_ = true;
     zyBlockOffset_ = readU32(headerBuf + 16);
-    zyDataset_ = static_cast<uint64_t>(readU32(headerBuf + 20)) | (static_cast<uint64_t>(readU32(headerBuf + 24)) << 32);
+    zyDataset_ =
+        static_cast<uint64_t>(readU32(headerBuf + 20)) | (static_cast<uint64_t>(readU32(headerBuf + 24)) << 32);
     zyFileSize_ = static_cast<uint32_t>(file.fileSize());
   }
 
@@ -1850,7 +1870,8 @@ size_t SdCardFont::releaseMiniData() {
   for (uint8_t i = 0; i < MAX_STYLES; i++) {
     PerStyle& s = styles_[i];
     if (!s.present) continue;
-    bytes += static_cast<size_t>(s.miniBitmapCapacity) + static_cast<size_t>(s.miniGlyphCapacity) * sizeof(s.miniGlyphs[0]) +
+    bytes += static_cast<size_t>(s.miniBitmapCapacity) +
+             static_cast<size_t>(s.miniGlyphCapacity) * sizeof(s.miniGlyphs[0]) +
              static_cast<size_t>(s.miniIntervalCapacity) * sizeof(s.miniIntervals[0]);
     freeStyleMiniData(s);
     applyGlyphMissCallback(i);
@@ -1933,8 +1954,7 @@ void SdCardFont::scanCjkAdvances(const uint8_t si, uint8_t* const io, const uint
     } else if (why == CJK_WHY_ABORT) {
       c.state = CJK_SCAN_NONE;  // 條件仍滿足，下一個允許的時機（至少隔 CJK_SCAN_SPACING_MS）重掃；不佔重試次數
     } else {
-      const bool retryable =
-          why == CJK_WHY_OPEN || why == CJK_WHY_SEEK || why == CJK_WHY_READ || why == CJK_WHY_VREAD;
+      const bool retryable = why == CJK_WHY_OPEN || why == CJK_WHY_SEEK || why == CJK_WHY_READ || why == CJK_WHY_VREAD;
       if (retryable && c.retries < CJK_MAX_RETRIES) {
         ++c.retries;
         c.state = CJK_SCAN_NONE;
@@ -2047,7 +2067,7 @@ void SdCardFont::scanCjkAdvances(const uint8_t si, uint8_t* const io, const uint
       }
       remaining -= n;
       glyphIdx += n;
-      if (buildProbeHook_) buildProbeHook_(7);  // 每批約 16KB：讓建置探針（含按鍵輪詢）照常跑
+      if (buildProbeHook_) buildProbeHook_(7);                         // 每批約 16KB：讓建置探針（含按鍵輪詢）照常跑
       if (abortFn && abortFn(abortCtx)) return finish(CJK_WHY_ABORT);  // v255
     }
     filePosIdx = glyphIdx;
@@ -2115,7 +2135,8 @@ void SdCardFont::publishAdvScanWitness() const {
   // 一行含所有掃過的字面，開頭是字型的內容雜湊（區分換字型／換字級）與這個 task 的堆疊最低剩餘量（hwm，bytes：
   // 掃描在很深的排版呼叫鏈裡跑，codex 要求實機量）。每個字面最長 54 字元
   // （" s3=rt:runtime u=65535 e=32+ n=20992 ms=99999 v=48 t=1"），四個＋開頭 240 < 255；超過時最後一字元改成 '~'。
-  // line 用 static：這個函式在排版／畫頁的深處被呼叫，256B 放堆疊不划算；呼叫端（掃描、prewarm 核對）都在 RenderLock 內串行。
+  // line 用 static：這個函式在排版／畫頁的深處被呼叫，256B 放堆疊不划算；呼叫端（掃描、prewarm 核對）都在 RenderLock
+  // 內串行。
   static char line[sizeof(lastAdvScan)];
   int n = snprintf(line, sizeof(line), "font=%08x hwm=%u", static_cast<unsigned>(contentHash_),
                    static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr)));
@@ -2127,11 +2148,11 @@ void SdCardFont::publishAdvScanWitness() const {
     const char* const st = c.state == CJK_SCAN_READY ? "ok" : (c.state == CJK_SCAN_UNUSABLE ? "na" : "rt");
     const char* const why = c.why < sizeof(CJK_WHY_NAME) / sizeof(CJK_WHY_NAME[0]) ? CJK_WHY_NAME[c.why] : "?";
     const unsigned ms = c.scanMs > 99999 ? 99999u : static_cast<unsigned>(c.scanMs);
-    n = snprintf(line + pos, sizeof(line) - pos, " s%u=%s%s%s u=%u e=%u%s n=%u ms=%u v=%u t=%u", static_cast<unsigned>(i),
-                 st, c.state == CJK_SCAN_READY ? "" : ":", c.state == CJK_SCAN_READY ? "" : why,
-                 static_cast<unsigned>(c.uniform), static_cast<unsigned>(c.exceptionCount),
-                 c.why == CJK_WHY_EXC ? "+" : "", static_cast<unsigned>(c.covered), ms,
-                 static_cast<unsigned>(c.verified), static_cast<unsigned>(c.retries));
+    n = snprintf(
+        line + pos, sizeof(line) - pos, " s%u=%s%s%s u=%u e=%u%s n=%u ms=%u v=%u t=%u", static_cast<unsigned>(i), st,
+        c.state == CJK_SCAN_READY ? "" : ":", c.state == CJK_SCAN_READY ? "" : why, static_cast<unsigned>(c.uniform),
+        static_cast<unsigned>(c.exceptionCount), c.why == CJK_WHY_EXC ? "+" : "", static_cast<unsigned>(c.covered), ms,
+        static_cast<unsigned>(c.verified), static_cast<unsigned>(c.retries));
     if (n < 0) break;
     if (pos + static_cast<size_t>(n) >= sizeof(line)) {
       truncated = true;
@@ -2389,7 +2410,8 @@ int SdCardFont::fetchAdvancesForCodepoints(uint32_t* codepoints, uint32_t cpCoun
     // v255：用常駐的共用檔柄（sharedFile_），不再每次呼叫、每個字重各開一次檔。
     //   v254 實機：一章 110 筆讀取卻花 1,197ms（≈11ms／筆）—— 一段只補一兩個新字也付一次 12–18ms 的開檔（A-4）。
     //   sharedFile_ 本來就被 prewarmStyle 與 onGlyphMiss（排版量字寬的退路也走它）共用，
-    //   都在 RenderLock 串行之下；這裡每次讀取前都自己 seek（lastReadIndex 初值 INT32_MIN），不依賴前一個使用者留下的位置。
+    //   都在 RenderLock 串行之下；這裡每次讀取前都自己 seek（lastReadIndex 初值
+    //   INT32_MIN），不依賴前一個使用者留下的位置。
     std::unique_ptr<AdvanceEntry[]> staged(new (std::nothrow) AdvanceEntry[needCount]);
     if (!staged) {
       LOG_ERR("SDCF", "buildAdvanceTable: failed to allocate staging for style %u", si);
@@ -2460,7 +2482,7 @@ int SdCardFont::buildAdvanceTableRange(Iter begin, Iter end, const std::vector<E
 
   // +2 reserved slots for space and hyphen injected after the main scan.
   static constexpr uint32_t MAX_UNIQUE_CODEPOINTS = 4096;
-  // v164：常駐化（v55「一次配滿、就地重用」手法）。原本每次呼叫都 new/delete 16KB —— 
+  // v164：常駐化（v55「一次配滿、就地重用」手法）。原本每次呼叫都 new/delete 16KB ——
   // 實機 diag（v161/162 段 12 次 SDCFFAIL codepoint-buf）證明建置視窗裡這顆 16KB 連續塊
   // 常常賭輸（最緊時 defMax 只剩 3,060），輸了整頁 advance 表就退回逐字 SD 慢路徑。
   // 改成第一次成功配置後就留著（freeAll 釋放）：配置時機在開書早期、堆積寬鬆，
@@ -2484,8 +2506,8 @@ int SdCardFont::buildAdvanceTableRange(Iter begin, Iter end, const std::vector<E
   }
 
   // v253：先掃描、再收集碼位 —— 掃描借用 cpScratch_ 當讀取緩衝，不另配記憶體。
-  // 條件：這個字面舊路徑成功讀過 ≥128（內文）／256（其他）個範圍內字、表已配置（READY 之後 renderer 的 hasAdvanceTable 閘必過）、
-  // 距上一次掃描 ≥2 秒（同一個建置步驟裡不背對背掃兩個字面）。一次呼叫最多掃一個。
+  // 條件：這個字面舊路徑成功讀過 ≥128（內文）／256（其他）個範圍內字、表已配置（READY 之後 renderer 的 hasAdvanceTable
+  // 閘必過）、 距上一次掃描 ≥2 秒（同一個建置步驟裡不背對背掃兩個字面）。一次呼叫最多掃一個。
   static_assert(CJK_SCAN_SCRATCH_SLOTS == MAX_UNIQUE_CODEPOINTS + 2, "scan buffer must match cpScratch_ size");
   // v255：只在呼叫端允許的時候掃（背景排版的 tick、txt 閱讀停留時的預取）。v254 實機：內文掃描 743ms 落在
   //   翻到新章的同步排版裡（使用者正在等那一頁），txt 則落在翻頁的排版裡。條件滿足但不允許 → 記一筆 deferred，
@@ -2688,7 +2710,7 @@ const EpdGlyph* SdCardFont::onGlyphMiss(void* ctx, uint32_t codepoint) {
   if (!self->sharedFile_.seekSet(glyphFileOff)) {
     LOG_ERR("SDCF", "Overflow: failed to seek to glyph for U+%04X style %u", codepoint, styleIdx);
     self->dropSharedFile();  // v255
-    
+
     return nullptr;
   }
   if (self->sharedFile_.read(reinterpret_cast<uint8_t*>(&tempGlyph), sizeof(EpdGlyph)) != sizeof(EpdGlyph)) {
@@ -2704,8 +2726,7 @@ const EpdGlyph* SdCardFont::onGlyphMiss(void* ctx, uint32_t codepoint) {
     // 版是「呼叫丟例外版再 catch」，堆積低到連 130B 的例外物件都配不出來時，
     // __cxa_allocate_exception 直接 terminate（v93 實測教訓）。miss ring 在渲染最缺
     // 記憶體的時刻每個字都要進來一次，這裡是全機最高頻的輪盤。512B 餘裕給例外機制。
-    if (heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT) <
-        static_cast<size_t>(tempGlyph.dataLength) + 512) {
+    if (heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT) < static_cast<size_t>(tempGlyph.dataLength) + 512) {
       LOG_ERR("SDCF", "Overflow: heap floor, skip U+%04X (%u bytes)", codepoint, tempGlyph.dataLength);
       return nullptr;
     }
@@ -2718,7 +2739,7 @@ const EpdGlyph* SdCardFont::onGlyphMiss(void* ctx, uint32_t codepoint) {
       LOG_ERR("SDCF", "Overflow: failed to seek to bitmap for U+%04X", codepoint);
       self->dropSharedFile();  // v255
       delete[] tempBitmap;
-      
+
       return nullptr;
     }
     if (self->sharedFile_.read(tempBitmap, tempGlyph.dataLength) != static_cast<int>(tempGlyph.dataLength)) {

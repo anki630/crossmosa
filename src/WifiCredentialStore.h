@@ -1,9 +1,9 @@
 #pragma once
 #include <ArduinoJson.h>
-#include <cstdio>
 #include <DataDir.h>
 #include <PersistableStore.h>
 
+#include <cstdio>
 #include <optional>
 #include <string>
 #include <vector>

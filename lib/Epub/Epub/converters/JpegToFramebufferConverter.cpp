@@ -11,9 +11,9 @@
 #include <memory>
 #include <new>
 
+#include "DecodeFile.h"
 #include "DirectPixelWriter.h"
 #include "DitherUtils.h"
-#include "DecodeFile.h"
 #include "PixelCache.h"
 
 namespace {
@@ -35,7 +35,7 @@ struct JpegContext {
   int dstWidth{0};
   int dstHeight{0};
 
-  uint32_t lastYieldMs{0};  // yieldDuringDecode() 的節流狀態
+  uint32_t lastYieldMs{0};   // yieldDuringDecode() 的節流狀態
   bool inputAborted{false};  // v260：回呼因按鍵中止解碼
 
   // Fine scale in 16.16 fixed-point (ESP32-C3 has no FPU).
@@ -398,8 +398,8 @@ bool JpegToFramebufferConverter::getDimensionsStatic(const std::string& imagePat
       }
     } while (marker == 0xFF);  // 0xFF fill bytes may repeat before the marker code
 
-    if (marker == 0x00) continue;                                     // stuffed byte, not a marker
-    if (marker == 0xD9) break;                                        // EOI
+    if (marker == 0x00) continue;                                        // stuffed byte, not a marker
+    if (marker == 0xD9) break;                                           // EOI
     if (marker == 0x01 || (marker >= 0xD0 && marker <= 0xD8)) continue;  // standalone markers, no length
 
     uint8_t lenb[2];
@@ -436,7 +436,8 @@ bool JpegToFramebufferConverter::decodeToFramebuffer(const std::string& imagePat
   size_t freeHeap = ESP.getFreeHeap();
   if (freeHeap < MIN_FREE_HEAP_FOR_JPEG) {
     LOG_ERR("JPG", "Not enough heap for JPEG decoder (%u free, need %u)", freeHeap, MIN_FREE_HEAP_FOR_JPEG);
-    setLastError(true, "jpg-heap %u<%u", static_cast<unsigned>(freeHeap), static_cast<unsigned>(MIN_FREE_HEAP_FOR_JPEG));
+    setLastError(true, "jpg-heap %u<%u", static_cast<unsigned>(freeHeap),
+                 static_cast<unsigned>(MIN_FREE_HEAP_FOR_JPEG));
     return false;
   }
 

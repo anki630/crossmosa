@@ -238,8 +238,8 @@ bool HalGPIO::isXteinkDevice() const {
          BoardConfig::ACTIVE.board == BoardConfig::Board::XteinkX4;
 }
 
-bool HalGPIO::verifyPowerButtonWakeup(uint16_t requiredDurationMs, bool shortPressAllowed,
-                                     PowerVerifyDiag* diag, bool earlyEvidenceSatisfied) {
+bool HalGPIO::verifyPowerButtonWakeup(uint16_t requiredDurationMs, bool shortPressAllowed, PowerVerifyDiag* diag,
+                                      bool earlyEvidenceSatisfied) {
   // v197：純診斷輸出。下面的判定邏輯與回傳值一個字都沒動 —— 只在既有的出口各記一筆。
   // ⚠️ 複查質疑「多幾個指令會不會擾動時序」。算術上不會:本函式在開機約 744ms 才被呼叫
   //    （實測 WAKE steps stores=744），而 requiredDurationMs 是 400 或 10 —— 兩者都 < 744，

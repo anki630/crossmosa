@@ -11,10 +11,10 @@
 #include "CrossPointSettings.h"
 #include "MappedInputManager.h"
 #include "SilentRestart.h"
-#include "util/DiagLog.h"
 #include "activities/network/WifiSelectionActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "util/DiagLog.h"
 
 void ClockSyncActivity::onEnter() {
   Activity::onEnter();

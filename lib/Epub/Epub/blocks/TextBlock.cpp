@@ -1,7 +1,5 @@
 #include "TextBlock.h"
 
-#include "../VerticalText.h"
-
 #include <BidiUtils.h>
 #include <GfxRenderer.h>
 #include <Logging.h>
@@ -13,6 +11,7 @@
 #include <new>
 
 #include "../../../../src/fontIds.h"
+#include "../VerticalText.h"
 
 size_t TextBlock::arenaSize(const uint16_t wordCount, const bool hasFocus, const uint16_t textBytes) {
   // Layout documented in TextBlock.h: 16-bit arrays first, then 8-bit arrays, then text.
@@ -72,7 +71,7 @@ TextBlock::TextBlock(const std::vector<std::string>& words, const std::vector<in
   focusPresent = hasFocus;
   if (numWords == 0) {
     if (swaps.count > 0) zhuyin::swapStats().dropCheck++;  // 空行不會有替換（排版端的錯）
-    return;  // valid empty block, no arena
+    return;                                                // valid empty block, no arena
   }
 
   // Pass 1: total text size, one NUL per word. A line is at most a physical
@@ -280,8 +279,7 @@ void TextBlock::renderVertical(const GfxRenderer& renderer, const int fontId, co
     //    → V1 明確地【不支援】：遮掉，行為與註解一致。要做就走直排自己的基線位移。
     constexpr uint8_t VERTICAL_UNSUPPORTED_STYLE_BITS =
         EpdFontFamily::UNDERLINE | EpdFontFamily::STRIKETHROUGH | EpdFontFamily::SUP | EpdFontFamily::SUB;
-    const auto style =
-        static_cast<EpdFontFamily::Style>(raw & vtext::STYLE_MASK & ~VERTICAL_UNSUPPORTED_STYLE_BITS);
+    const auto style = static_cast<EpdFontFamily::Style>(raw & vtext::STYLE_MASK & ~VERTICAL_UNSUPPORTED_STYLE_BITS);
     const int along = xposArr[i];
     const int cross = focusPresent ? static_cast<int>(focusSuffixXArr[i]) : 0;
     if (rotated) {

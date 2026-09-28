@@ -82,10 +82,10 @@
 #include <stdlib.h>
 #include <unistd.h>
 
-extern void *__libc_calloc(size_t nmemb, size_t size);
+extern void* __libc_calloc(size_t nmemb, size_t size);
 
 /* Reads the arm file's contents as a decimal size. <= 0 means "not armed". */
-static long armed_size(const char *path) {
+static long armed_size(const char* path) {
   char buf[32];
   ssize_t got;
   int fd = open(path, O_RDONLY);
@@ -98,7 +98,7 @@ static long armed_size(const char *path) {
 }
 
 /* Appends "<size>\n". Hand-rolled decimal conversion so no stdio is involved. */
-static void trace_size(const char *path, size_t size) {
+static void trace_size(const char* path, size_t size) {
   char digits[24];
   char out[32];
   int ndigits = 0;
@@ -120,7 +120,7 @@ static void trace_size(const char *path, size_t size) {
   close(fd);
 }
 
-void *calloc(size_t nmemb, size_t size) {
+void* calloc(size_t nmemb, size_t size) {
   static int initialized;
   /* v73: 4096 -> 1024. Patch 4 to the vendored tree (SMB2_MAX_VECTORS 256 -> 32)
    * cut sizeof(struct smb2_context) from 7,256 to 1,880 bytes, which dropped it
@@ -133,13 +133,13 @@ void *calloc(size_t nmemb, size_t size) {
   static size_t min_size = 1024;
   static size_t max_size = 65536;
   static long remaining;
-  static const char *arm_file;
-  static const char *trace_file;
+  static const char* arm_file;
+  static const char* trace_file;
 
   if (!initialized) {
     /* getenv() only scans environ; it does not allocate, so this is safe to do
      * from inside calloc during libc startup. */
-    const char *s;
+    const char* s;
     initialized = 1;
     s = getenv("SMBFAIL_MIN_SIZE");
     if (s) min_size = (size_t)atol(s);

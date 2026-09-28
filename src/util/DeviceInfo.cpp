@@ -42,10 +42,15 @@ const char* displayControllerName() {
   //   而 X4 只會是 SSD1677／UC8179／UC8279(800×480)，UC8253 只存在於 X3。X3 不變：設定檔 XTEINK_X3＝UC8253、
   //   XTEINK_X3_UC8279＝UC8279，跟原本顯示的一模一樣。
   switch (BoardConfig::ACTIVE.displayController) {
-    case BoardConfig::DisplayController::SSD1677: return "SSD1677";
-    case BoardConfig::DisplayController::UC8253: return "UC8253";
-    case BoardConfig::DisplayController::UC8279: return "UC8279";
-    case BoardConfig::DisplayController::UC8179: return "UC8179";
-    default: return "?";
+    case BoardConfig::DisplayController::SSD1677:
+      return "SSD1677";
+    case BoardConfig::DisplayController::UC8253:
+      return "UC8253";
+    case BoardConfig::DisplayController::UC8279:
+      return "UC8279";
+    case BoardConfig::DisplayController::UC8179:
+      return "UC8179";
+    default:
+      return "?";
   }
 }

@@ -130,8 +130,8 @@ void ReaderBookmarksActivity::loop() {
     return;
   }
   if (swipe == MappedInputManager::SwipeDir::Down && !bookmarks.empty()) {
-    selectorIndex =
-        ButtonNavigator::previousPageIndexClamped(selectorIndex, bookmarks.size(), GUI.getListPageItems(listHeight, true));
+    selectorIndex = ButtonNavigator::previousPageIndexClamped(selectorIndex, bookmarks.size(),
+                                                              GUI.getListPageItems(listHeight, true));
     requestUpdate();
     return;
   }
@@ -169,13 +169,13 @@ void ReaderBookmarksActivity::loop() {
 
   buttonNavigator.onNextContinuous([this] {
     selectorIndex = ButtonNavigator::nextPageIndexClamped(selectorIndex, bookmarks.size(),
-                                                   GUI.getListPageItems(getListHeight(renderer), true));
+                                                          GUI.getListPageItems(getListHeight(renderer), true));
     requestUpdate();
   });
 
   buttonNavigator.onPreviousContinuous([this] {
     selectorIndex = ButtonNavigator::previousPageIndexClamped(selectorIndex, bookmarks.size(),
-                                                       GUI.getListPageItems(getListHeight(renderer), true));
+                                                              GUI.getListPageItems(getListHeight(renderer), true));
     requestUpdate();
   });
 }

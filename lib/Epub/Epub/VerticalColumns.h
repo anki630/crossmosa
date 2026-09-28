@@ -66,8 +66,8 @@ inline ColumnGrid makeColumnGrid(const float availableLength, const float em) {
 
 // 分欄的結果：每一欄的 [起始 token, 結束 token) 與每個 token 沿欄的位移。
 struct ColumnBreaks {
-  std::vector<uint16_t> starts;  // 每欄的起始 token index；長度 = 欄數
-  std::vector<float> alongOff;   // 每個 token 沿欄的位移（欄內座標）
+  std::vector<uint16_t> starts;         // 每欄的起始 token index；長度 = 欄數
+  std::vector<float> alongOff;          // 每個 token 沿欄的位移（欄內座標）
   std::vector<uint8_t> shortByKinsoku;  // 每欄：是否因禁則而縮短（→ 要平均排列）
 };
 
@@ -100,8 +100,8 @@ inline int unitsPerColumn(const ColumnGrid& grid, const float em) {
 // `hangAllowed`：這個字級／版心組合放得下一個懸掛的句讀嗎？
 // **由呼叫端用實際字形的墨水量決定**（見 ParsedTextVertical.cpp）——
 // 不是猜一個比例，因為五套字型的句讀墨水高度不同。
-inline ColumnBreaks fillColumns(const std::vector<ColumnUnit>& units, const ColumnGrid& grid,
-                                const float firstIndent, const bool hangAllowed = false) {
+inline ColumnBreaks fillColumns(const std::vector<ColumnUnit>& units, const ColumnGrid& grid, const float firstIndent,
+                                const bool hangAllowed = false) {
   ColumnBreaks out;
   if (units.empty() || grid.columnLength <= 0.0f) return out;
   out.alongOff.assign(units.size(), 0.0f);
@@ -177,8 +177,8 @@ inline ColumnBreaks fillColumns(const std::vector<ColumnUnit>& units, const Colu
       //    淨效果：v229 會斷在「第|10|章」中間；v230 正確地整組推走、欄尾開了 2–3 格空洞，
       //    **然後不補平** —— 那正是 v212 使用者回報的「欄尾空一格」，被修禁則的那一版救回來。
       //    （V0 預言機 `vlayout.py` 是先推出去再評估，所以它一直是對的，是韌體這邊偏了。）
-      const float emCell = (grid.charsPerColumn > 0) ? grid.columnLength / static_cast<float>(grid.charsPerColumn)
-                                                     : grid.columnLength;
+      const float emCell =
+          (grid.charsPerColumn > 0) ? grid.columnLength / static_cast<float>(grid.charsPerColumn) : grid.columnLength;
       const float usedEnd = (breakAt < i) ? out.alongOff[breakAt] : y;
       out.shortByKinsoku.back() = (grid.columnLength - usedEnd >= emCell - 0.01f) ? 1 : 0;
       out.starts.push_back(static_cast<uint16_t>(breakAt));
@@ -225,8 +225,8 @@ inline void evenDistribute(const std::vector<ColumnUnit>& units, ColumnBreaks& b
     if (slack <= 0.5f) continue;
     const float step = slack / static_cast<float>(end - begin - 1);
     // 每格撐開超過 em 的這個比例就不勻 —— 勻了反而比留白難看。
-    const float em = (grid.charsPerColumn > 0) ? grid.columnLength / static_cast<float>(grid.charsPerColumn)
-                                               : grid.columnLength;
+    const float em =
+        (grid.charsPerColumn > 0) ? grid.columnLength / static_cast<float>(grid.charsPerColumn) : grid.columnLength;
     if (step > em * maxPerGapRatio) continue;
     float extra = 0.0f;
     for (size_t i = begin + 1; i < end; ++i) {

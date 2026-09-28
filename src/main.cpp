@@ -1,4 +1,3 @@
-#include "util/DiagLog.h"
 #include <Arduino.h>
 #include <BoardConfig.h>
 #include <DataDir.h>
@@ -17,23 +16,26 @@
 #include <I18n.h>
 #include <Logging.h>
 #include <SPI.h>
+
+#include "util/DiagLog.h"
 // v295：esp_rtc_get_time_us() —— RTC 計數器自晶片上電起算，用來量 millis() 開始【之前】
 // 那一段（ROM ＋ 二階段 bootloader ＋ 映像驗證）。用 SDK 正式表頭，不手寫 extern "C"。
 #include <esp_rtc_time.h>
 // v296：淺睡眠 —— esp_light_sleep_start / 喚醒來源設定 / p2 的 52KB 畫面暫存 / 按鍵喚醒腳
+#include <WiFi.h>
+#include <builtinFonts/all.h>
 #include <driver/gpio.h>
-#include <driver/rtc_io.h>     // v324：電源鍵腳位（RTC 腳位）的重設
-#include <soc/gpio_periph.h>   // v324：GPIO_PIN_MUX_REG[]
-#include <soc/gpio_struct.h>   // v324：GPIO.pin[n]／func_out_sel_cfg[n]（per-pin 暫存器，不手算位址）
+#include <driver/rtc_io.h>  // v324：電源鍵腳位（RTC 腳位）的重設
+#include <esp_heap_caps.h>
+#include <esp_sleep.h>
+#include <esp_timer.h>
+#include <soc/gpio_periph.h>  // v324：GPIO_PIN_MUX_REG[]
 #include <soc/gpio_reg.h>
+#include <soc/gpio_struct.h>  // v324：GPIO.pin[n]／func_out_sel_cfg[n]（per-pin 暫存器，不手算位址）
 #include <soc/io_mux_reg.h>
 #include <soc/rtc_cntl_reg.h>
 #include <soc/soc.h>
 #include <soc/soc_caps.h>
-#include <esp_heap_caps.h>
-#include <esp_sleep.h>
-#include <WiFi.h>
-#include <builtinFonts/all.h>
 
 #include <cstdio>
 #include <cstring>
@@ -48,16 +50,14 @@
 #include "activities/Activity.h"
 #include "activities/ActivityManager.h"
 #include "activities/boot_sleep/SleepActivity.h"  // v296：淺睡眠時直接畫桌布，不取代 activity
-#include "activities/reader/ReaderUtils.h"  // v322：休眠提示提早到存 wake frame 之前，要套閱讀方向
+#include "activities/reader/ReaderUtils.h"        // v322：休眠提示提早到存 wake frame 之前，要套閱讀方向
 #include "activities/settings/SdFirmwareUpdateActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "util/BenchFlags.h"
 #include "util/BootRecovery.h"
-#include "util/NvsStore.h"
-
-#include <esp_timer.h>
 #include "util/ButtonNavigator.h"
+#include "util/NvsStore.h"
 #include "util/ScreenshotUtil.h"
 
 GfxRenderer renderer(display);
@@ -127,7 +127,7 @@ RTC_NOINIT_ATTR uint32_t silentRebootTarget;
 //   原因放在 RTC（撐得過軟體重啟），開機、卡重新掛好之後才寫進 diag —— 在那之前寫卡，就是在寫一張我們不認得的卡。
 RTC_NOINIT_ATTR uint32_t sdSwapMagic;
 constexpr uint32_t SD_SWAP_MAGIC = 0x53445357;  // 'SDSW'
-static uint8_t g_sdCid[16];     // 開機掛卡時讀到的 CID（含卡片序號：不寫進任何 log）
+static uint8_t g_sdCid[16];                     // 開機掛卡時讀到的 CID（含卡片序號：不寫進任何 log）
 static bool g_sdCidOk = false;  // 開機時讀得到 CID 才有比較基準；讀不到（非 SPI 卡等）→ 不淺睡眠（lightSleepEnabled）
 constexpr uint32_t SILENT_REBOOT_MAGIC = 0xC1EAB007;
 constexpr uint32_t SILENT_REBOOT_TARGET_HOME = 0;
@@ -180,11 +180,11 @@ static unsigned long g_lastActivityTime = 0;
 //     仍走 isPressed —— 一次只動一個變數，那些若也受影響再談。
 struct PowerKeyTracker {
   static constexpr unsigned long STABLE_MS = 30;  // 原始電平要穩定多久才承認改變（> 一圈 10ms）
-  bool stable = false;            // 去彈跳後的「按著」
-  bool pending = false;           // 有一個與 stable 不同的候選電平正在等待穩定
+  bool stable = false;                            // 去彈跳後的「按著」
+  bool pending = false;                           // 有一個與 stable 不同的候選電平正在等待穩定
   bool pendingLevel = false;
   unsigned long pendingSince = 0;
-  unsigned long downSince = 0;    // stable 變成按著的時刻（用候選開始的時刻，含去彈跳窗）
+  unsigned long downSince = 0;  // stable 變成按著的時刻（用候選開始的時刻，含去彈跳窗）
 
   // 每圈呼叫一次（loop 開頭 gpio.update() 之後）。只做一次 digitalRead，不碰 ADC。
   void poll(const unsigned long now) {
@@ -216,7 +216,8 @@ static PowerKeyTracker g_powerKey;
 //   這裡做兩件事：① 開機時把腳位狀態記下來（DiagLog 起來之後印）；② 無條件把它重設成乾淨的數位輸入再記一次。
 //   ② 對正常狀態是 no-op；若真是殘留設定，這一步就是修法，而 ① 會說出殘留的是哪一個位元。
 struct PwrPadSnap {
-  uint32_t iomux = 0, enable = 0, out = 0, outSel = 0, pin = 0, in = 0, padHold = 0, digHold = 0, gpioWake = 0, extWake = 0;
+  uint32_t iomux = 0, enable = 0, out = 0, outSel = 0, pin = 0, in = 0, padHold = 0, digHold = 0, gpioWake = 0,
+           extWake = 0;
 };
 static int g_pwrPadPin = -1;
 static PwrPadSnap g_pwrPadPre, g_pwrPadPost;
@@ -225,24 +226,27 @@ static int g_pwrPadErr[8] = {PWRPAD_NA, PWRPAD_NA, PWRPAD_NA, PWRPAD_NA, PWRPAD_
 static PwrPadSnap snapPwrPad(const int pinNo) {
   PwrPadSnap s;
   if (pinNo < 0 || pinNo >= GPIO_NUM_MAX) return s;
-  s.iomux = REG_READ(GPIO_PIN_MUX_REG[pinNo]);        // IO_MUX：FUN_IE(9) FUN_WPU(8) FUN_WPD(7) MCU_SEL(12–14) SLP_SEL(1)
-  s.enable = (GPIO.enable.val >> pinNo) & 1u;         // GPIO 輸出致能（1 ＝ 腳位在驅動）
-  s.out = (GPIO.out.val >> pinNo) & 1u;               // 輸出 latch
-  s.outSel = GPIO.func_out_sel_cfg[pinNo].val;        // 輸出矩陣：OUT_SEL(0–7) INV(8) OEN_SEL(10) OEN_INV(11)——codex：周邊可繞過 enable 驅動 pad
-  s.pin = GPIO.pin[pinNo].val;                        // GPIO_PINn：pad_driver(2) int_type(7–9) wakeup_en(10)
-  s.in = (GPIO.in.val >> pinNo) & 1u;                 // 數位輸入電平（低有效：0 ＝ 按著）
+  s.iomux = REG_READ(GPIO_PIN_MUX_REG[pinNo]);  // IO_MUX：FUN_IE(9) FUN_WPU(8) FUN_WPD(7) MCU_SEL(12–14) SLP_SEL(1)
+  s.enable = (GPIO.enable.val >> pinNo) & 1u;   // GPIO 輸出致能（1 ＝ 腳位在驅動）
+  s.out = (GPIO.out.val >> pinNo) & 1u;         // 輸出 latch
+  s.outSel = GPIO.func_out_sel_cfg[pinNo]
+                 .val;  // 輸出矩陣：OUT_SEL(0–7) INV(8) OEN_SEL(10) OEN_INV(11)——codex：周邊可繞過 enable 驅動 pad
+  s.pin = GPIO.pin[pinNo].val;                                  // GPIO_PINn：pad_driver(2) int_type(7–9) wakeup_en(10)
+  s.in = (GPIO.in.val >> pinNo) & 1u;                           // 數位輸入電平（低有效：0 ＝ 按著）
   s.padHold = (REG_READ(RTC_CNTL_PAD_HOLD_REG) >> pinNo) & 1u;  // RTC 腳位（0–5）的 hold 位元
   s.digHold = REG_READ(RTC_CNTL_DIG_PAD_HOLD_REG);
-  s.gpioWake = REG_READ(RTC_CNTL_GPIO_WAKEUP_REG);    // 深睡眠 GPIO 喚醒設定／狀態
+  s.gpioWake = REG_READ(RTC_CNTL_GPIO_WAKEUP_REG);  // 深睡眠 GPIO 喚醒設定／狀態
   s.extWake = REG_READ(RTC_CNTL_EXT_WAKEUP_CONF_REG);
   return s;
 }
 static void logPwrPad(const char* tag, const int pinNo, const PwrPadSnap& s) {
-  DiagLog::line("PWRPAD %s pin=%d iomux=%04lx oe=%lu out=%lu outsel=%04lx cfg=%08lx in=%lu hold=%lu dhold=%08lx gwake=%08lx ext=%08lx",
-                tag, pinNo, static_cast<unsigned long>(s.iomux), static_cast<unsigned long>(s.enable),
-                static_cast<unsigned long>(s.out), static_cast<unsigned long>(s.outSel), static_cast<unsigned long>(s.pin),
-                static_cast<unsigned long>(s.in), static_cast<unsigned long>(s.padHold), static_cast<unsigned long>(s.digHold),
-                static_cast<unsigned long>(s.gpioWake), static_cast<unsigned long>(s.extWake));
+  DiagLog::line(
+      "PWRPAD %s pin=%d iomux=%04lx oe=%lu out=%lu outsel=%04lx cfg=%08lx in=%lu hold=%lu dhold=%08lx gwake=%08lx "
+      "ext=%08lx",
+      tag, pinNo, static_cast<unsigned long>(s.iomux), static_cast<unsigned long>(s.enable),
+      static_cast<unsigned long>(s.out), static_cast<unsigned long>(s.outSel), static_cast<unsigned long>(s.pin),
+      static_cast<unsigned long>(s.in), static_cast<unsigned long>(s.padHold), static_cast<unsigned long>(s.digHold),
+      static_cast<unsigned long>(s.gpioWake), static_cast<unsigned long>(s.extWake));
 }
 // 無條件把電源鍵腳位重設成乾淨的數位輸入（上拉／下拉依 profile）。每次開機做；正常狀態下每一步都是 no-op。
 static void resetPwrPad(const int pinNo) {
@@ -257,25 +261,30 @@ static void resetPwrPad(const int pinNo) {
   g_pwrPadErr[2] = gpio_deep_sleep_wakeup_disable(g);
   g_pwrPadErr[3] = gpio_wakeup_disable(g);
 #if SOC_RTCIO_PIN_COUNT > 0
-  g_pwrPadErr[4] = rtc_gpio_is_valid_gpio(g) ? rtc_gpio_deinit(g) : ESP_OK;  // pad 從 RTC 功能交回數位 IO_MUX（C3 沒有）
+  // pad 從 RTC 功能交回數位 IO_MUX（C3 沒有）
+  g_pwrPadErr[4] = rtc_gpio_is_valid_gpio(g) ? rtc_gpio_deinit(g) : ESP_OK;
 #endif
   g_pwrPadErr[5] = gpio_reset_pin(g);  // IO_MUX 回 GPIO 功能、斷開矩陣訊號、清 hold
-  // ⭐ v325（diag324 定案）：黑洞那幾次開機 `boot-pre cfg=0x2200`、正常 `0x0000` —— GPIO_PIN3 的 INT_TYPE=4（低電位觸發）
+  // ⭐ v325（diag324 定案）：黑洞那幾次開機 `boot-pre cfg=0x2200`、正常 `0x0000` —— GPIO_PIN3 的
+  // INT_TYPE=4（低電位觸發）
   //   ＋ INT_ENA（CPU 中斷致能）留著；其他欄位全同。來源是淺睡眠的 gpio_wakeup_enable(LOW_LEVEL)：disarm 只清
-  //   wakeup 位元，中斷型別與致能留下，撐過 WEB exit 的軟體重啟。而 v324 的 gpio_reset_pin 也沒清它（boot-post 仍 0x2200）。
-  //   這裡明講清掉；lightSleepCycle 的 disarm() 也同樣清（從源頭不留）。
+  //   wakeup 位元，中斷型別與致能留下，撐過 WEB exit 的軟體重啟。而 v324 的 gpio_reset_pin 也沒清它（boot-post 仍
+  //   0x2200）。 這裡明講清掉；lightSleepCycle 的 disarm() 也同樣清（從源頭不留）。
   g_pwrPadErr[6] = gpio_set_intr_type(g, GPIO_INTR_DISABLE);
   g_pwrPadErr[7] = gpio_intr_disable(g);
   // ⚠️ 喚醒設定被清掉沒關係：淺睡眠每次入睡前 gpio_wakeup_enable()（lightSleepCycle），真關機每次
-  //   armPowerButtonWakeup()（SDK deepSleepUntilPowerButton）—— 兩條路都是每次重掛，不依賴這裡的狀態（codex 第一輪點名，讀碼確認）。
-  pinMode(pinNo, BoardConfig::ACTIVE.input.powerActiveHigh ? INPUT_PULLDOWN : INPUT_PULLUP);  // 與 InputManager::begin 同
+  //   armPowerButtonWakeup()（SDK deepSleepUntilPowerButton）—— 兩條路都是每次重掛，不依賴這裡的狀態（codex
+  //   第一輪點名，讀碼確認）。
+  pinMode(pinNo,
+          BoardConfig::ACTIVE.input.powerActiveHigh ? INPUT_PULLDOWN : INPUT_PULLUP);  // 與 InputManager::begin 同
 }
 
 void silentRestart() {
   if (deepSleepInProgress) return;  // sleeping supersedes the heap-defrag reboot
   silentRebootTarget = SILENT_REBOOT_TARGET_HOME;
   silentRebootMagic = SILENT_REBOOT_MAGIC;
-  logPwrPad("restart", g_pwrPadPin, snapPwrPad(g_pwrPadPin));  // v324：重啟前的電源鍵腳位狀態（WEB exit 走這裡；magic 已設好，best-effort）
+  logPwrPad("restart", g_pwrPadPin,
+            snapPwrPad(g_pwrPadPin));  // v324：重啟前的電源鍵腳位狀態（WEB exit 走這裡；magic 已設好，best-effort）
   LOG_DBG("MAIN", "Silent restart (target=home)");
   // E-ink retains the previous frame until Home's first paint lands (~2-3s).
   // Without an overlay, users don't see the reboot and fire input through to
@@ -297,8 +306,9 @@ void silentRestartToReader() {
 }
 
 // v341：淺睡眠醒來時，SD 卡還是不是睡前那一張、有沒有被拔過（維護者 2026-09-25 要求）。
-//   淺睡眠把字型、書、檔案系統狀態（SdFat 的 FAT 快取、開著的檔柄）整個留在 RAM、醒來直接接著用，**沒有任何地方知道卡被換過**：
-//   睡著時在電腦上換了字型再插回、按鍵叫醒 → 拿舊卡的配置讀新卡（字形排法變了就畫錯字），寫進度或 diag 時可能把舊卡的
+//   淺睡眠把字型、書、檔案系統狀態（SdFat 的 FAT 快取、開著的檔柄）整個留在
+//   RAM、醒來直接接著用，**沒有任何地方知道卡被換過**： 睡著時在電腦上換了字型再插回、按鍵叫醒 →
+//   拿舊卡的配置讀新卡（字形排法變了就畫錯字），寫進度或 diag 時可能把舊卡的
 //   配置寫到新卡上。板子沒有卡片偵測腳位，所以問卡片本身：CID（CMD10）。睡眠中卡一直有電（VDD_SDIO＋GPIO13 hold），
 //   沒被動過就一定答得出、而且跟開機時一樣；拔過再插回的卡斷過電、已經不在 SPI 模式 → 答不出；換成別張 → CID 不同。
 //   ⚠️ 必須是醒來後【第一件碰卡的事】：每條醒來的路（按鍵續讀、30 分鐘計時到、失敗）下一步都是 DiagLog 寫卡。
@@ -382,10 +392,10 @@ static const char* wakeFrameTmpFile() {
 }
 
 struct WakeFrameHeader {
-  char magic[4];      // 'C''M''W''F'
+  char magic[4];  // 'C''M''W''F'
   uint8_t version;
   uint8_t pad[3];
-  uint32_t token;     // 必須等於 APP_STATE.wakeFrameToken
+  uint32_t token;  // 必須等於 APP_STATE.wakeFrameToken
   uint32_t bufSize;
   uint32_t payloadHash;  // fnv1a-1a over the framebuffer bytes
 };
@@ -411,7 +421,10 @@ static bool saveWakeFrameBuffer() {
   if (!fb || bufSize == 0) return false;
 
   WakeFrameHeader h{};
-  h.magic[0] = 'C'; h.magic[1] = 'M'; h.magic[2] = 'W'; h.magic[3] = 'F';
+  h.magic[0] = 'C';
+  h.magic[1] = 'M';
+  h.magic[2] = 'W';
+  h.magic[3] = 'F';
   h.version = WAKE_FRAME_VERSION;
   h.token = APP_STATE.wakeFrameToken;
   h.bufSize = static_cast<uint32_t>(bufSize);
@@ -476,9 +489,9 @@ static bool loadWakeFrameBuffer(size_t* bytesReadOut = nullptr) {
     if (Storage.openFileForRead("WFR", wakeFrameUsingFile(), file)) {
       WakeFrameHeader h{};
       const size_t bufferSize = display.getBufferSize();
-      if (file.read(reinterpret_cast<uint8_t*>(&h), sizeof(h)) == sizeof(h) && h.magic[0] == 'C' &&
-          h.magic[1] == 'M' && h.magic[2] == 'W' && h.magic[3] == 'F' && h.version == WAKE_FRAME_VERSION &&
-          h.bufSize == bufferSize && h.token == APP_STATE.wakeFrameToken) {
+      if (file.read(reinterpret_cast<uint8_t*>(&h), sizeof(h)) == sizeof(h) && h.magic[0] == 'C' && h.magic[1] == 'M' &&
+          h.magic[2] == 'W' && h.magic[3] == 'F' && h.version == WAKE_FRAME_VERSION && h.bufSize == bufferSize &&
+          h.token == APP_STATE.wakeFrameToken) {
         const size_t got = file.read(display.getFrameBuffer(), bufferSize);
         if (bytesReadOut) *bytesReadOut = got;
         // ⚠️ 讀滿還不夠 —— 位元損壞的 52KB 照樣讀得滿。校驗和才擋得住。
@@ -532,19 +545,21 @@ static constexpr unsigned LIGHT_SLEEP_MIN_SOC = 10;
 static constexpr uint64_t LIGHT_SLEEP_WINDOW_US = 30ULL * 60ULL * 1000000ULL;  // 30 分鐘
 
 static bool lightSleepEnabled() {
-  // v341（codex）：開機讀不到卡片 CID ＝ 醒來無法確認卡沒被換過 → 不淺睡眠（每次都真關機、醒來重新掛卡），不要默默照舊。
+  // v341（codex）：開機讀不到卡片 CID ＝ 醒來無法確認卡沒被換過 →
+  // 不淺睡眠（每次都真關機、醒來重新掛卡），不要默默照舊。
   if (!g_sdCidOk) return false;
-  static int8_t cached = -1;  // 只問 SD 一次
+  static int8_t cached = -1;                                              // 只問 SD 一次
   if (cached < 0) cached = Storage.exists(LIGHT_SLEEP_SENTINEL) ? 0 : 1;  // v330：哨兵存在＝關閉
   return cached == 1;
 }
 
 // 回傳 true ＝ 被電源鍵叫醒、畫面已貼回、閱讀器完好 → 呼叫端應直接 return。
 // 回傳 false ＝ 沒睡成 或 計時器到了 → 呼叫端照原路真關機（螢幕已經是桌布）。
-// v326（A9）：wakeFrameDeferred ＝ enterDeepSleep() 把 wake frame 的存檔延後到「真的要關機」的出口（本函式回 false 的每一條路）。
-// v326：sleepLock 由 enterDeepSleep() 持有並傳入 —— 從提示、快照、wake frame 到這裡結束都是同一把鎖，
+// v326（A9）：wakeFrameDeferred ＝ enterDeepSleep() 把 wake frame 的存檔延後到「真的要關機」的出口（本函式回 false
+// 的每一條路）。 v326：sleepLock 由 enterDeepSleep() 持有並傳入 —— 從提示、快照、wake frame 到這裡結束都是同一把鎖，
 //   中間沒有空窗（codex：兩把鎖之間 render task 可能換頁，lowmem 那條提前寫檔更是沒鎖）。
-static bool lightSleepCycle(bool wakeFrameDeferred, RenderLock& sleepLock) {  // v330：fromTimeout 參數拿掉（唯一讀者是 QuickResume 的桌布分支）
+static bool lightSleepCycle(bool wakeFrameDeferred,
+                            RenderLock& sleepLock) {  // v330：fromTimeout 參數拿掉（唯一讀者是 QuickResume 的桌布分支）
   const bool fromReader = APP_STATE.lastSleepFromReader;  // v327：全域淺睡眠 —— 字型與 em 探針只有閱讀器需要
   // ⭐ v306：記憶體見底時【不要】嘗試淺睡眠。畫桌布要解碼一張圖，而這台 OOM 不會優雅失敗，
   //    是直接 abort 重開機（硬限制第 2 條）。實機看過 WiFi 用完之後 `p3 f=24 max=12`、
@@ -658,12 +673,15 @@ static bool lightSleepCycle(bool wakeFrameDeferred, RenderLock& sleepLock) {  //
       frameKept = false;
     }
     DiagLog::line("LSLEEP keep ok=%d released=%u largest=%u free=%u", frameKept ? 1 : 0,
-                  static_cast<unsigned>(released), static_cast<unsigned>(afterLargest), static_cast<unsigned>(afterFree));
+                  static_cast<unsigned>(released), static_cast<unsigned>(afterLargest),
+                  static_cast<unsigned>(afterFree));
   }
   // v326（A9）：留不住書頁（kept=0）→ 桌布馬上要蓋掉 framebuffer，wake frame 只能現在寫（付 ~1.3s，跟以前一樣）。
   if (wakeFrameDeferred && !frameKept) {
-    if (pageStillValid) saveWakeFrameTimed("nokeep");
-    else DiagLog::line("WAKEFRAME save skipped why=nokeep norestore=1");
+    if (pageStillValid)
+      saveWakeFrameTimed("nokeep");
+    else
+      DiagLog::line("WAKEFRAME save skipped why=nokeep norestore=1");
     wakeFrameDeferred = false;  // 已處理（codex 第二輪：之後的 powerOffExit 不再重複記「skipped」）
   }
   // 桌布峰值的基準改在快照之後取（否則 peak 會把 52KB 快照算進去）。
@@ -679,13 +697,16 @@ static bool lightSleepCycle(bool wakeFrameDeferred, RenderLock& sleepLock) {  //
     // v317 證人：畫桌布前後的堆積。peak = 畫桌布期間創下的新低相對於進場時的可用量
     //   （0 ＝ 沒創新低 → 需求不超過 pre_free − pre_minfree，只知道上界）。
     const size_t postMinFree = heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-    // v323：基準在快照之後。kept=0 但曾配過又放掉快照時，歷史最低已被快照壓低 → peak 可能低報成 0（只在 kept=1 時可信）。
+    // v323：基準在快照之後。kept=0 但曾配過又放掉快照時，歷史最低已被快照壓低 → peak 可能低報成 0（只在 kept=1
+    // 時可信）。
     const size_t peak = postMinFree < keepMinFree ? (keepFree - postMinFree) : 0;
-    DiagLog::line("LSLEEP mem pre_largest=%u pre_free=%u pre_minfree=%u post_largest=%u post_free=%u post_minfree=%u peak=%u kept=%d",
-                  static_cast<unsigned>(lsLargest), static_cast<unsigned>(lsFree), static_cast<unsigned>(lsMinFree),
-                  static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)),
-                  static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)),
-                  static_cast<unsigned>(postMinFree), static_cast<unsigned>(peak), frameKept ? 1 : 0);
+    DiagLog::line(
+        "LSLEEP mem pre_largest=%u pre_free=%u pre_minfree=%u post_largest=%u post_free=%u post_minfree=%u peak=%u "
+        "kept=%d",
+        static_cast<unsigned>(lsLargest), static_cast<unsigned>(lsFree), static_cast<unsigned>(lsMinFree),
+        static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)),
+        static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)),
+        static_cast<unsigned>(postMinFree), static_cast<unsigned>(peak), frameKept ? 1 : 0);
   }
 
   // v332：桌布已上面板、沒人在等 → 現在把 SD 的兩份保險補寫（progress.bin 若過期、state.json）。
@@ -714,7 +735,7 @@ static bool lightSleepCycle(bool wakeFrameDeferred, RenderLock& sleepLock) {  //
     gpio_set_intr_type(powerPin, GPIO_INTR_DISABLE);
     gpio_intr_disable(powerPin);
     // v297：一定要放掉 GPIO13 的 hold —— 留著它會讓接下來的真關機失效
-    //（startDeepSleep() 靠把同一支腳拉【低】來切電池，鎖在 HIGH 就切不掉 → 關不了機）。
+    // （startDeepSleep() 靠把同一支腳拉【低】來切電池，鎖在 HIGH 就切不掉 → 關不了機）。
     // ⛔⛔ v306：**同一個道理的另一半，v297 漏了。**
     //    `esp_sleep_pd_config(VDD_SDIO, ON)` 是【全域且持續生效】的睡眠設定，不是一次性的。
     //    設下去之後不還原 → 之後每一次真關機都會保住 flash／SPI 電源域，
@@ -748,8 +769,10 @@ static bool lightSleepCycle(bool wakeFrameDeferred, RenderLock& sleepLock) {  //
   auto powerOffExit = [&](const char* why) -> bool {
     disarm();
     if (wakeFrameDeferred) {
-      if (frameRestoredOk) saveWakeFrameTimed(why);
-      else DiagLog::line("WAKEFRAME save skipped why=%s norestore=1", why);
+      if (frameRestoredOk)
+        saveWakeFrameTimed(why);
+      else
+        DiagLog::line("WAKEFRAME save skipped why=%s norestore=1", why);
     }
     return false;
   };
@@ -765,7 +788,6 @@ static bool lightSleepCycle(bool wakeFrameDeferred, RenderLock& sleepLock) {  //
       powerPin, BoardConfig::ACTIVE.input.powerActiveHigh ? GPIO_INTR_HIGH_LEVEL : GPIO_INTR_LOW_LEVEL);
   const esp_err_t eSrc = esp_sleep_enable_gpio_wakeup();
   const esp_err_t eTmr = esp_sleep_enable_timer_wakeup(LIGHT_SLEEP_WINDOW_US);
-
 
   if (eGpio != ESP_OK || eSrc != ESP_OK || eTmr != ESP_OK) {
     DiagLog::line("LSLEEP skip why=arm gpio=%d src=%d tmr=%d", static_cast<int>(eGpio), static_cast<int>(eSrc),
@@ -828,7 +850,7 @@ static bool lightSleepCycle(bool wakeFrameDeferred, RenderLock& sleepLock) {  //
   //    都還在，不必重做。上限 5 次短按或剩不到 5 秒 → 照舊真關機。
   esp_err_t eSleep = ESP_OK;
   uint8_t sleepRetries = 0;
-  uint32_t sleptMs = 0;    // 從第一次入睡起算的經過時間（含各次短按醒著的處理）
+  uint32_t sleptMs = 0;  // 從第一次入睡起算的經過時間（含各次短按醒著的處理）
   uint32_t heldMs = 0;
   uint32_t wakeAtMs = 0;
   uint32_t pressAtMs = 0;  // 放開等待裡看到「又按下」的時刻 → 下一輪的按滿計時從它起算（不吞掉那一按）
@@ -857,8 +879,8 @@ static bool lightSleepCycle(bool wakeFrameDeferred, RenderLock& sleepLock) {  //
       if (eSleep != ESP_OK && !gpio.powerDownRaw()) {
         delay(50);
         if (!armTimer()) {
-          DiagLog::line("LSLEEP timer-expired slept=%lu taps=%u retry=1", static_cast<unsigned long>(millis() - beforeMs),
-                        static_cast<unsigned>(taps));
+          DiagLog::line("LSLEEP timer-expired slept=%lu taps=%u retry=1",
+                        static_cast<unsigned long>(millis() - beforeMs), static_cast<unsigned>(taps));
           return powerOffExit("expired-retry");
         }
         {
@@ -952,9 +974,9 @@ static bool lightSleepCycle(bool wakeFrameDeferred, RenderLock& sleepLock) {  //
                     static_cast<unsigned long>(req), static_cast<unsigned long>(sleptMs), static_cast<unsigned>(taps));
       return powerOffExit("taps");
     }
-    DiagLog::line("LSLEEP tap-resleep held=%lu req=%lu slept=%lu taps=%u repress=%d", static_cast<unsigned long>(heldMs),
-                  static_cast<unsigned long>(req), static_cast<unsigned long>(sleptMs), static_cast<unsigned>(taps),
-                  pressAtMs != 0 ? 1 : 0);
+    DiagLog::line("LSLEEP tap-resleep held=%lu req=%lu slept=%lu taps=%u repress=%d",
+                  static_cast<unsigned long>(heldMs), static_cast<unsigned long>(req),
+                  static_cast<unsigned long>(sleptMs), static_cast<unsigned>(taps), pressAtMs != 0 ? 1 : 0);
   }
 
   // ⭐ v323（帳本 A8）：睡前那一頁若還留在 RAM（frameKept），disarm() 會把它還原進 framebuffer ——
@@ -964,7 +986,8 @@ static bool lightSleepCycle(bool wakeFrameDeferred, RenderLock& sleepLock) {  //
   //   抗鋸齒／圖片灰階由閱讀器自己補，舊平面已有效 → FAST 走 DU 差分，只動有變化的像素（v318 的同一種形狀）。
   const bool unarmOk = disarm();  // 含還原 renderer 方向；frameKept 時把書頁還原進 framebuffer（→ frameRestoredOk）
   const bool frameRestored = frameRestoredOk;
-  if (fromReader) sdFontSystem.ensureLoaded(renderer);  // v301／v305：安全網（已載入時是 no-op）；v327：首頁醒來不載字型
+  if (fromReader)
+    sdFontSystem.ensureLoaded(renderer);  // v301／v305：安全網（已載入時是 no-op）；v327：首頁醒來不載字型
   uint32_t paintMs = 0;
   uint8_t firstBank = 0;  // 第一眼那次推面板用的 bank —— 要在背景重畫之前讀（codex 第四輪）
   // ⭐ v334：醒來第一筆【兩個分支都】要清潔刷新 —— 面板上此刻是桌布，驅動 RAM 裡沒有任何一個平面描述它。
@@ -1007,8 +1030,8 @@ static bool lightSleepCycle(bool wakeFrameDeferred, RenderLock& sleepLock) {  //
   //    pcfg：醒來 disarm 之後電源腳的 GPIO_PINn（v325 起應為 0；0x2200 ＝ 中斷殘留）。
   DiagLog::line("LSLEEP repaint first=%lu hold=%lu kept=%d paint=%lu bank=%u taps=%u unarm=%d stackfree=%u pcfg=%08lx",
                 static_cast<unsigned long>(millis() - wakeAtMs), static_cast<unsigned long>(heldMs),
-                frameRestored ? 1 : 0, static_cast<unsigned long>(paintMs),
-                static_cast<unsigned>(firstBank), static_cast<unsigned>(taps), unarmOk ? 1 : 0,
+                frameRestored ? 1 : 0, static_cast<unsigned long>(paintMs), static_cast<unsigned>(firstBank),
+                static_cast<unsigned>(taps), unarmOk ? 1 : 0,
                 static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr)),
                 static_cast<unsigned long>(GPIO.pin[BoardConfig::ACTIVE.input.power].val));
 
@@ -1018,14 +1041,16 @@ static bool lightSleepCycle(bool wakeFrameDeferred, RenderLock& sleepLock) {  //
   // ⭐ v305 證人：`em` 是 Section 快取比對用的那個值（Section.cpp:293 的 probeEmFP）。
   //    進睡與醒來必須【相同】—— 不同就會 SCTLOAD reject=2、整章重排（使用者看到「建立索引中」）。
   const NvsStore::Stats nvsSt = NvsStore::takeStats();  // v331：這個週期裡的 NVS 影子寫入（含入口 2 次 state）
-  DiagLog::line("LSLEEP resume slept=%lu held=%lu retries=%u taps=%u soc=%u mv=%u ma=%d dmv=%d em=%ld/%ld nvsw=%lu nvsmax=%lu nvsfail=%lu nvserr=%d",
-                static_cast<unsigned long>(sleptMs), static_cast<unsigned long>(heldMs),
-                static_cast<unsigned>(sleepRetries), static_cast<unsigned>(taps), static_cast<unsigned>(powerManager.getBatteryPercentage()),
-                static_cast<unsigned>(mvOut), static_cast<int>(maOut),
-                static_cast<int>(static_cast<int32_t>(mvOut) - static_cast<int32_t>(mvIn)),
-                static_cast<long>(emIn),
-                static_cast<long>(fromReader ? renderer.probeEmFP(SETTINGS.getReaderFontId()) : 0), static_cast<unsigned long>(nvsSt.writes),
-                static_cast<unsigned long>(nvsSt.usMax), static_cast<unsigned long>(nvsSt.fails), nvsSt.lastErr);
+  DiagLog::line(
+      "LSLEEP resume slept=%lu held=%lu retries=%u taps=%u soc=%u mv=%u ma=%d dmv=%d em=%ld/%ld nvsw=%lu nvsmax=%lu "
+      "nvsfail=%lu nvserr=%d",
+      static_cast<unsigned long>(sleptMs), static_cast<unsigned long>(heldMs), static_cast<unsigned>(sleepRetries),
+      static_cast<unsigned>(taps), static_cast<unsigned>(powerManager.getBatteryPercentage()),
+      static_cast<unsigned>(mvOut), static_cast<int>(maOut),
+      static_cast<int>(static_cast<int32_t>(mvOut) - static_cast<int32_t>(mvIn)), static_cast<long>(emIn),
+      static_cast<long>(fromReader ? renderer.probeEmFP(SETTINGS.getReaderFontId()) : 0),
+      static_cast<unsigned long>(nvsSt.writes), static_cast<unsigned long>(nvsSt.usMax),
+      static_cast<unsigned long>(nvsSt.fails), nvsSt.lastErr);
 
   // v293 的喚醒畫面是為「真關機後冷開機」準備的。既然這次是續睡回來、而且畫面已經重畫過，
   // 那份就過期了 —— 留著會在日後萬一當機重開時貼出一張舊頁（而且可能是那張黑的）。
@@ -1048,12 +1073,14 @@ void enterDeepSleep(bool fromTimeout = false) {
                 static_cast<unsigned long>(nvsIn.usMax), static_cast<unsigned long>(nvsIn.fails), nvsIn.lastErr);
   APP_STATE.lastSleepFromReader = activityManager.isReaderActivity();
 
-  // ⭐ v326（帳本 A9，維護者 2026-09-21 選定）：wake frame 只有【冷開機回書】會用到（`loadWakeFrameBuffer`），淺睡眠醒來
+  // ⭐ v326（帳本 A9，維護者 2026-09-21 選定）：wake frame
+  // 只有【冷開機回書】會用到（`loadWakeFrameBuffer`），淺睡眠醒來
   //   根本不用它 —— 而手動休眠卻每次付 ~1.3s 寫檔（diag323：popup→狀態存檔 1,417ms）。實機頻率：手動休眠 197 次、
   //   冷開機用到 54 次。改成：**會走淺睡眠的休眠不在入口寫**，留到真的要關機的出口（30 分鐘超時／連點／睡不成）
   //   再從 RAM 快照寫（v323 起書頁本來就留在 RAM；那一刻沒人在等）。不走淺睡眠的（自動休眠超時、首頁、哨兵沒開）照舊。
   //   代價：淺睡眠中電池耗盡／按重置鍵 → 沒寫到 → 下次冷開機走慢路（4.8s），不會錯。
-  // ⭐ v327（維護者 2026-09-22 拍板）：淺睡眠改【全域、黑名單制】（Activity::supportsLightSleep）。v303 限在閱讀器是因為
+  // ⭐ v327（維護者 2026-09-22 拍板）：淺睡眠改【全域、黑名單制】（Activity::supportsLightSleep）。v303
+  // 限在閱讀器是因為
   //   當時待機電流沒量到；現在有了：5mA、30 分鐘上限 ＝ 每次最多 2.5mAh（≈0.17%），讀書 4 分鐘的電。
   //   wake frame 仍只給閱讀器（冷開機回書才用得到）。
   //   WiFi 開著就不睡（codex：黑名單之外的保險 —— lightSleepCycle 會把 WiFi 關掉，OPDS 之類醒來就壞）。
@@ -1112,25 +1139,26 @@ void enterDeepSleep(bool fromTimeout = false) {
         DiagLog::line("PROGRESS flush retry fail=%u", fails);
       }
     }
-  if (APP_STATE.lastSleepFromReader && readerOnTop && pageValid) {
-    // ⭐ 代號先 +1 再存，而且 **APP_STATE 緊接著就會被寫出去**（下面那行），
-    //   所以畫面檔與狀態檔帶的是同一個值。喚醒時兩者不相等就不還原 ——
-    //   這才擋得掉「同一本書的舊頁」（只比書路徑擋不掉，codex 複查指出）。
-    if (++APP_STATE.wakeFrameToken == 0) APP_STATE.wakeFrameToken = 1;  // 0 保留給「沒有畫面」
-    if (willTryLightSleep) {
-      Storage.remove(wakeFrameFile());  // 舊的先失效（代號已換、對不上，但不留殘骸）；寫檔留到真關機出口
-      wakeFrameDeferred = true;
+    if (APP_STATE.lastSleepFromReader && readerOnTop && pageValid) {
+      // ⭐ 代號先 +1 再存，而且 **APP_STATE 緊接著就會被寫出去**（下面那行），
+      //   所以畫面檔與狀態檔帶的是同一個值。喚醒時兩者不相等就不還原 ——
+      //   這才擋得掉「同一本書的舊頁」（只比書路徑擋不掉，codex 複查指出）。
+      if (++APP_STATE.wakeFrameToken == 0) APP_STATE.wakeFrameToken = 1;  // 0 保留給「沒有畫面」
+      if (willTryLightSleep) {
+        Storage.remove(wakeFrameFile());  // 舊的先失效（代號已換、對不上，但不留殘骸）；寫檔留到真關機出口
+        wakeFrameDeferred = true;
+      } else {
+        saveWakeFrameTimed("entry");
+      }
     } else {
-      saveWakeFrameTimed("entry");
+      // 沒存新的就讓舊的失效 —— 「檔案存在且代號相符」必須永遠等於「上一次休眠剛寫的」。
+      APP_STATE.wakeFrameToken = 0;
+      Storage.remove(wakeFrameFile());
+      if (!pageValid)
+        DiagLog::line("WAKEFRAME skip why=norestore");
+      else if (APP_STATE.lastSleepFromReader && !readerOnTop)
+        DiagLog::line("WAKEFRAME skip why=overlay");  // 閱讀器上疊著選單／註腳：快照是那個畫面，不當書頁存
     }
-  } else {
-    // 沒存新的就讓舊的失效 —— 「檔案存在且代號相符」必須永遠等於「上一次休眠剛寫的」。
-    APP_STATE.wakeFrameToken = 0;
-    Storage.remove(wakeFrameFile());
-    if (!pageValid) DiagLog::line("WAKEFRAME skip why=norestore");
-    else if (APP_STATE.lastSleepFromReader && !readerOnTop)
-      DiagLog::line("WAKEFRAME skip why=overlay");  // 閱讀器上疊著選單／註腳：快照是那個畫面，不當書頁存
-  }
   }
 
   // v312：印記 ——「這次關機是 enterDeepSleep() 自願做的」。下次電源鍵喚醒若回首頁，
@@ -1179,8 +1207,9 @@ void enterDeepSleep(bool fromTimeout = false) {
   //   （LSLEEP resume）看得到；真關機的路上 RAM 會沒掉。這裡沒人在等（面板已睡），一次 SD append 無妨。
   {
     const NvsStore::Stats nvsEnd = NvsStore::takeStats();
-    DiagLog::line("SLEEP nvs-final nvsw=%lu nvsmax=%lu nvsfail=%lu nvserr=%d", static_cast<unsigned long>(nvsEnd.writes),
-                  static_cast<unsigned long>(nvsEnd.usMax), static_cast<unsigned long>(nvsEnd.fails), nvsEnd.lastErr);
+    DiagLog::line("SLEEP nvs-final nvsw=%lu nvsmax=%lu nvsfail=%lu nvserr=%d",
+                  static_cast<unsigned long>(nvsEnd.writes), static_cast<unsigned long>(nvsEnd.usMax),
+                  static_cast<unsigned long>(nvsEnd.fails), nvsEnd.lastErr);
   }
 
   powerManager.startDeepSleep(gpio);
@@ -1267,8 +1296,7 @@ static const char* powerTraceStr() {
   int off = 0;
   for (uint8_t i = 0; i < g_pwrTraceN && off < static_cast<int>(sizeof(buf)) - 1; ++i) {
     const int w = snprintf(buf + off, sizeof(buf) - off, "%s%lu:%u", i ? " " : "",
-                           static_cast<unsigned long>(g_pwrTraceMs[i]),
-                           static_cast<unsigned>(g_pwrTraceDown[i]));
+                           static_cast<unsigned long>(g_pwrTraceMs[i]), static_cast<unsigned>(g_pwrTraceDown[i]));
     if (w <= 0) break;
     off += w;
   }
@@ -1414,7 +1442,8 @@ void setup() {
 
   tracePower();  // v199 取樣 2：＝ v198 的取樣 1 位置（約 500ms），保留以便直接對照
 
-  LOG_INF("MAIN", "Hardware detect: %s", gpio.deviceIsX3() ? (gpio.displayIsUc8279() ? "X3 (UC8279)" : "X3 (UC8253)") : "X4");
+  LOG_INF("MAIN", "Hardware detect: %s",
+          gpio.deviceIsX3() ? (gpio.displayIsUc8279() ? "X3 (UC8279)" : "X3 (UC8253)") : "X4");
 
   // SD Card Initialization
   // We need 6 open files concurrently when parsing a new chapter
@@ -1443,7 +1472,8 @@ void setup() {
   DataDir::resolve();
 
   DiagLog::begin();
-  // v341 證人：開機讀不讀得到卡片 CID（讀不到 → 淺睡眠醒來不做換卡檢查）；上一次重開是不是因為醒來發現卡換過。不印 CID 本身（含序號）。
+  // v341 證人：開機讀不讀得到卡片 CID（讀不到 → 淺睡眠醒來不做換卡檢查）；上一次重開是不是因為醒來發現卡換過。不印 CID
+  // 本身（含序號）。
   DiagLog::line("SDID ok=%d swapboot=%d", g_sdCidOk ? 1 : 0, sdSwapReboot ? 1 : 0);
   sdSwapMagic = 0;
   // v324 證人：電源鍵腳位在 gpio.begin() 之前／重設之後的狀態（rst=3 的軟體重啟會把 RTC 域的殘留帶進來，這裡看得到）。
@@ -1452,8 +1482,10 @@ void setup() {
   {
     char e[8][8];
     for (int i = 0; i < 8; i++) {
-      if (g_pwrPadErr[i] == PWRPAD_NA) snprintf(e[i], sizeof(e[i]), "na");
-      else snprintf(e[i], sizeof(e[i]), "%d", g_pwrPadErr[i]);
+      if (g_pwrPadErr[i] == PWRPAD_NA)
+        snprintf(e[i], sizeof(e[i]), "na");
+      else
+        snprintf(e[i], sizeof(e[i]), "%d", g_pwrPadErr[i]);
     }
     DiagLog::line("PWRPAD reset hold=%s slpsel=%s dsw=%s wake=%s deinit=%s rst=%s intr=%s ena=%s", e[0], e[1], e[2],
                   e[3], e[4], e[5], e[6], e[7]);
@@ -1475,7 +1507,8 @@ void setup() {
     //   2026-09-26 狀態列停在 08:00 那次，log 裡沒有任何時鐘紀錄才查不到。多一次 I2C（約 1 ms）。
     uint16_t clkYear = 0;
     const HalClock::State clkState = halClock.probe(&clkYear);
-    //   dirty＝上一次開機的校時交易沒完成（RTC 記憶體裡的標記，見 HalClock.cpp）→ 這次開機晶片的時間不信，直到校時成功。
+    //   dirty＝上一次開機的校時交易沒完成（RTC 記憶體裡的標記，見 HalClock.cpp）→
+    //   這次開機晶片的時間不信，直到校時成功。
     DiagLog::line("CLK boot st=%s year=%u synced=%u dirty=%u", HalClock::stateName(clkState),
                   static_cast<unsigned>(clkYear), static_cast<unsigned>(SETTINGS.clockHasBeenSynced),
                   halClock.chipDistrusted() ? 1u : 0u);
@@ -1522,9 +1555,9 @@ void setup() {
       //    那時晶片靠 USB 供電、真正在深睡（醒來 rst=DEEPSLEEP），短碰一下也會走到這裡 → 加一個條件：
       //    只有 **POWERON 重置** 才算「按鍵供電撐到閂鎖」。電池模式的每次喚醒都是 POWERON（真深睡只在 USB 上發生）。
       const bool latchedAccept = !wakeUsb && (esp_reset_reason() == ESP_RST_POWERON);
-      const bool legacyAccept = gpio.verifyPowerButtonWakeup(
-          requiredMs, SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::SLEEP, &g_pwrDiag,
-          earlyAccept || latchedAccept);
+      const bool legacyAccept =
+          gpio.verifyPowerButtonWakeup(requiredMs, SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::SLEEP,
+                                       &g_pwrDiag, earlyAccept || latchedAccept);
       g_pwrRescued = (!legacyAccept && earlyAccept) ? 1 : 0;
       // ⚠️ 不覆寫 g_pwrDiag.outcome —— verify 每次都跑過，那個哨兵維持原義（HalGPIO.h:121
       //    記著 v191 的撞號教訓）。「靠證據救回來」另外用 rescue= 表示。
@@ -1594,7 +1627,7 @@ void setup() {
   //   why=boot 在首頁醒來也花 267ms）。萬一暫定為真、最後卻進救援模式，只是多載了一次字型，無害。
   //   正式的 willResumeToReader 在 settle 之後算（見下方 v311 區塊）。
   const bool shouldPreloadReaderFont = !HalSystem::isRebootFromPanic() && !APP_STATE.openEpubPath.empty() &&
-                                 APP_STATE.lastSleepFromReader && APP_STATE.readerActivityLoadCount == 0;
+                                       APP_STATE.lastSleepFromReader && APP_STATE.readerActivityLoadCount == 0;
   // v185 證人：0=Splash 1=Silent（2=QuickResume 已於 v330 移除）；配上 BOOT 行的 rst= 就能分類每次開機。
   // 前綴刻意不用 BOOT —— 那是 diag.log 的版本分段記號，多一行就把每段切成兩半。
   DiagLog::line("RESUME kind=%d target=%u", static_cast<int>(resume), static_cast<unsigned>(snapshotTarget));
@@ -1711,7 +1744,7 @@ void setup() {
           display.defuseInitialFullSyncsKeepResync();
           renderer.displayBuffer(HalDisplay::HALF_REFRESH);
           // 面板上現在就是那一頁 → 閱讀器稍後那次繪製與它幾乎相同，可以降成 FAST
-          //（443ms 而不是 815ms）。QuickResume 用的是同一個旗標，不是新機制。
+          // （443ms 而不是 815ms）。QuickResume 用的是同一個旗標，不是新機制。
           allowFastInitialReaderRefresh = true;
           DiagLog::line("WAKEFRAME painted");
         }
@@ -1732,8 +1765,7 @@ void setup() {
   //       verify 255=沒執行（reason 不是 PowerButton）0=通過 1=等不到 2=握持不足 3=快速路徑
   //       v294：early=連續前綴裡最後一次看到按鍵還按著的時刻（ms），0=取樣從沒看到按著；
   //             rescue=1 表示舊檢查判失敗、而這次是靠 early 證據救回來的（＝這一版的價值）
-  DiagLog::line(
-      "WAKE why reason=%u usb=%u verify=%u waited=%u held=%u req=%u cal=%u early=%lu rescue=%u trace=%s",
+  DiagLog::line("WAKE why reason=%u usb=%u verify=%u waited=%u held=%u req=%u cal=%u early=%lu rescue=%u trace=%s",
                 static_cast<unsigned>(g_wakeReason), static_cast<unsigned>(g_wakeUsb),
                 static_cast<unsigned>(g_pwrDiag.outcome), static_cast<unsigned>(g_pwrDiag.waitedMs),
                 static_cast<unsigned>(g_pwrDiag.heldMs), static_cast<unsigned>(g_pwrDiag.requiredMs),
@@ -1741,8 +1773,7 @@ void setup() {
                 static_cast<unsigned>(g_pwrRescued), powerTraceStr());
   // v295：preapp = millis() 起算【之前】花掉的毫秒（ROM＋bootloader＋映像驗證）。
   //       ⚠️ 只對 rst=1（POWERON）成立，rst=3 是「自上次真正上電以來」，判讀要配 BOOT 的 rst=。
-  DiagLog::line("WAKE preapp=%lu rst=%d", static_cast<unsigned long>(g_preAppMs),
-                static_cast<int>(esp_reset_reason()));
+  DiagLog::line("WAKE preapp=%lu rst=%d", static_cast<unsigned long>(g_preAppMs), static_cast<int>(esp_reset_reason()));
   // v311：settle 窗被顯示初始化吃掉多少（init）、之後補了幾筆樣本（tail，硬保證 ≥5）、UP 最終判定。
   DiagLog::line("WAKE settle init=%lu tail=%u up=%u upat=%u", static_cast<unsigned long>(g_settleInitMs),
                 static_cast<unsigned>(g_settleTailSamples), static_cast<unsigned>(g_settleUp),
@@ -1761,18 +1792,18 @@ void setup() {
     uint32_t used = 0, freeE = 0, avail = 0, total = 0, ns = 0;
     const bool uok = NvsStore::usage(&used, &freeE, &avail, &total, &ns);
     const uint32_t nvsUs = static_cast<uint32_t>(esp_timer_get_time() - nvsT0);
-    DiagLog::line("STATE src=%u nonce=%lu token=%lu stamp=%d rd=%d loads=%u pathlen=%u | prog ok=%d err=%d kind=%u seq=%lu spine=%u "
-                  "page=%u/%u off=%lu | usage ok=%d used=%lu free=%lu avail=%lu total=%lu ns=%lu | us=%lu",
-                  static_cast<unsigned>(APP_STATE.lastLoadSource()), static_cast<unsigned long>(APP_STATE.sdNonce()),
-                  static_cast<unsigned long>(APP_STATE.wakeFrameToken),
-                  APP_STATE.deepSleepStamp ? 1 : 0, APP_STATE.lastSleepFromReader ? 1 : 0,
-                  static_cast<unsigned>(APP_STATE.readerActivityLoadCount),
-                  static_cast<unsigned>(APP_STATE.openEpubPath.size()), pok ? 1 : 0, perr,
-                  static_cast<unsigned>(pb.kind), static_cast<unsigned long>(pb.seq), static_cast<unsigned>(pb.spine),
-                  static_cast<unsigned>(pb.page), static_cast<unsigned>(pb.pageCount), static_cast<unsigned long>(pb.offset),
-                  uok ? 1 : 0, static_cast<unsigned long>(used), static_cast<unsigned long>(freeE),
-                  static_cast<unsigned long>(avail), static_cast<unsigned long>(total), static_cast<unsigned long>(ns),
-                  static_cast<unsigned long>(nvsUs));
+    DiagLog::line(
+        "STATE src=%u nonce=%lu token=%lu stamp=%d rd=%d loads=%u pathlen=%u | prog ok=%d err=%d kind=%u seq=%lu "
+        "spine=%u "
+        "page=%u/%u off=%lu | usage ok=%d used=%lu free=%lu avail=%lu total=%lu ns=%lu | us=%lu",
+        static_cast<unsigned>(APP_STATE.lastLoadSource()), static_cast<unsigned long>(APP_STATE.sdNonce()),
+        static_cast<unsigned long>(APP_STATE.wakeFrameToken), APP_STATE.deepSleepStamp ? 1 : 0,
+        APP_STATE.lastSleepFromReader ? 1 : 0, static_cast<unsigned>(APP_STATE.readerActivityLoadCount),
+        static_cast<unsigned>(APP_STATE.openEpubPath.size()), pok ? 1 : 0, perr, static_cast<unsigned>(pb.kind),
+        static_cast<unsigned long>(pb.seq), static_cast<unsigned>(pb.spine), static_cast<unsigned>(pb.page),
+        static_cast<unsigned>(pb.pageCount), static_cast<unsigned long>(pb.offset), uok ? 1 : 0,
+        static_cast<unsigned long>(used), static_cast<unsigned long>(freeE), static_cast<unsigned long>(avail),
+        static_cast<unsigned long>(total), static_cast<unsigned long>(ns), static_cast<unsigned long>(nvsUs));
   }
   if (recoveryFirmwareMode) {
     // Skip normal home/reader routing: jump straight into the SD firmware picker.
@@ -1841,7 +1872,7 @@ void setup() {
   waitForPowerRelease();
   allowSleepAt = millis() + 2000;
   // v304：閒置計時器從「離開 setup()」起算 —— 與它還是 loop() 裡的 static 時等價
-  //（那時它在第一次進 loop() 才初始化）。少了這行會從 millis()=0 起算，差幾秒，但沒理由不對齊。
+  // （那時它在第一次進 loop() 才初始化）。少了這行會從 millis()=0 起算，差幾秒，但沒理由不對齊。
   g_lastActivityTime = millis();
 }
 
@@ -1883,7 +1914,7 @@ void loop() {
   // v304：從 loop() 的 static 提到檔案範圍 —— 淺睡眠續讀時必須重置它（見 g_lastActivityTime）。
   if (gpio.wasAnyPressed() || gpio.wasAnyReleased() || gpio.wasTouchActivity() || halTiltSensor.hadActivity() ||
       activityManager.preventAutoSleep()) {
-    g_lastActivityTime = millis();         // Reset inactivity timer
+    g_lastActivityTime = millis();       // Reset inactivity timer
     powerManager.setPowerSaving(false);  // Restore normal CPU frequency on user activity
   }
 
@@ -1978,8 +2009,8 @@ void loop() {
           downCombo) {
         lastSleepGateLog = nowMs;
         // held=InputManager 的（預期仍會歸零）／own=追蹤器的（預期會累積）／ip=isPressed 此刻
-        DiagLog::line("SLPGATE blocked allow=%d held=%lu own=%lu req=%u downcombo=%d raw=%d ip=%d",
-                      allowed ? 1 : 0, static_cast<unsigned long>(held), static_cast<unsigned long>(ownHeld),
+        DiagLog::line("SLPGATE blocked allow=%d held=%lu own=%lu req=%u downcombo=%d raw=%d ip=%d", allowed ? 1 : 0,
+                      static_cast<unsigned long>(held), static_cast<unsigned long>(ownHeld),
                       static_cast<unsigned>(SETTINGS.getPowerButtonDuration()), downCombo ? 1 : 0,
                       gpio.powerDownRaw() ? 1 : 0, gpio.isPressed(HalGPIO::BTN_POWER) ? 1 : 0);
       }

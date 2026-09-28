@@ -1,6 +1,6 @@
 #include "BookCacheUtils.h"
-#include <DataDir.h>
 
+#include <DataDir.h>
 #include <Epub.h>
 #include <FsHelpers.h>
 #include <Logging.h>

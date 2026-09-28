@@ -1,8 +1,5 @@
 #pragma once
-#include "util/NvsStore.h"  // v332：FNV1A_BASIS
-
 #include <Txt.h>
-
 #include <WarmIdentity.h>
 
 #include <atomic>
@@ -10,9 +7,10 @@
 #include <string>
 #include <vector>
 
+#include "BookmarkEntry.h"  // v290：txt 書籤
 #include "CrossPointSettings.h"
 #include "activities/Activity.h"
-#include "BookmarkEntry.h"  // v290：txt 書籤
+#include "util/NvsStore.h"  // v332：FNV1A_BASIS
 
 // v118:純文字閱讀器改為【串流】—— 不再預先排版整本書。
 //
@@ -38,10 +36,10 @@ class TxtReaderActivity final : public Activity {
   std::vector<std::shared_ptr<TextBlock>> currentPageLines;
   int linesPerPage = 0;
   // v241 直排
-  bool vertical_ = false;      // 開書時解析的軸向（SETTINGS.documentIsVertical()）
-  int unitsPerPage_ = 1;       // 橫排＝行數、直排＝欄數
-  int columnPitch_ = 0;        // 直排欄距（px）
-  int cachedLineHeight_ = 1;   // v284：橫排行距（px），由 updateViewport 解析一次
+  bool vertical_ = false;           // 開書時解析的軸向（SETTINGS.documentIsVertical()）
+  int unitsPerPage_ = 1;            // 橫排＝行數、直排＝欄數
+  int columnPitch_ = 0;             // 直排欄距（px）
+  int cachedLineHeight_ = 1;        // v284：橫排行距（px），由 updateViewport 解析一次
   bool pendingScreenshot_ = false;  // v289：選單觸發的截圖，等這一頁完整畫完才拍
   // v290：書籤。錨點是【位元組位移】（txt 的頁游標本來就是它），不是頁碼 ——
   //   改字級／行距／方向都不會讓書籤跑掉，這是 v118 位移制買到的東西。
@@ -61,7 +59,7 @@ class TxtReaderActivity final : public Activity {
   //    狀態列本來就收得到 offset，直接算就不可能拿到過期的旗標。
   // 判準是【這一頁的範圍】而不是「位移剛好相等」——見 .cpp 的說明（複查抓到的）。
   bool isBookmarked(size_t from, size_t to) const;
-  int viewportHeight_ = 0;     // 版心高＝直排欄長
+  int viewportHeight_ = 0;  // 版心高＝直排欄長
   int viewportWidth = 0;
   bool initialized = false;
 
@@ -69,22 +67,23 @@ class TxtReaderActivity final : public Activity {
   size_t pageStartOffset_ = 0;  // 這一頁從檔案的第幾個位元組開始
   // v332：三層儲存（同 EPUB）—— 閱讀位置主檔＝NVS，每次真的翻頁寫；progress.bin 只在離開時寫（onExit）；
   //   休眠前 flush 只補 NVS；NVS 寫失敗 → 當場退回寫 progress.bin。所有寫入仍在 RenderLock 下。
-  bool progressDirty_ = false;   // progress.bin 過期
-  bool nvsProgDirty_ = false;    // NVS 那格不是目前位置
-  uint32_t sdProgHash_ = NvsStore::FNV1A_BASIS;  // progress.bin 的指紋（開書時讀到的／上次寫的）→ NVS 配對
-  uint32_t sdProgLen_ = 0;                       // 同上的長度（0＝沒有檔）
-  uint8_t nvsFailStreak_ = 10;                   // NVS 失敗計數：第一次失敗立刻寫 SD，之後每 10 次一次（codex）
+  bool progressDirty_ = false;                          // progress.bin 過期
+  bool nvsProgDirty_ = false;                           // NVS 那格不是目前位置
+  uint32_t sdProgHash_ = NvsStore::FNV1A_BASIS;         // progress.bin 的指紋（開書時讀到的／上次寫的）→ NVS 配對
+  uint32_t sdProgLen_ = 0;                              // 同上的長度（0＝沒有檔）
+  uint8_t nvsFailStreak_ = 10;                          // NVS 失敗計數：第一次失敗立刻寫 SD，之後每 10 次一次（codex）
   bool saveProgressSd(size_t offset, const char* why);  // v332：真的寫 progress.bin ＋ NVS 配對
   size_t lastObservedOffset_ = SIZE_MAX;
   uint32_t dlogStartAtRender_ = 0;
-  uint32_t lastRenderDlogMs_ = 0;  // 上一次 render 花在 DiagLog append 的毫秒（含它自己的 TXTPAGE 行）→ 下一次 TXTPAGE dlog=
-  int32_t lastNvsUs_ = -1;         // 上一次 render 的 NVS 進度寫入微秒（-1＝沒寫、-2＝失敗）→ 下一次 TXTPAGE nvs=
-  uint32_t nvsBookHash_ = 0;       // fnv1a(檔案路徑)|1，開書時算（loadProgress）
+  // 上一次 render 花在 DiagLog append 的毫秒（含它自己的 TXTPAGE 行）→ 下一次 TXTPAGE dlog=
+  uint32_t lastRenderDlogMs_ = 0;
+  int32_t lastNvsUs_ = -1;    // 上一次 render 的 NVS 進度寫入微秒（-1＝沒寫、-2＝失敗）→ 下一次 TXTPAGE nvs=
+  uint32_t nvsBookHash_ = 0;  // fnv1a(檔案路徑)|1，開書時算（loadProgress）
   bool saveProgressNow(const char* why);
   int32_t writeProgressNvs(size_t offset);  // 回 微秒 或 -2
-  void loadProgressSd();                     // v332：原本的 loadProgress（只讀 progress.bin，含舊格式遷移）
-  size_t nextPageOffset_ = 0;   // 下一頁的起點(由 loadPageAtOffset 算出,舊版算了卻丟掉)
-  bool atLastPage_ = false;     // 這一頁排完就到檔尾了
+  void loadProgressSd();                    // v332：原本的 loadProgress（只讀 progress.bin，含舊格式遷移）
+  size_t nextPageOffset_ = 0;               // 下一頁的起點(由 loadPageAtOffset 算出,舊版算了卻丟掉)
+  bool atLastPage_ = false;                 // 這一頁排完就到檔尾了
 
   // 往回翻:一次配滿、永不成長的環形緩衝,存造訪過的頁首位移。
   // 256 格 × 4 bytes = 1 KB,以每頁約 335 位元組計可回溯約 85 KB(約 256 頁)。
@@ -106,9 +105,9 @@ class TxtReaderActivity final : public Activity {
   uint32_t segDispMs_ = 0;
   uint32_t segAaMs_ = 0;
   // v120:把 layout 再拆三段,回答 v119 量到的 232ms 到底花在哪
-  uint32_t segReadMs_ = 0;  // 讀 8KB(含開檔/seek)
-  uint32_t segFontMs_ = 0;  // 灌 advance 表
-  uint32_t segWrapMs_ = 0;  // 實際斷行
+  uint32_t segReadMs_ = 0;       // 讀 8KB(含開檔/seek)
+  uint32_t segFontMs_ = 0;       // 灌 advance 表
+  uint32_t segWrapMs_ = 0;       // 實際斷行
   bool pendingForward_ = false;  // 繪製期間被按下、待消化的翻頁
   // v121 預取
   uint8_t diagWarmHit_ = 0;
@@ -170,9 +169,9 @@ class TxtReaderActivity final : public Activity {
   bool popBackOffset(size_t& outOffset);
   // 環空了才用（v240）：一次排到 offset 為止、取最後 N 個單位的起點。見 .cpp 的說明。
   struct BackStats {
-    size_t units = 0;   // 最後一次收集排出的單位數
-    size_t span = 0;    // 最後一次的視窗大小（位元組）
-    uint8_t passes = 0; // 讀檔＋排版的次數（最多 3）
+    size_t units = 0;       // 最後一次收集排出的單位數
+    size_t span = 0;        // 最後一次的視窗大小（位元組）
+    uint8_t passes = 0;     // 讀檔＋排版的次數（最多 3）
     bool canonical = true;  // 視窗起點是段落起點（分頁唯一性成立）
     bool oom = false;
   };
@@ -192,7 +191,8 @@ class TxtReaderActivity final : public Activity {
   int estimatedTotalPages() const;
   int estimatedCurrentPage() const;
 
-  bool saveProgress(size_t offset, uint32_t* fingerprintOut = nullptr, uint32_t* lenOut = nullptr) const;  // v329：回傳 writeAtomic 的成敗；v332：指紋
+  bool saveProgress(size_t offset, uint32_t* fingerprintOut = nullptr,
+                    uint32_t* lenOut = nullptr) const;  // v329：回傳 writeAtomic 的成敗；v332：指紋
   void loadProgress();
 
  public:
@@ -207,7 +207,7 @@ class TxtReaderActivity final : public Activity {
   void loop() override;
   void render(RenderLock&&) override;
   bool isReaderActivity() const override { return true; }
-  int flushProgress() override;  // v329；v332：只補 NVS
+  int flushProgress() override;         // v329；v332：只補 NVS
   int flushProgressDurable() override;  // v332：淺睡眠入口的 SD 檢查點
   ScreenshotInfo getScreenshotInfo() const override;
 };

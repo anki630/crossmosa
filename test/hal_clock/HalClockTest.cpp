@@ -48,7 +48,8 @@ bool is(const Stamp& s, uint16_t y, uint8_t mo, uint8_t d, uint8_t h, uint8_t mi
 class Clock : public ::testing::Test {
  protected:
   void SetUp() override {
-    // HalClock.cpp 裡撐過重開機的「校時交易沒完成」標記是全域的（跟裝置一樣只有一顆 RTC）→ 每條測試開始前用一次成功的校時清掉
+    // HalClock.cpp 裡撐過重開機的「校時交易沒完成」標記是全域的（跟裝置一樣只有一顆 RTC）→
+    // 每條測試開始前用一次成功的校時清掉
     fake::reset();
     {
       HalClock tmp;
@@ -205,7 +206,7 @@ TEST_F(Clock, SyncReadBackMustMatchWhatWasWritten) {  // codex 第二輪 4：讀
 }
 
 TEST_F(Clock, SetFailingHalfwayKeepsTheChipDistrusted) {  // codex 第三輪 阻斷：寫到一半失敗
-  fake::setRtc(2026, 9, 20, 10, 0, 0);  // 晶片裡是一個「合理」的時間
+  fake::setRtc(2026, 9, 20, 10, 0, 0);                    // 晶片裡是一個「合理」的時間
   HalClock c;
   c.begin();
   ASSERT_TRUE(shown(c).ok);
@@ -228,8 +229,8 @@ TEST_F(Clock, ReadBackFailingAfterAnUnkeptSetKeepsTheChipDistrusted) {  // codex
   HalClock c;
   c.begin();
   ASSERT_TRUE(shown(c).ok);
-  fake::setSticks = false;       // 晶片沒存，還是 9/20 10:00（合理但錯）
-  fake::failReadsAfterSet = 2;   // 讀回兩次都讀不到（重讀也救不了）
+  fake::setSticks = false;      // 晶片沒存，還是 9/20 10:00（合理但錯）
+  fake::failReadsAfterSet = 2;  // 讀回兩次都讀不到（重讀也救不了）
   ntpWillAnswer(0, 2026, 9, 26, 12, 34, 56);
   EXPECT_FALSE(c.syncFromNTP());
   fake::nowMs += 11000;
@@ -262,7 +263,8 @@ TEST_F(Clock, ImpossibleCalendarDatesAreNotTrusted) {  // codex 第三輪 重要
     fake::rawYear = k.y;
     fake::rawMonth = k.m;
     fake::rawDay = k.d;
-    EXPECT_EQ(c.probe(), k.ok ? HalClock::State::Ok : HalClock::State::Invalid) << k.y << "-" << int(k.m) << "-" << int(k.d);
+    EXPECT_EQ(c.probe(), k.ok ? HalClock::State::Ok : HalClock::State::Invalid)
+        << k.y << "-" << int(k.m) << "-" << int(k.d);
   }
 }
 
@@ -374,7 +376,6 @@ TEST_F(Clock, BackoffSurvivesMillisOverflow) {
 }
 
 // ---- FAT 時戳（callback 讀的是全域 halClock，所以用全域那一個，照順序走一個情境） ----
-
 
 TEST_F(Clock, FatStampFollowsTheMonotonicClockAndIsRevokedOnEvidence) {  // codex 第二輪 阻斷 2
   fake::setRtc(2026, 9, 26, 23, 0, 0);

@@ -1,18 +1,16 @@
 #include "HomeActivity.h"
-#include <DataDir.h>
-
-#include "util/DiagLog.h"
 
 #include <Bitmap.h>
+#include <DataDir.h>
 #include <Epub.h>
 #include <FsHelpers.h>
 #include <GfxRenderer.h>
-#include <JpegToBmpConverter.h>
-#include <esp_heap_caps.h>
 #include <HalStorage.h>
 #include <I18n.h>
+#include <JpegToBmpConverter.h>
 #include <Utf8.h>
 #include <Xtc.h>
+#include <esp_heap_caps.h>
 
 #include <cstring>
 #include <vector>
@@ -25,6 +23,7 @@
 #include "SdCardFontSystem.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "util/DiagLog.h"
 
 int HomeActivity::getMenuItemCount() const {
   int count = 4;  // File Browser, Recents, File transfer, Settings
@@ -122,34 +121,37 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
           }
           bool success = epub.generateThumbBmp(coverHeight, !fontsUnloaded);
           // v258：縮圖走哪條路、各段多久（diag257 開過書回主畫面 6–8 秒，當時沒有分段證人）。
-          //   ms＝整個 generateThumbBmp；open＝zip 開讀取器或 sd 抽檔；conv＝轉檔器整段；dec＝其中 JPEGDEC 解碼（含讀取）。
-          //   幾何：原圖/縮放分母>解出的格子>輸出。note＝串流退回 SD 的原因（open／io／mem）。
+          //   ms＝整個 generateThumbBmp；open＝zip 開讀取器或 sd 抽檔；conv＝轉檔器整段；dec＝其中 JPEGDEC
+          //   解碼（含讀取）。 幾何：原圖/縮放分母>解出的格子>輸出。note＝串流退回 SD 的原因（open／io／mem）。
           //   沒走到解碼（例如沒開過的書 cache-missing）不印，那種情況已有 THUMBFAIL。
           const auto logThumbGen = [&](const bool ok) {
-          if (strcmp(epub.thumbStats().src, "none") != 0 && strcmp(epub.thumbStats().src, "exists") != 0) {
-            const Epub::ThumbStats& ts = epub.thumbStats();
-            const bool jpg = ts.converted;  // 幾何只在這一次真的呼叫過 JPEG 轉檔器時才屬於這本書
-            const JpegToBmpConverter::Info& ji = JpegToBmpConverter::lastInfo();
-            DiagLog::line("THUMBGEN ok=%u h=%d src=%s note=%s fr=%uK mx=%uK ofr=%uK omx=%uK need=%uK err=%s ms=%u zip=%u open=%u "
-                          "conv=%u dec=%u %ux%u/%u>%ux%u>%ux%u prog=%u item=%uKB ra=%u rs=%u %s",
-                          ok ? 1u : 0u, coverHeight, ts.src, ts.note[0] ? ts.note : "-",
-                          static_cast<unsigned>(ts.preFreeKb), static_cast<unsigned>(ts.preMaxKb),
-                          static_cast<unsigned>(ts.openFreeKb), static_cast<unsigned>(ts.openMaxKb),
-                          jpg ? static_cast<unsigned>(JpegToBmpConverter::lastInfo().needBytes / 1024) : 0u,
-                          jpg && JpegToBmpConverter::lastError()[0] ? JpegToBmpConverter::lastError() : "-",
-                          static_cast<unsigned>(ts.totalMs), static_cast<unsigned>(ts.zipMs), static_cast<unsigned>(ts.openMs),
-                          static_cast<unsigned>(ts.convMs), jpg ? static_cast<unsigned>(ji.decodeMs) : 0u,
-                          jpg ? ji.srcW : 0u, jpg ? ji.srcH : 0u, jpg ? ji.scale : 0u, jpg ? ji.decW : 0u,
-                          jpg ? ji.decH : 0u, jpg ? ji.outW : 0u, jpg ? ji.outH : 0u, jpg && ji.progressive ? 1u : 0u,
-                          static_cast<unsigned>((ts.itemBytes + 512) / 1024), static_cast<unsigned>(ts.readAheadKb),
-                          static_cast<unsigned>(ts.restarts), book.path.c_str());
-          }
+            if (strcmp(epub.thumbStats().src, "none") != 0 && strcmp(epub.thumbStats().src, "exists") != 0) {
+              const Epub::ThumbStats& ts = epub.thumbStats();
+              const bool jpg = ts.converted;  // 幾何只在這一次真的呼叫過 JPEG 轉檔器時才屬於這本書
+              const JpegToBmpConverter::Info& ji = JpegToBmpConverter::lastInfo();
+              DiagLog::line(
+                  "THUMBGEN ok=%u h=%d src=%s note=%s fr=%uK mx=%uK ofr=%uK omx=%uK need=%uK err=%s ms=%u zip=%u "
+                  "open=%u "
+                  "conv=%u dec=%u %ux%u/%u>%ux%u>%ux%u prog=%u item=%uKB ra=%u rs=%u %s",
+                  ok ? 1u : 0u, coverHeight, ts.src, ts.note[0] ? ts.note : "-", static_cast<unsigned>(ts.preFreeKb),
+                  static_cast<unsigned>(ts.preMaxKb), static_cast<unsigned>(ts.openFreeKb),
+                  static_cast<unsigned>(ts.openMaxKb),
+                  jpg ? static_cast<unsigned>(JpegToBmpConverter::lastInfo().needBytes / 1024) : 0u,
+                  jpg && JpegToBmpConverter::lastError()[0] ? JpegToBmpConverter::lastError() : "-",
+                  static_cast<unsigned>(ts.totalMs), static_cast<unsigned>(ts.zipMs), static_cast<unsigned>(ts.openMs),
+                  static_cast<unsigned>(ts.convMs), jpg ? static_cast<unsigned>(ji.decodeMs) : 0u, jpg ? ji.srcW : 0u,
+                  jpg ? ji.srcH : 0u, jpg ? ji.scale : 0u, jpg ? ji.decW : 0u, jpg ? ji.decH : 0u, jpg ? ji.outW : 0u,
+                  jpg ? ji.outH : 0u, jpg && ji.progressive ? 1u : 0u,
+                  static_cast<unsigned>((ts.itemBytes + 512) / 1024), static_cast<unsigned>(ts.readAheadKb),
+                  static_cast<unsigned>(ts.restarts), book.path.c_str());
+            }
           };
           logThumbGen(success);
           // v261：串流因記憶體失敗、而這一輪還沒卸過字型 → 卸字型、重試一次串流（重試時才允許退回抽到 SD）。
           //   diag260：某本含大張封面的書 fr=99K（剛好沒觸發卸載門檻）→ 開讀取器後差約 1KB → 退回舊路 5.3 秒。
           if (!success && epub.thumbStats().deferredForMemory) {
-            DiagLog::line("THUMBRELIEF retry free=%u max=%u", static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_DEFAULT)),
+            DiagLog::line("THUMBRELIEF retry free=%u max=%u",
+                          static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_DEFAULT)),
                           static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT)));
             sdFontSystem.unloadForLowMemory(renderer);
             fontsUnloaded = true;
@@ -176,7 +178,8 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
           // 舊 coverWidth 的圓角框邊線會殘留在新封面上，並在 storeCoverBuffer() 被重新快照，
           // 停留主畫面期間每次重繪都在。
           freeCoverBuffer();
-          coverRendered = false;          requestUpdate();
+          coverRendered = false;
+          requestUpdate();
         } else if (FsHelpers::hasXtcExtension(book.path)) {
           // Handle XTC file
           Xtc xtc(book.path, DataDir::path());
@@ -356,12 +359,12 @@ void HomeActivity::loop() {
       menuCount - (metrics.homeContinueReadingInMenu ? 0 : static_cast<int>(recentBooks.size()));
   int menuRow = -1;
   // v180：列高由主題決定（Formosa Pro 撐滿可用高度），與 drawButtonMenu 同一個公式 → 命中幾何同源。
-  const int menuAvail = renderer.getScreenHeight() - (metrics.headerHeight + metrics.homeTopPadding +
-                                                      metrics.verticalSpacing + metrics.homeMenuTopOffset +
-                                                      metrics.buttonHintsHeight);
+  const int menuAvail =
+      renderer.getScreenHeight() - (metrics.headerHeight + metrics.homeTopPadding + metrics.verticalSpacing +
+                                    metrics.homeMenuTopOffset + metrics.buttonHintsHeight);
   const int menuRowH = GUI.menuRowHeightFor(menuAvail, renderedMenuCount);
-  const auto menuTouch = mappedInput.rowTouch(menuRow, menuTop, menuRowH + metrics.menuSpacing, renderedMenuCount, 0,
-                                              INT32_MAX, menuRowH);
+  const auto menuTouch =
+      mappedInput.rowTouch(menuRow, menuTop, menuRowH + metrics.menuSpacing, renderedMenuCount, 0, INT32_MAX, menuRowH);
   if (menuTouch != MappedInputManager::RowTouch::None) {
     const int touchedIndex =
         metrics.homeContinueReadingInMenu ? menuRow : menuRow + static_cast<int>(recentBooks.size());

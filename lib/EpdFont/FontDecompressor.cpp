@@ -111,9 +111,7 @@ static inline uint32_t alignedGlyphSize(const EpdGlyph& g, bool is2Bit) {
 uint32_t FontDecompressor::getAlignedOffset(const EpdFontData* fontData, uint16_t groupIndex, uint32_t glyphIndex) {
   uint32_t offset = 0;
 
-  auto accumGlyph = [&](const EpdGlyph& g) {
-    offset += alignedGlyphSize(g, fontData->is2Bit);
-  };
+  auto accumGlyph = [&](const EpdGlyph& g) { offset += alignedGlyphSize(g, fontData->is2Bit); };
 
   if (fontData->glyphToGroup) {
     // Frequency-grouped: scan glyphs before glyphIndex that belong to this group
@@ -133,8 +131,8 @@ uint32_t FontDecompressor::getAlignedOffset(const EpdFontData* fontData, uint16_
   return offset;
 }
 
-void FontDecompressor::compactSingleGlyph(const uint8_t* alignedSrc, uint8_t* packedDst, uint8_t width,
-                                          uint8_t height, bool is2Bit) {
+void FontDecompressor::compactSingleGlyph(const uint8_t* alignedSrc, uint8_t* packedDst, uint8_t width, uint8_t height,
+                                          bool is2Bit) {
   if (width == 0 || height == 0) return;
   const uint32_t rowStride = alignedRowStride(width, is2Bit);
   const uint8_t bpp = is2Bit ? 2 : 1;
@@ -247,8 +245,8 @@ const uint8_t* FontDecompressor::getBitmap(const EpdFontData* fontData, const Ep
       (static_cast<uint32_t>(glyph->width) * glyph->height * (fontData->is2Bit ? 2u : 1u) + 7u) / 8u;
   if (alignedOff > grp.uncompressedSize || alignedNeed > grp.uncompressedSize - alignedOff ||
       packedNeed > glyph->dataLength) {
-    LOG_ERR("FDC", "Glyph %u metadata inconsistent (aligned %u+%u vs %u, packed %u vs %u)", glyphIndex,
-            alignedOff, alignedNeed, grp.uncompressedSize, packedNeed, (unsigned)glyph->dataLength);
+    LOG_ERR("FDC", "Glyph %u metadata inconsistent (aligned %u+%u vs %u, packed %u vs %u)", glyphIndex, alignedOff,
+            alignedNeed, grp.uncompressedSize, packedNeed, (unsigned)glyph->dataLength);
     stats.getBitmapTimeUs += micros() - tStart;
     return nullptr;
   }
@@ -528,8 +526,8 @@ int FontDecompressor::prewarmCache(const EpdFontData* fontData, const char* utf8
       if (getGroupIndex(fontData, slot.glyphs[i].glyphIndex) != groupIdx) continue;
 
       const EpdGlyph& glyph = fontData->glyph[slot.glyphs[i].glyphIndex];
-      compactSingleGlyph(&tempBuf[slot.glyphs[i].alignedOffset], &slot.buffer[writeOffset], glyph.width,
-                         glyph.height, fontData->is2Bit);
+      compactSingleGlyph(&tempBuf[slot.glyphs[i].alignedOffset], &slot.buffer[writeOffset], glyph.width, glyph.height,
+                         fontData->is2Bit);
       slot.glyphs[i].bufferOffset = writeOffset;
       writeOffset += glyph.dataLength;
     }

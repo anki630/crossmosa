@@ -1,12 +1,11 @@
 #include "WebDAVHandler.h"
 
-#include "util/ProtectedPath.h"
-
 #include <FsHelpers.h>
 #include <HalStorage.h>
 #include <Logging.h>
 
 #include "util/BookCacheUtils.h"
+#include "util/ProtectedPath.h"
 #include "util/TaskWatchdog.h"
 
 namespace {

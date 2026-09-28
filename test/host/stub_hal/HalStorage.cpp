@@ -9,16 +9,15 @@
 // All paths are resolved under a root directory named by the SMBHOST_ROOT
 // environment variable (default "./sdroot") -- see test/host/README.md.
 
-#include <cassert>
 #include "HalStorage.h"
 
 #include <dirent.h>
+#include <strings.h>  // strcasecmp -- FAT is case-insensitive, see resolveExistingCase()
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
 
-#include <strings.h>  // strcasecmp -- FAT is case-insensitive, see resolveExistingCase()
-
+#include <cassert>
 #include <cerrno>
 #include <cstdio>
 #include <cstdlib>
@@ -54,8 +53,7 @@ std::string resolvePath(const char* path) {
 bool isShareRootPath(const std::string& resolved) {
   const std::string& root = sdRoot();
   if (resolved == root) return true;
-  return resolved.size() == root.size() + 1 && resolved.back() == '/' &&
-         resolved.compare(0, root.size(), root) == 0;
+  return resolved.size() == root.size() + 1 && resolved.back() == '/' && resolved.compare(0, root.size(), root) == 0;
 }
 
 // FAT IS CASE-INSENSITIVE; POSIX IS NOT. Maps a resolved host path onto the
@@ -463,7 +461,7 @@ bool HalFile::setTimestamp(uint8_t flags, uint16_t year, uint8_t month, uint8_t 
   struct stat st;
   if (::stat(impl->path.c_str(), &st) != 0) return false;
 
-  struct tm tmv {};
+  struct tm tmv{};
   tmv.tm_year = static_cast<int>(year) - 1900;
   tmv.tm_mon = static_cast<int>(month) - 1;
   tmv.tm_mday = static_cast<int>(day);

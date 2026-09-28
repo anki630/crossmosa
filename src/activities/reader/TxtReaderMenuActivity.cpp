@@ -1,7 +1,5 @@
 #include "TxtReaderMenuActivity.h"
 
-#include "ReaderFontSizes.h"
-
 #include <GfxRenderer.h>
 #include <I18n.h>
 
@@ -9,6 +7,7 @@
 
 #include "CrossPointSettings.h"
 #include "MappedInputManager.h"
+#include "ReaderFontSizes.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 

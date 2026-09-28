@@ -67,7 +67,8 @@ struct ThemeMetrics {
   int keyboardVerticalOffset;
   int keyboardTextFieldWidthPercent;
   int keyboardWidthPercent;
-  // Formosa（v50）：鍵盤鍵是「塗滿背景」原則的收編例外，圓角依主題（Base=0 直角、Lyra=6、Pro=10；RoundedRaff v182 退役）
+  // Formosa（v50）：鍵盤鍵是「塗滿背景」原則的收編例外，圓角依主題（Base=0 直角、Lyra=6、Pro=10；RoundedRaff v182
+  // 退役）
   int keyboardKeyCornerRadius;
 
   float popupTopOffsetRatio;

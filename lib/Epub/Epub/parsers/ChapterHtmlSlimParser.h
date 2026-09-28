@@ -1,6 +1,7 @@
 #pragma once
 
 #include <HalStorage.h>
+#include <Logging.h>
 #include <XmlParserUtils.h>
 #include <expat.h>
 
@@ -12,11 +13,9 @@
 
 #include "Epub/FootnoteEntry.h"
 #include "Epub/ParsedText.h"
+#include "Epub/VerticalText.h"
 #include "Epub/blocks/ImageBlock.h"
 #include "Epub/blocks/TextBlock.h"
-#include <Logging.h>
-
-#include "Epub/VerticalText.h"
 #include "Epub/css/CssParser.h"
 #include "Epub/css/CssStyle.h"
 
@@ -74,8 +73,8 @@ class ChapterHtmlSlimParser {
   bool zhuyinAllowed_ = false;
   // v342（B 路線）：這一章是預先標注的（<head> 有 <meta name="zhuyin-ivs" content="bpmfvs"/>，zy_preannotate.py 寫的）
   bool zhuyinDocAnnotated_ = false;
-  bool zhuyinDegraded_ = false;  // v284：由 frozenEmFP_ 算一次就記住（見 .cpp columnPitchPx）
-  bool vertColLogged = false;  // VERTCOL 每次建置只印一行
+  bool zhuyinDegraded_ = false;   // v284：由 frozenEmFP_ 算一次就記住（見 .cpp columnPitchPx）
+  bool vertColLogged = false;     // VERTCOL 每次建置只印一行
   uint8_t vertImgDropLogged = 0;  // VERTIMGDROP 上限 3 筆
   uint8_t imgPlaceLogged = 0;     // v255：IMGPLACE 每章上限 6 筆
   // 直排欄頂。由 layoutCurrentBlock 夾限後寫入，addColumnToPage 直接用 ——
@@ -205,9 +204,8 @@ class ChapterHtmlSlimParser {
   explicit ChapterHtmlSlimParser(
       std::shared_ptr<Epub> epub, const std::string& filepath, GfxRenderer& renderer, const int fontId,
       const int lineHeightPx, const int32_t frozenEmFP, const bool extraParagraphSpacing,
-      const uint8_t paragraphAlignment,
-      const uint16_t viewportWidth, const uint16_t viewportHeight, const bool hyphenationEnabled,
-      const bool focusReadingEnabled,
+      const uint8_t paragraphAlignment, const uint16_t viewportWidth, const uint16_t viewportHeight,
+      const bool hyphenationEnabled, const bool focusReadingEnabled,
       const std::function<void(std::unique_ptr<Page>, uint16_t, uint16_t, uint32_t)>& completePageFn,
       const bool embeddedStyle, const std::string& contentBase, const std::string& imageBasePath,
       const uint8_t imageRendering = 0, std::vector<std::string> tocAnchors = {},

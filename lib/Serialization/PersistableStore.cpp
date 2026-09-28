@@ -1,17 +1,16 @@
 #include "PersistableStore.h"
-#include <DataDir.h>
 
+#include <Arduino.h>
+#include <DataDir.h>
 #include <HalStorage.h>
 #include <Logging.h>
 #include <ObfuscationUtils.h>
 
-#include <Arduino.h>
-
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
-#include <string>
 #include <limits>
+#include <string>
 
 void (*PersistableStoreBase::diagHook)(const char* line) = nullptr;
 
@@ -92,7 +91,7 @@ bool PersistableStoreBase::writeDocAtomic(const char* path, const JsonDocument& 
             static_cast<unsigned>(expected), finalPath.c_str());
     Storage.remove(tmpPath.c_str());
     persistDiag("PERSISTW %s FAILED at=write got=%u want=%u", persistTag(finalPath), static_cast<unsigned>(written),
-                  static_cast<unsigned>(expected));
+                static_cast<unsigned>(expected));
     return false;
   }
 
@@ -106,14 +105,14 @@ bool PersistableStoreBase::writeDocAtomic(const char* path, const JsonDocument& 
   // ⚠️ 這些是【端到端等待時間】，不是純 SdFat 成本：HalStorage 用一把遞迴 mutex 序列化所有
   //   操作，所以網頁伺服器任務同時在動 SD 時，等鎖的時間會算進來。喚醒路徑上沒有那個任務，
   //   所以喚醒那幾筆樣本是乾淨的；其餘筆數判讀時要記得這件事。
-  persistDiag("PERSISTW %s n=%u mkdir=%lu prep=%lu open=%lu write=%lu close=%lu rm=%lu rename=%lu total=%lu "
-              "ok=%d rmok=%d re=%d",
-              persistTag(finalPath), static_cast<unsigned>(expected), mkdirMs,
-              static_cast<unsigned long>(tPrep - t0), static_cast<unsigned long>(tOpen - tPrep),
-              static_cast<unsigned long>(tWrite - tOpen), static_cast<unsigned long>(tClose - tWrite),
-              static_cast<unsigned long>(tRm - tClose), static_cast<unsigned long>(tRename - tRm),
-              static_cast<unsigned long>(tRename - t0) + mkdirMs, renamed ? 1 : 0, removed ? 1 : 0,
-              reopened ? 1 : 0);
+  persistDiag(
+      "PERSISTW %s n=%u mkdir=%lu prep=%lu open=%lu write=%lu close=%lu rm=%lu rename=%lu total=%lu "
+      "ok=%d rmok=%d re=%d",
+      persistTag(finalPath), static_cast<unsigned>(expected), mkdirMs, static_cast<unsigned long>(tPrep - t0),
+      static_cast<unsigned long>(tOpen - tPrep), static_cast<unsigned long>(tWrite - tOpen),
+      static_cast<unsigned long>(tClose - tWrite), static_cast<unsigned long>(tRm - tClose),
+      static_cast<unsigned long>(tRename - tRm), static_cast<unsigned long>(tRename - t0) + mkdirMs, renamed ? 1 : 0,
+      removed ? 1 : 0, reopened ? 1 : 0);
 
   if (!renamed) {
     LOG_ERR("PERSIST", "Failed to rename temp into place: %s", finalPath.c_str());

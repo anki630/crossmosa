@@ -6,7 +6,8 @@
 
 Txt::Txt(std::string path, std::string cacheBasePath)
     : filepath(std::move(path)), cacheBasePath(std::move(cacheBasePath)) {
-  // 共用檔柄的序列鎖（見 Txt.h）。在建構時建：第一次用時才建的話，兩個任務同時第一次進來會各建一次、蓋掉同一塊靜態儲存。
+  // 共用檔柄的序列鎖（見
+  // Txt.h）。在建構時建：第一次用時才建的話，兩個任務同時第一次進來會各建一次、蓋掉同一塊靜態儲存。
   // 物件不搬（unique_ptr 或區域變數），靜態儲存留在物件裡是安全的。
   fileMutex_ = xSemaphoreCreateRecursiveMutexStatic(&fileMutexStorage_);
   // Generate cache path from file path hash

@@ -222,10 +222,8 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
         // 條目 —— 這兩個都是普通的 member pointer Enum，所以自動涵蓋。
         // （踩過三次：v52 uiTheme、v53、v57 tiltPageTurn。）
         SettingInfo::Enum(StrId::STR_TEXT_DIRECTION, &CrossPointSettings::readerVerticalLayout,
-                          {StrId::STR_TEXT_DIR_HORIZONTAL, StrId::STR_TEXT_DIR_VERTICAL,
-                           StrId::STR_TEXT_DIR_PUBLISHER},
-                          "readerVerticalLayout",
-                          StrId::STR_CAT_READER)
+                          {StrId::STR_TEXT_DIR_HORIZONTAL, StrId::STR_TEXT_DIR_VERTICAL, StrId::STR_TEXT_DIR_PUBLISHER},
+                          "readerVerticalLayout", StrId::STR_CAT_READER)
             .withTextSettings(),
         SettingInfo::Enum(StrId::STR_LINE_SPACING, &CrossPointSettings::lineSpacing,
                           {StrId::STR_TIGHT, StrId::STR_NORMAL, StrId::STR_WIDE}, "lineSpacing", StrId::STR_CAT_READER)
@@ -275,10 +273,8 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
                           "imageRendering", StrId::STR_CAT_READER),
         // --- Controls ---
         SettingInfo::Enum(StrId::STR_SIDE_BTN_LAYOUT, &CrossPointSettings::sideButtonLayout,
-                          {StrId::STR_PREV_NEXT, StrId::STR_NEXT_PREV, StrId::STR_DISABLED,
-                           StrId::STR_SIDE_BTN_FOLLOW},
-                          "sideButtonLayout",
-                          StrId::STR_CAT_CONTROLS),
+                          {StrId::STR_PREV_NEXT, StrId::STR_NEXT_PREV, StrId::STR_DISABLED, StrId::STR_SIDE_BTN_FOLLOW},
+                          "sideButtonLayout", StrId::STR_CAT_CONTROLS),
         SettingInfo::Enum(StrId::STR_TOUCH_READER_CONTROLS, &CrossPointSettings::touchReaderControls,
                           {StrId::STR_STATE_OFF, StrId::STR_STATE_ON}, "touchReaderControls", StrId::STR_CAT_CONTROLS),
         SettingInfo::Toggle(StrId::STR_FRONT_BTN_FOLLOW_ORIENTATION, &CrossPointSettings::frontButtonFollowOrientation,
@@ -288,8 +284,8 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
                            StrId::STR_LONG_PRESS_BEHAVIOR_ORIENTATION},
                           "longPressButtonBehavior", StrId::STR_CAT_CONTROLS),
         SettingInfo::Enum(StrId::STR_LONG_PRESS_MENU, &CrossPointSettings::longPressMenuFunction,
-                          {StrId::STR_DISABLED, StrId::STR_BOOKMARK_OPTION},
-                          "longPressMenuFunction2", StrId::STR_CAT_CONTROLS),
+                          {StrId::STR_DISABLED, StrId::STR_BOOKMARK_OPTION}, "longPressMenuFunction2",
+                          StrId::STR_CAT_CONTROLS),
         SettingInfo::Enum(
             StrId::STR_SHORT_PWR_BTN, &CrossPointSettings::shortPwrBtn,
             {StrId::STR_IGNORE, StrId::STR_SLEEP, StrId::STR_PAGE_TURN, StrId::STR_FORCE_REFRESH, StrId::STR_FOOTNOTES},

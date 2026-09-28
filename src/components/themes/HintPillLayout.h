@@ -17,9 +17,9 @@
 namespace HintPillLayout {
 
 constexpr int kCount = 4;
-constexpr int kGap = 4;       // 兩個膠囊之間至少留的空
-constexpr int kEdge = 2;      // 離螢幕左右邊緣至少留的空
-constexpr int kTextPad = 6;   // 字到膠囊左右邊的最小內距（呼叫端算 need 時用）
+constexpr int kGap = 4;      // 兩個膠囊之間至少留的空
+constexpr int kEdge = 2;     // 離螢幕左右邊緣至少留的空
+constexpr int kTextPad = 6;  // 字到膠囊左右邊的最小內距（呼叫端算 need 時用）
 
 struct Pill {
   int x;

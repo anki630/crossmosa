@@ -16,8 +16,8 @@ namespace zhuyin {
 
 class ZhuyinEngine {
  public:
-  static constexpr size_t kWindowCap = 128;    // session 的解析窗口（碼位）
-  static constexpr size_t kQueueCap = 512;     // 佇列（漢字）：× 4 B ＝ 2 KB
+  static constexpr size_t kWindowCap = 128;  // session 的解析窗口（碼位）
+  static constexpr size_t kQueueCap = 512;   // 佇列（漢字）：× 4 B ＝ 2 KB
   static constexpr size_t kMaxArenaBlocks = 48;
   static constexpr size_t kMaxBlockBytes = 2048;  // 不變量 4：每塊配置 ≤ 2 KB
 
@@ -69,8 +69,9 @@ class ZhuyinEngine {
 
   BlockArena arena_;
   ZhuyinData data_;
-  bool prepared_ = false;         // 最近一次 prepare 完整成功（publish 的前提）
-  uint32_t preparedSerial_ = 0;   // 那時資料的狀態序號：之後資料被就地換過（例如經過 data() 重新載入）就不算（codex v339 第四輪）
+  bool prepared_ = false;  // 最近一次 prepare 完整成功（publish 的前提）
+  // 那時資料的狀態序號：之後資料被就地換過（例如經過 data() 重新載入）就不算（codex v339 第四輪）
+  uint32_t preparedSerial_ = 0;
   uint32_t* cps_ = nullptr;
   uint16_t* out_ = nullptr;
   uint8_t* covered_ = nullptr;

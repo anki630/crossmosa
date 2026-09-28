@@ -1,26 +1,25 @@
-#include <Arduino.h>
-#include <cstdarg>
 #include "ImageBlock.h"
 
+#include <Arduino.h>
 #include <Breadcrumb.h>
 #include <FontCacheManager.h>
 #include <GfxRenderer.h>
 #include <Logging.h>
 #include <Memory.h>
 #include <Serialization.h>
+#include <ZipFile.h>
 
 #include <algorithm>
+#include <cstdarg>
 #include <cstdlib>
 #include <cstring>
 #include <new>
 
-#include "Epub/converters/DirectPixelWriter.h"
-#include <ZipFile.h>
-
 #include "Epub/converters/DecodeFile.h"
 #include "Epub/converters/DecodeStats.h"
-#include "Epub/converters/ImageToFramebufferDecoder.h"
+#include "Epub/converters/DirectPixelWriter.h"
 #include "Epub/converters/ImageDecoderFactory.h"
+#include "Epub/converters/ImageToFramebufferDecoder.h"
 
 // Cache file format:
 // - uint16_t width
@@ -206,8 +205,8 @@ bool imageFailedThisSession(const std::string& path) {
     if (failedImageHashes[i] != hash) continue;
     // v191：同一頁 BW／灰階帶會重入 render，哨兵必須仍擋下來，否則一次翻頁抽十幾次。
     if (failedImageMaxAlloc[i] == IMAGE_FAILURE_RETRY_NEXT_RENDER) return true;
-    if (failedImageMaxAlloc[i] == 0) return true;                                      // 永久
-    if (failedImageRenderGen[i] == g_imageRenderGeneration) return true;               // v255：同一次畫頁不重試
+    if (failedImageMaxAlloc[i] == 0) return true;                         // 永久
+    if (failedImageRenderGen[i] == g_imageRenderGeneration) return true;  // v255：同一次畫頁不重試
     const uint32_t maxNow = ESP.getMaxAllocHeap();
     bool heapLooksBetter;
     if (failedImageNeedBytes[i] > 0) {
@@ -308,7 +307,8 @@ const uint8_t* pxcRowPtr(size_t rowStart, int bytesPerRow, uint8_t* tempRow) {
 //   - 配之前：剩餘總量 ≥ 這一塊＋24KB（載完的下限仍是 24KB，與原本「整張放得下」時相同）。
 //   - 配之後：最大塊仍 ≥ 8KB（之後才配的灰階帶狀暫存 X3 為 99×80＝7,920B）；不符就把這塊還回去、停。
 //     原本是配之前要求「最大塊 ≥ 這一塊＋8KB」，等於假設這塊一定從最大塊切 —— 上面那個堆只載得進 2 塊；
-//     直接檢查配完的結果可以載 3 塊（48KB），而且之後的暫存與串流緩衝都還配得到。剛切出來的塊立刻還回去會與鄰居合併，不留洞。
+//     直接檢查配完的結果可以載 3
+//     塊（48KB），而且之後的暫存與串流緩衝都還配得到。剛切出來的塊立刻還回去會與鄰居合併，不留洞。
 bool loadPxcSlot(uint64_t cacheHash, HalFile& cacheFile, uint16_t cachedWidth, uint16_t cachedHeight, int bytesPerRow) {
   releasePxcSlot();
   if (bytesPerRow > PXC_MAX_BYTES_PER_ROW || bytesPerRow <= 0) {
@@ -468,9 +468,8 @@ bool renderFromCache(GfxRenderer& renderer, const std::string& cachePath, int x,
     ImageBlock::pxcStats.ramPasses++;
     if (pxcSlotRows >= pxcSlotHeight) return true;
     // v249：部分載入 —— RAM 裡沒有的列從 SD 串流（載入那一趟留下的檔柄，只讀那一段）。
-    if (pxcTailFile &&
-        streamPxcRows(renderer, pxcTailFile, x, y, pxcSlotWidth, pxcSlotHeight, (pxcSlotWidth + 3) / 4, pxcSlotRows,
-                      true)) {
+    if (pxcTailFile && streamPxcRows(renderer, pxcTailFile, x, y, pxcSlotWidth, pxcSlotHeight, (pxcSlotWidth + 3) / 4,
+                                     pxcSlotRows, true)) {
       return true;
     }
     releasePxcSlot();  // 呼叫端接著會重新解碼、重寫這個快取檔 —— 先關掉握著的檔柄
@@ -562,7 +561,7 @@ void ImageBlock::clearRetryableFailures() {
 
 uint32_t ImageBlock::rememberedPlaceholderCount() { return rememberedPlaceholderCount_; }
 
-void ImageBlock::setDeferHeavyDecode(bool on) { deferHeavyDecode_ = on; }  // v193
+void ImageBlock::setDeferHeavyDecode(bool on) { deferHeavyDecode_ = on; }                   // v193
 void ImageBlock::setTransientRetryAllowed(const bool on) { g_transientRetryAllowed = on; }  // v256
 
 uint32_t ImageBlock::deferredDecodeCount() { return deferredDecodeCount_; }  // v193
@@ -611,7 +610,7 @@ void ImageBlock::render(GfxRenderer& renderer, const int x, const int y) {
 
   if (imageFailedThisSession(imagePath)) {
     noteFailure("render-remembered y=%d %s", y, imagePath.c_str());  // v256：y＝方框畫在哪（圖片位置的實機回報）
-    rememberedPlaceholderCount_++;  // v190：只加計數，身分由呼叫端綁定
+    rememberedPlaceholderCount_++;                                   // v190：只加計數，身分由呼叫端綁定
     renderPlaceholder(renderer, x, y);
     return;
   }
@@ -650,8 +649,8 @@ void ImageBlock::render(GfxRenderer& renderer, const int x, const int y) {
   uint32_t reliefMs = 0;
   uint32_t extractMs = 0;
   ZipStreamStats zipStats;  // v247 儀器：抽圖分解（沒有抽＝method 0xFFFF）
-  if (g_imageReliefFn && (ESP.getMaxAllocHeap() < IMAGE_RENDER_RELIEF_MAX_ALLOC ||
-                          ESP.getFreeHeap() < IMAGE_RENDER_RELIEF_MIN_FREE)) {
+  if (g_imageReliefFn &&
+      (ESP.getMaxAllocHeap() < IMAGE_RENDER_RELIEF_MAX_ALLOC || ESP.getFreeHeap() < IMAGE_RENDER_RELIEF_MIN_FREE)) {
     const uint32_t t = millis();
     g_imageReliefFn(g_imageReliefCtx);
     relief.active = true;
@@ -684,8 +683,8 @@ void ImageBlock::render(GfxRenderer& renderer, const int x, const int y) {
              static_cast<unsigned>(st.readUs / 1000), static_cast<unsigned>(st.readCalls),
              static_cast<unsigned>(st.writeUs / 1000), static_cast<unsigned>(st.writeCalls),
              static_cast<unsigned>(st.yieldUs / 1000), static_cast<unsigned>(st.yields),
-             static_cast<unsigned>(st.finalizeUs / 1000), static_cast<unsigned>(st.streamRestarts), ok ? 1u : 0u, y, src,
-             base);
+             static_cast<unsigned>(st.finalizeUs / 1000), static_cast<unsigned>(st.streamRestarts), ok ? 1u : 0u, y,
+             src, base);
     breadcrumbPublish(lastDecodeWitness, sizeof(lastDecodeWitness), local);
   };
   const auto makeConfig = [&]() {
@@ -708,8 +707,8 @@ void ImageBlock::render(GfxRenderer& renderer, const int x, const int y) {
   char streamNote[48] = "sd";
   if (!srcPath.empty() && streamOpenFn && extractFn && !Storage.exists(imagePath.c_str())) {
     ImageToFramebufferDecoder* sdecoder = ImageDecoderFactory::getDecoder(imagePath);
-    const bool streamable = sdecoder && (strcmp(sdecoder->getFormatName(), "JPEG") == 0 ||
-                                         strcmp(sdecoder->getFormatName(), "PNG") == 0);
+    const bool streamable =
+        sdecoder && (strcmp(sdecoder->getFormatName(), "JPEG") == 0 || strcmp(sdecoder->getFormatName(), "PNG") == 0);
     if (streamable) {
       const RenderConfig sconfig = makeConfig();
       ImageToFramebufferDecoder::clearLastError();
@@ -736,9 +735,11 @@ void ImageBlock::render(GfxRenderer& renderer, const int x, const int y) {
         return;
       }
       if (g_decodeStats.streamOpenFailed) {
-        // v250：fb:open:s<步驟>@<失敗當下最大塊 bytes>（步驟見 ZipStreamStats::openFailStage；0＝不是 ZipEntryReader 擋的）。
+        // v250：fb:open:s<步驟>@<失敗當下最大塊 bytes>（步驟見 ZipStreamStats::openFailStage；0＝不是 ZipEntryReader
+        // 擋的）。
         //   用 bytes 不用 KB：這條要看的邊界只差幾十 bytes（codex 複查）。
-        snprintf(streamNote, sizeof(streamNote), "fb:open:s%u@%u", static_cast<unsigned>(g_zipStreamStats.openFailStage),
+        snprintf(streamNote, sizeof(streamNote), "fb:open:s%u@%u",
+                 static_cast<unsigned>(g_zipStreamStats.openFailStage),
                  static_cast<unsigned>(g_zipStreamStats.openFailMax));
       } else {
         snprintf(streamNote, sizeof(streamNote), "fb:%s",
@@ -762,7 +763,8 @@ void ImageBlock::render(GfxRenderer& renderer, const int x, const int y) {
       // 印的是【來源路徑】（EPUB 內的項目名），那才是能拿去對書查的東西。
       Storage.remove(imagePath.c_str());
       const unsigned n = bumpOpenFailN(imagePath);
-      // v251：s<步驟>@<失敗當下最大塊 bytes>（ZipFile::readFileToStream 的 noteExtractFail；s0＝zip 之前就失敗，例如開不了輸出檔）、
+      // v251：s<步驟>@<失敗當下最大塊 bytes>（ZipFile::readFileToStream 的 noteExtractFail；s0＝zip
+      // 之前就失敗，例如開不了輸出檔）、
       //   st=前面「直接從書裡解碼」那次的結果（IMGDEC 在抽圖失敗時不會印，這是唯一看得到它的地方）。
       noteFailure("render-extract n=%u s%u@%u st=%s %s", n, static_cast<unsigned>(zipStats.openFailStage),
                   static_cast<unsigned>(zipStats.openFailMax), streamNote, srcPath.c_str());
@@ -831,11 +833,10 @@ void ImageBlock::render(GfxRenderer& renderer, const int x, const int y) {
     noteFailure("render-decode %s tr=%u max=%u free=%u %s", ImageToFramebufferDecoder::lastError,
                 ImageToFramebufferDecoder::lastErrorTransient ? 1u : 0u, static_cast<unsigned>(ESP.getMaxAllocHeap()),
                 static_cast<unsigned>(ESP.getFreeHeap()), imagePath.c_str());
-    rememberImageFailure(imagePath,
-                         ImageToFramebufferDecoder::lastErrorTransient
-                             ? std::max(2u, static_cast<unsigned>(ESP.getMaxAllocHeap()))
-                             : 0u,
-                         ImageToFramebufferDecoder::lastErrorTransient ? ImageToFramebufferDecoder::lastErrorNeedBytes : 0u);
+    rememberImageFailure(
+        imagePath,
+        ImageToFramebufferDecoder::lastErrorTransient ? std::max(2u, static_cast<unsigned>(ESP.getMaxAllocHeap())) : 0u,
+        ImageToFramebufferDecoder::lastErrorTransient ? ImageToFramebufferDecoder::lastErrorNeedBytes : 0u);
     renderPlaceholder(renderer, x, y);
     return;
   }

@@ -3,10 +3,9 @@
 #include <FontDecompressor.h>
 #include <Logging.h>
 #include <SdCardFont.h>
+#include <esp_heap_caps.h>
 
 #include <cstring>
-
-#include <esp_heap_caps.h>
 
 namespace {
 
@@ -73,9 +72,8 @@ void FontCacheManager::prewarmCache(int fontId, const char* utf8Text, uint8_t st
   prewarmCacheImpl(fontId, utf8Text, styleMask, nullptr, nullptr);
 }
 
-FontCacheManager::PrewarmOutcome FontCacheManager::prewarmCacheImpl(int fontId, const char* utf8Text,
-                                                                    uint8_t styleMask, bool (*shouldAbort)(void*),
-                                                                    void* abortCtx) {
+FontCacheManager::PrewarmOutcome FontCacheManager::prewarmCacheImpl(int fontId, const char* utf8Text, uint8_t styleMask,
+                                                                    bool (*shouldAbort)(void*), void* abortCtx) {
   // v110:快取被直接改寫 ⇒ 舊身分失效。採用(adopt)永遠是之後由呼叫端顯式做。
   warmIdentity_.invalidate();
 

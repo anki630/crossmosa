@@ -114,7 +114,11 @@ class ChunkSource final : public zhuyin::ByteSource {
   using ReadExactFn = bool (*)(void* ctx, size_t offset, uint8_t* dst, size_t len);
   ChunkSource(const uint8_t* chunk, size_t chunkStart, size_t chunkLen, size_t fileSize, ReadExactFn readExact,
               void* ctx)
-      : chunk_(chunk), chunkStart_(chunkStart), chunkLen_(chunkLen), fileSize_(fileSize), readExact_(readExact),
+      : chunk_(chunk),
+        chunkStart_(chunkStart),
+        chunkLen_(chunkLen),
+        fileSize_(fileSize),
+        readExact_(readExact),
         ctx_(ctx) {}
   size_t size() const override { return fileSize_; }
   bool read(size_t offset, uint8_t* dst, size_t len) override;
@@ -131,7 +135,7 @@ class ChunkSource final : public zhuyin::ByteSource {
 // `chunk` 是從當前頁起點讀進來的一塊原文（不必以行邊界結束）。
 // `atEof`：chunk 的結尾就是檔尾。
 // `startsMidParagraph`：這一頁是從段落中間開始的（前一個位元組不是 '\n'）→ 續排，不縮排。
-Result layoutPage(const char* chunk, size_t chunkLen, bool atEof, bool startsMidParagraph,
-                  const GfxRenderer& renderer, const Params& params);
+Result layoutPage(const char* chunk, size_t chunkLen, bool atEof, bool startsMidParagraph, const GfxRenderer& renderer,
+                  const Params& params);
 
 }  // namespace txtengine

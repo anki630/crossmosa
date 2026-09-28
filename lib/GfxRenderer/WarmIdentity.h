@@ -15,11 +15,11 @@
 //     不靠呼叫點自覺)。
 //   - matches() 要求雙方 valid;預設建構 = invalid = 永不相符。
 struct WarmIdentity {
-  uint32_t bookHash = 0;             // fnv1a(epub->getCachePath())
+  uint32_t bookHash = 0;  // fnv1a(epub->getCachePath())
   int32_t spineIndex = -1;
   int32_t pageNumber = -1;
   int32_t fontId = 0;
-  uint16_t viewportWidth = 0;        // 已折入方向/邊距/狀態列/自動翻頁指示
+  uint16_t viewportWidth = 0;  // 已折入方向/邊距/狀態列/自動翻頁指示
   uint16_t viewportHeight = 0;
   // v284：記的是**解析後的實際行距（像素）**，不是使用者設定的 em 倍數。
   // ⚠️ 設定一樣但字身框量測結果不同時，版面其實不同 —— 只比設定會沿用錯的暖頁
@@ -36,7 +36,10 @@ struct WarmIdentity {
 
   static uint32_t fnv1a(const char* s) {
     uint32_t h = 2166136261u;
-    for (; *s; s++) { h ^= static_cast<uint8_t>(*s); h *= 16777619u; }
+    for (; *s; s++) {
+      h ^= static_cast<uint8_t>(*s);
+      h *= 16777619u;
+    }
     return h;
   }
   static uint32_t floatBits(float f) {
@@ -79,14 +82,17 @@ struct WarmIdentity {
     if (boldBodyText != cur.boldBodyText) m |= 1u << 15;
     return m;
   }
-  // v313 證人用：緊湊字串（約 55 字元）。o = align(2b) | imgR(2b)<<2 | extra<<4 | hyph<<5 | embed<<6 | focus<<7 | bold<<8。
+  // v313 證人用：緊湊字串（約 55 字元）。o = align(2b) | imgR(2b)<<2 | extra<<4 | hyph<<5 | embed<<6 | focus<<7 |
+  // bold<<8。
   int format(char* out, size_t n) const {
-    const unsigned o = (paragraphAlignment & 3u) | ((imageRendering & 3u) << 2) | (extraParagraphSpacing ? 1u << 4 : 0) |
-                       (hyphenationEnabled ? 1u << 5 : 0) | (embeddedStyle ? 1u << 6 : 0) |
-                       (focusReadingEnabled ? 1u << 7 : 0) | (boldBodyText ? 1u << 8 : 0);
-    return snprintf(out, n, "b:%08lx/s:%ld/p:%ld/f:%ld/wh:%ux%u/lh:%08lx/o:%03x/v:%d", static_cast<unsigned long>(bookHash),
-                    static_cast<long>(spineIndex), static_cast<long>(pageNumber), static_cast<long>(fontId),
-                    static_cast<unsigned>(viewportWidth), static_cast<unsigned>(viewportHeight),
-                    static_cast<unsigned long>(lineHeightEmBits), o, valid ? 1 : 0);
+    const unsigned o = (paragraphAlignment & 3u) | ((imageRendering & 3u) << 2) |
+                       (extraParagraphSpacing ? 1u << 4 : 0) | (hyphenationEnabled ? 1u << 5 : 0) |
+                       (embeddedStyle ? 1u << 6 : 0) | (focusReadingEnabled ? 1u << 7 : 0) |
+                       (boldBodyText ? 1u << 8 : 0);
+    return snprintf(out, n, "b:%08lx/s:%ld/p:%ld/f:%ld/wh:%ux%u/lh:%08lx/o:%03x/v:%d",
+                    static_cast<unsigned long>(bookHash), static_cast<long>(spineIndex), static_cast<long>(pageNumber),
+                    static_cast<long>(fontId), static_cast<unsigned>(viewportWidth),
+                    static_cast<unsigned>(viewportHeight), static_cast<unsigned long>(lineHeightEmBits), o,
+                    valid ? 1 : 0);
   }
 };

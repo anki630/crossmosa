@@ -191,9 +191,9 @@ bool BookMetadataCache::buildBookBin(const std::string& epubPath, const BookMeta
   serialization::BufferedFileReader spineIn(spineFile, BUILD_IO_BUFFER_SIZE);
   serialization::BufferedFileReader tocIn(tocFile, BUILD_IO_BUFFER_SIZE);
 
-  constexpr uint32_t headerASize =
-      sizeof(BOOK_CACHE_VERSION) + /* LUT Offset */ sizeof(uint32_t) + sizeof(spineCount) + sizeof(tocCount) +
-      /* pageProgressionRtl */ sizeof(uint8_t);
+  constexpr uint32_t headerASize = sizeof(BOOK_CACHE_VERSION) + /* LUT Offset */ sizeof(uint32_t) + sizeof(spineCount) +
+                                   sizeof(tocCount) +
+                                   /* pageProgressionRtl */ sizeof(uint8_t);
   const uint32_t metadataSize = metadata.title.size() + metadata.author.size() + metadata.language.size() +
                                 metadata.coverItemHref.size() + metadata.textReferenceHref.size() +
                                 sizeof(uint32_t) * 5;

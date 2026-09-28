@@ -16,7 +16,6 @@ constexpr char MEDIA_TYPE_CSS[] = "text/css";
 constexpr char MEDIA_TYPE_IMAGE_PREFIX[] = "image/";
 constexpr char itemCacheFile[] = "/.items.bin";
 
-
 bool startsWithImageMediaType(const std::string& mediaType) {
   constexpr size_t prefixLen = sizeof(MEDIA_TYPE_IMAGE_PREFIX) - 1;
   if (mediaType.size() < prefixLen) {
@@ -80,7 +79,8 @@ size_t ContentOpfParser::write(const uint8_t* buffer, const size_t size) {
     memcpy(buf, currentBufferPos, toRead);
     // v345（帳本 D14）：交給 expat 的是濾掉控制字元之後的長度；下面的剩餘量照原始長度算
 
-    if (XML_ParseBuffer(parser, static_cast<int>(xmlFilter_.apply(static_cast<char*>(buf), toRead)), remainingSize == toRead) == XML_STATUS_ERROR) {
+    if (XML_ParseBuffer(parser, static_cast<int>(xmlFilter_.apply(static_cast<char*>(buf), toRead)),
+                        remainingSize == toRead) == XML_STATUS_ERROR) {
       LOG_DBG("COF", "Parse error at line %lu: %s", XML_GetCurrentLineNumber(parser),
               XML_ErrorString(XML_GetErrorCode(parser)));
       destroyXmlParser(parser);

@@ -155,14 +155,16 @@ class Section {
   uint16_t builtPageCount() const { return builtPageCount_; }
   // v189 儀器（B-22：盲區要量不要猜）：單一 parseStep 的最長／累計耗時與步數。
   // lib 不能反向依賴 DiagLog，所以 lib 記、活動讀（與 Page::footnoteDrops 同型）。由活動歸零。
-  static uint32_t buildStepMaxMs;   // 最長一步（含收尾那一步），ms
+  static uint32_t buildStepMaxMs;    // 最長一步（含收尾那一步），ms
   static uint32_t buildStepTotalUs;  // 累計，µs（millis 解析度會把 <1ms 的步算成 0）
   static uint32_t buildStepCount;
-  // 注音（P2 I6）：每一步之後量到的最低 free，與那一刻的最大連續塊（同上：lib 記、活動讀；buildMinFree 歸零成 UINT32_MAX）。
+  // 注音（P2 I6）：每一步之後量到的最低 free，與那一刻的最大連續塊（同上：lib 記、活動讀；buildMinFree 歸零成
+  // UINT32_MAX）。
   //   引擎常駐約 23 KB → 同一本書注音字型與一般字型對照，看建置的谷底低了多少、有沒有逼近 lowmem。
   static uint32_t buildMinFree;
   static uint32_t buildLargestAtMinFree;
-  // 這次（或上一次）建置的注音模式：0 不是注音字型、1 開、2 沒開（建置開始時引擎不可用）、3 途中降級（提交時補成「沒注音」）
+  // 這次（或上一次）建置的注音模式：0 不是注音字型、1 開、2 沒開（建置開始時引擎不可用）、3
+  // 途中降級（提交時補成「沒注音」）
   uint8_t zhuyinBuildMode() const {
     if (!zyHeaderOn_) return 0;
     if (!zyBuildOn_) return 2;

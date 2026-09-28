@@ -1,7 +1,5 @@
 #include "WifiSelectionActivity.h"
 
-#include "util/DiagLog.h"
-
 #include <GfxRenderer.h>
 #include <HalClock.h>
 #include <I18n.h>
@@ -16,6 +14,7 @@
 #include "activities/util/KeyboardEntryActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "util/DiagLog.h"
 
 void WifiSelectionActivity::onEnter() {
   Activity::onEnter();
@@ -375,9 +374,8 @@ void WifiSelectionActivity::attemptConnection() {
   requestUpdate();
   // 連線前的堆狀態是頭號嫌疑（讀完書再連 WiFi，p2 最大連續塊可能已不夠 WiFi 堆疊配置）。
   DiagLog::mem("wifi-connect");
-  DiagLog::line("WIFI connect ssid=%s auto=%d saved=%d cpu=%u", selectedSSID.c_str(),
-                static_cast<int>(autoConnecting), static_cast<int>(usedSavedPassword),
-                static_cast<unsigned>(getCpuFrequencyMhz()));
+  DiagLog::line("WIFI connect ssid=%s auto=%d saved=%d cpu=%u", selectedSSID.c_str(), static_cast<int>(autoConnecting),
+                static_cast<int>(usedSavedPassword), static_cast<unsigned>(getCpuFrequencyMhz()));
 
   WiFi.persistent(false);  // Credentials are managed by WifiCredentialStore; suppress SDK NVS auto-connect
   WiFi.mode(WIFI_STA);
@@ -453,7 +451,8 @@ void WifiSelectionActivity::checkConnectionStatus() {
         SETTINGS.saveToFile();
       }
     } else if (halClock.isAvailable() && clkState != HalClock::State::Ok) {
-      DiagLog::line("WIFI ntp skip=backoff st=%s year=%u", HalClock::stateName(clkState), static_cast<unsigned>(clkYear));
+      DiagLog::line("WIFI ntp skip=backoff st=%s year=%u", HalClock::stateName(clkState),
+                    static_cast<unsigned>(clkYear));
     }
 
     // Save this as the last connected network - SD card operations need lock as

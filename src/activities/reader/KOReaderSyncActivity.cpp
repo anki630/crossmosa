@@ -1,6 +1,6 @@
 #include "KOReaderSyncActivity.h"
-#include <DataDir.h>
 
+#include <DataDir.h>
 #include <GfxRenderer.h>
 #include <HalStorage.h>
 #include <I18n.h>

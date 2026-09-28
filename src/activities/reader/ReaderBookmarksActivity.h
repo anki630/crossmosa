@@ -23,7 +23,7 @@ class ReaderBookmarksActivity final : public Activity {
 
  public:
   explicit ReaderBookmarksActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
-                                       const std::shared_ptr<Epub>& epub, const std::string& epubPath)
+                                   const std::shared_ptr<Epub>& epub, const std::string& epubPath)
       : Activity("EpubReaderBookmarks", renderer, mappedInput), epub(epub), epubPath(epubPath) {}
   void onEnter() override;
   void onExit() override;

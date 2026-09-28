@@ -1,7 +1,8 @@
 #include "ProtectedPath.h"
 
-#include <cstring>
 #include <strings.h>  // strncasecmp -- see isProtectedNameView
+
+#include <cstring>
 
 namespace ProtectedPath {
 

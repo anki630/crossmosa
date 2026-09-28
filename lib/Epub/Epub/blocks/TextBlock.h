@@ -78,8 +78,7 @@ class TextBlock final : public Block {
   // 否則 nullptr（整行畫原字）
   const zhuyin::Swap* drawableSwaps(int fontId, uint16_t* n) const;
   // 第 i 個字詞要交給字型的字串：有替換就換好放進 buf（next 往前走），否則原字串
-  const char* drawnWord(uint16_t i, const zhuyin::Swap* swaps, uint16_t n, uint16_t& next, char* buf,
-                        size_t cap) const;
+  const char* drawnWord(uint16_t i, const zhuyin::Swap* swaps, uint16_t n, uint16_t& next, char* buf, size_t cap) const;
 
  public:
   // Flatten-on-construct: copies the layout-time vectors into the arena; the
@@ -119,10 +118,10 @@ class TextBlock final : public Block {
   void renderVertical(const GfxRenderer& renderer, int fontId, int x, int y) const;
   BlockType getType() override { return TEXT_BLOCK; }
   bool serialize(HalFile& file) const;
-  // zhuyinSwaps／binding ＝ 章節檔標籤 4 的 PageLine 在本體之前寫的筆數與綁定（Page.cpp 驗過筆數）：本體之後接著讀那麼多筆＋CRC。
-  // 0 ＝ 標籤 1（跟以前一模一樣）。完整性不過（讀不到、CRC 不符）→ nullptr（這一頁壞了）；
-  // 完整性過了但掛不上（沒有引擎、綁定不同、太大、配不到記憶體、歸屬不過）→ 這一行不換。
-  // place ＝ 要載入的是章節裡的哪一頁（綁定要跟它相同）。
+  // zhuyinSwaps／binding ＝ 章節檔標籤 4 的 PageLine 在本體之前寫的筆數與綁定（Page.cpp
+  // 驗過筆數）：本體之後接著讀那麼多筆＋CRC。 0 ＝ 標籤 1（跟以前一模一樣）。完整性不過（讀不到、CRC 不符）→
+  // nullptr（這一頁壞了）； 完整性過了但掛不上（沒有引擎、綁定不同、太大、配不到記憶體、歸屬不過）→ 這一行不換。 place
+  // ＝ 要載入的是章節裡的哪一頁（綁定要跟它相同）。
   static std::unique_ptr<TextBlock> deserialize(HalFile& file, uint16_t zhuyinSwaps = 0,
                                                 const uint8_t* binding = nullptr, const zhuyin::PagePlace& place = {});
 

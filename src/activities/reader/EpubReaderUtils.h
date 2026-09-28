@@ -6,7 +6,6 @@
 #include <optional>
 
 #include "ProgressFile.h"
-
 #include "util/NvsStore.h"
 
 namespace EpubReaderUtils {

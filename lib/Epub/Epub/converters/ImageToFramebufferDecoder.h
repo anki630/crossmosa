@@ -39,8 +39,9 @@ class ImageToFramebufferDecoder {
   static char lastError[64];
   static bool lastErrorTransient;
   // v255：配置失敗時「那一塊要多大」（bytes；0＝不是單一配置失敗）。ImageBlock 用它決定何時重試：
-  //   原本看「最大塊 ≥ 失敗當時的最大塊＋8KB」，v254 實機一張 PNG 差 1KB 失敗後，其後最大塊 41–49KB（夠了）卻門檻 46.9KB，
-  //   章首圖整個 session 是方框。setLastError 會把它歸零，配置失敗的出口在 setLastError 之後另設。
+  //   原本看「最大塊 ≥ 失敗當時的最大塊＋8KB」，v254 實機一張 PNG 差 1KB 失敗後，其後最大塊
+  //   41–49KB（夠了）卻門檻 46.9KB， 章首圖整個 session 是方框。setLastError 會把它歸零，配置失敗的出口在 setLastError
+  //   之後另設。
   static uint32_t lastErrorNeedBytes;
   static void setLastError(bool transient, const char* fmt, ...) __attribute__((format(printf, 2, 3)));
   static void clearLastError() {
@@ -101,10 +102,9 @@ class ImageToFramebufferDecoder {
 
  private:
   inline static std::atomic<uint32_t> inputSeq_{0};
-  inline static uint32_t armedSeq_ = 0;       // render task 專用（arm 與檢查在同一個 task）
+  inline static uint32_t armedSeq_ = 0;         // render task 專用（arm 與檢查在同一個 task）
   inline static bool inputAbortArmed_ = false;  // 同上
 
  protected:
-
   void warnUnsupportedFeature(const std::string& feature, const std::string& imagePath);
 };

@@ -1,9 +1,10 @@
-#include <cstdarg>
-#include <cstdio>
 #include "ImageToFramebufferDecoder.h"
 
 #include <Arduino.h>
 #include <Logging.h>
+
+#include <cstdarg>
+#include <cstdio>
 
 #include "DecodeStats.h"
 
@@ -31,7 +32,8 @@ bool ImageToFramebufferDecoder::validateAndStoreDimensions(const int64_t width, 
   }
   if (width > MAX_SOURCE_DIMENSION || height > MAX_SOURCE_DIMENSION) {
     LOG_ERR("IMG", "%s dimensions exceed supported limit: %lldx%lld (max %lld per dimension)", format,
-            static_cast<long long>(width), static_cast<long long>(height), static_cast<long long>(MAX_SOURCE_DIMENSION));
+            static_cast<long long>(width), static_cast<long long>(height),
+            static_cast<long long>(MAX_SOURCE_DIMENSION));
     setLastError(false, "%s-axis %lldx%lld", format, static_cast<long long>(width), static_cast<long long>(height));
     return false;
   }

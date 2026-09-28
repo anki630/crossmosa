@@ -1,9 +1,5 @@
 #include "Epub.h"
 
-#include <cstring>
-
-#include <esp_heap_caps.h>
-
 #include <FsHelpers.h>
 #include <HalStorage.h>
 #include <JpegToBmpConverter.h>
@@ -13,6 +9,9 @@
 #include <Utf8.h>
 #include <ZipEntryReader.h>
 #include <ZipFile.h>
+#include <esp_heap_caps.h>
+
+#include <cstring>
 
 #include "Epub/converters/ReadAheadCore.h"
 #include "Epub/parsers/ContainerParser.h"
@@ -576,8 +575,7 @@ bool Epub::hasRtlPageProgression() const {
   //    的內建字型與介面翻譯，所以這不是假想的情境）。
   //    → 明確排除由右至左【書寫】的語言。判斷用 `dc:language` 的主要子標籤。
   const std::string& lang = getLanguage();
-  static constexpr const char* kRtlScriptLangs[] = {"he", "iw", "ar", "fa", "ur", "yi",
-                                                    "ps", "sd", "dv", "ug", "ku"};
+  static constexpr const char* kRtlScriptLangs[] = {"he", "iw", "ar", "fa", "ur", "yi", "ps", "sd", "dv", "ug", "ku"};
   for (const char* code : kRtlScriptLangs) {
     const size_t n = strlen(code);
     if (lang.size() >= n && strncasecmp(lang.c_str(), code, n) == 0 &&
@@ -703,7 +701,9 @@ int32_t thumbZipRead(void* ctx, uint8_t* buf, int32_t len) {
   return static_cast<ThumbZipSource*>(ctx)->ra.read(buf, static_cast<size_t>(len));
 }
 
-bool thumbZipSeek(void* ctx, int32_t pos) { return static_cast<ThumbZipSource*>(ctx)->ra.seek(static_cast<size_t>(pos)); }
+bool thumbZipSeek(void* ctx, int32_t pos) {
+  return static_cast<ThumbZipSource*>(ctx)->ra.seek(static_cast<size_t>(pos));
+}
 }  // namespace
 
 bool Epub::generateThumbBmp(int height, const bool deferSdFallbackOnMemory) const {
@@ -733,8 +733,8 @@ bool Epub::generateThumbBmp(int height, const bool deferSdFallbackOnMemory) cons
       // Explicit close() required before the Storage.remove() below.
       existing.close();
     }
-    const bool coverKnown = bookMetadataCache && bookMetadataCache->isLoaded() &&
-                            !bookMetadataCache->coreMetadata.coverItemHref.empty();
+    const bool coverKnown =
+        bookMetadataCache && bookMetadataCache->isLoaded() && !bookMetadataCache->coreMetadata.coverItemHref.empty();
     if (!emptyMarker || !coverKnown) {
       thumbStats_.src = "exists";
       return true;
@@ -764,17 +764,19 @@ bool Epub::generateThumbBmp(int height, const bool deferSdFallbackOnMemory) cons
     LOG_DBG("EBP", "Generating thumb BMP from JPG cover image");
     // Use smaller target size for Continue Reading card (half of screen: 240x400)
     // Generate 1-bit BMP for fast home screen rendering (no gray passes needed)
-    const int THUMB_TARGET_WIDTH = (height * 2 + 1) / 3;  // v174：2:3（Kobo 1600×2400／紙本 6×9）；0.6 太瘦，標準封面左右各裁 5%
+    // v174：2:3（Kobo 1600×2400／紙本 6×9）；0.6 太瘦，標準封面左右各裁 5%
+    const int THUMB_TARGET_WIDTH = (height * 2 + 1) / 3;
     const int THUMB_TARGET_HEIGHT = height;
 
     // v258（diag257：開過書回主畫面「載入中」6–8 秒）：原本先把封面整個抽到 SD 暫存檔再讀回來解碼
     //   （v247 實機同一張 672KB 封面：抽＋寫 SD 約 2.7 秒、讀回 1.1 秒）。改成先試直接從書裡串流，
     //   與閱讀器 v248 的圖片同一條讀取器。開不起來（記憶體）、讀檔出錯、或轉檔器因記憶體放棄 → 退回下面的舊路。
     //   解碼器自己判定壞圖（不是 I/O、不是記憶體）就不退回：同一張圖從 SD 解也一樣壞，退回只是每次進主畫面做兩次。
-    //   codex（記憶體）：串流的峰值＝項目讀取器約 49KB（解壓狀態 8,364＋視窗 32,768＋讀取緩衝 ≤8KB）＋預讀（有餘裕才配）
-    //   ＋轉檔器的第一段門檻（v259 起縮圖路徑＝解碼器 20KB＋保留 16KB）。開之前先量：連這個都不夠就直接走舊路。
-    //   精確的需求要讀完 JPEG 檔頭才知道（轉檔器第二段門檻）；那一段沒過的代價只有開讀取器＋讀檔頭（約 0.1 秒）再退回。
-    //   v259：diag258 有一本在這裡沒過（當時門檻 109KB）→ 退回舊路 6.7 秒；檢查當下與開讀取器之後的數字都記進證人。
+    //   codex（記憶體）：串流的峰值＝項目讀取器約 49KB（解壓狀態 8,364＋視窗 32,768＋讀取緩衝
+    //   ≤8KB）＋預讀（有餘裕才配） ＋轉檔器的第一段門檻（v259 起縮圖路徑＝解碼器 20KB＋保留
+    //   16KB）。開之前先量：連這個都不夠就直接走舊路。 精確的需求要讀完 JPEG
+    //   檔頭才知道（轉檔器第二段門檻）；那一段沒過的代價只有開讀取器＋讀檔頭（約 0.1 秒）再退回。 v259：diag258
+    //   有一本在這裡沒過（當時門檻 109KB）→ 退回舊路 6.7 秒；檢查當下與開讀取器之後的數字都記進證人。
     constexpr size_t kStreamPeakFree = 49 * 1024 + 36 * 1024;
     constexpr size_t kStreamMinLargest = 40 * 1024;  // 32KB 解壓視窗要一整塊
     const uint32_t zipT0 = millis();
@@ -791,14 +793,16 @@ bool Epub::generateThumbBmp(int height, const bool deferSdFallbackOnMemory) cons
       if (!opened) {
         thumbStats_.note = "open";
       } else if (zs->zip.size() > 0x7FFFFFFFu) {
-        // codex 第二輪：這種項目【不能】退回舊路（舊路會把它整個抽到 SD）。直接判失敗；轉檔器本來就只收 2048×3072 以內的圖。
+        // codex 第二輪：這種項目【不能】退回舊路（舊路會把它整個抽到 SD）。直接判失敗；轉檔器本來就只收 2048×3072
+        // 以內的圖。
         thumbStats_.src = "zip";
         thumbStats_.note = "size";
         thumbFailReason_ = "jpg-too-big";
         return false;
       } else {
         const size_t itemSize = zs->zip.size();
-        // 預讀緩衝：最多 16KB。同時看最大塊（留 32KB 給之後才配的解碼器緩衝）與總量（留 52KB＋8KB 給轉檔器的總量檢查）；
+        // 預讀緩衝：最多 16KB。同時看最大塊（留 32KB 給之後才配的解碼器緩衝）與總量（留 52KB＋8KB
+        // 給轉檔器的總量檢查）；
         //   配不到就直讀（cap=0）。
         constexpr size_t kMaxReadAhead = 16 * 1024;
         constexpr size_t kMinReadAhead = 4 * 1024;
@@ -835,7 +839,8 @@ bool Epub::generateThumbBmp(int height, const bool deferSdFallbackOnMemory) cons
         thumbStats_.converted = true;
         bool success = JpegToBmpConverter::jpegSourceTo1BitBmpStreamWithSize(source, thumbBmp, THUMB_TARGET_WIDTH,
                                                                              THUMB_TARGET_HEIGHT);
-        // 解碼器常在 EOI 就停：把項目剩下的部分解完，確認沒有截斷、沒有讀錯（同 v248 verifyActiveDecodeSourceComplete）。
+        // 解碼器常在 EOI 就停：把項目剩下的部分解完，確認沒有截斷、沒有讀錯（同 v248
+        // verifyActiveDecodeSourceComplete）。
         const bool ioError = zs->ra.hadError() || zs->zip.hadError() || (success && !zs->zip.verifyComplete());
         if (ioError) success = false;
         thumbStats_.convMs = millis() - convT0;
@@ -933,7 +938,8 @@ bool Epub::generateThumbBmp(int height, const bool deferSdFallbackOnMemory) cons
       thumbFailReason_ = "png-thumb-open";
       return false;
     }
-    int THUMB_TARGET_WIDTH = (height * 2 + 1) / 3;  // v174：2:3（Kobo 1600×2400／紙本 6×9）；0.6 太瘦，標準封面左右各裁 5%
+    // v174：2:3（Kobo 1600×2400／紙本 6×9）；0.6 太瘦，標準封面左右各裁 5%
+    int THUMB_TARGET_WIDTH = (height * 2 + 1) / 3;
     int THUMB_TARGET_HEIGHT = height;
     const bool success =
         PngToBmpConverter::pngFileTo1BitBmpStreamWithSize(coverPng, thumbBmp, THUMB_TARGET_WIDTH, THUMB_TARGET_HEIGHT);

@@ -31,7 +31,8 @@ int sectionIdentity(const int fontId, const uint32_t zhuyinIdentity) {
   uint32_t h = fnv(kFnvBasis, 0x4449595Au, 4);  // "ZYID"
   h = fnv(h, static_cast<uint32_t>(fontId), 4);
   h = fnv(h, zhuyinIdentity, 4);
-  // 留下引擎身分的最低兩個位元（模式）：同一個字型的開與關的章節身分【構造上】就不同，也永遠不是 0（0 是「找不到字型」的哨兵）
+  // 留下引擎身分的最低兩個位元（模式）：同一個字型的開與關的章節身分【構造上】就不同，也永遠不是 0（0
+  // 是「找不到字型」的哨兵）
   h = (h & ~3u) | (zhuyinIdentity & 3u);
   if (h == static_cast<uint32_t>(fontId)) h ^= 4u;  // 跟非注音的同一個字型永遠不同（動第 2 位元，不動模式）
   return static_cast<int>(h);

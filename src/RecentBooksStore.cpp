@@ -1,6 +1,6 @@
 #include "RecentBooksStore.h"
-#include <DataDir.h>
 
+#include <DataDir.h>
 #include <Epub.h>
 #include <FsHelpers.h>
 #include <HalStorage.h>
@@ -96,8 +96,7 @@ void RecentBooksStore::updateBook(const std::string& path, const std::string& ti
 }
 
 void RecentBooksStore::setProgress(const std::string& path, const uint8_t progressPercent) {
-  auto it = std::find_if(recentBooks.begin(), recentBooks.end(),
-                         [&](const RecentBook& b) { return b.path == path; });
+  auto it = std::find_if(recentBooks.begin(), recentBooks.end(), [&](const RecentBook& b) { return b.path == path; });
   if (it != recentBooks.end() && it->progressPercent != progressPercent) {
     it->progressPercent = progressPercent;
     saveToFile();
