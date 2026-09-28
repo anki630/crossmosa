@@ -1,14 +1,11 @@
-# 換待機壁紙
+# 換待機名畫
 
-[Release](../../releases) 另附壁紙包：**50 張世界名畫**，
-全部取自 Wikimedia Commons 的公共領域作品，每一張都為 X3 這塊 4 階灰階面板挑過、裁過、調過。
+2.0.1 的下載頁附了一包名畫：五十幅世界名畫，都取自 Wikimedia Commons 的公共領域作品，每一幅都為電子紙重新調過。
 
-把 `.bmp` 複製到 SD 卡的 `/.sleep/`（**放兩張以上才會輪播**），
-然後 **設定 → 顯示 → 待機畫面 → 自訂**。
+1. 下載[名畫包](https://github.com/anki630/crossmosa/releases/download/v2.0.1/crossmosa-2.0.1-wallpapers.zip)，解壓縮。
+2. 在 SD 卡最外層建一個 `sleep` 資料夾，把 `.bmp` 檔放進去。放兩張以上才會輪流顯示。已經放在 `.sleep` 資料夾的不用搬。
+3. 在機器上打開：設定 → 顯示 → 待機畫面 → 自訂。
 
-> ⚠️ SD 根目錄不要放單獨一個 `/sleep.bmp` —— 它會優先、固定顯示、不輪播。
+SD 卡最外層不要放單獨一張 `sleep.bmp`，它會優先顯示，而且不會輪換。
 
-轉檔工具、策展清單與「為什麼是這 50 張」都在 [`wallpapers/`](../wallpapers/)，
-可以自己換成任何圖片。
-
----
+想換成自己的圖：轉檔工具和選畫清單在 [`wallpapers/`](../wallpapers/)。

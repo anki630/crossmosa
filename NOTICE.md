@@ -163,19 +163,35 @@ UI 字型是**多套字型的子集合併**後轉成點陣資料編進 binary �
 | **Noto Sans TC** | **SIL OFL 1.1** | © 2014-2021 Adobe |
 | **芫荽 Iansui** | **SIL OFL 1.1** | Copyright 2025 The Iansui Project Authors(https://github.com/ButTaiwan/iansui,衍生自 Klee One) |
 | **IBM Plex Sans TC** | **SIL OFL 1.1** | Copyright 2018 IBM Corp. |
+| **台灣圓體 TaiwanPearl**（以 RoundTC 之名散布） | **SIL OFL 1.1** | Copyright (c) 2020, Chun yu Yao，with Reserved Font Name "TaiwanPearl" |
+| **原俠正楷 GuanKiapTsingKhai** | **SIL OFL 1.1** | Copyright 2022-2025 Tony Huang（https://github.com/tonyhuan/GuanKiapTsingKhai） |
+| 備援與拉丁字形：Noto Sans CJK TC、Noto Sans／Noto Serif（拉丁）、IBM Plex Sans（拉丁）、霞鶩文楷 LXGW WenKai TC | **SIL OFL 1.1** | 各字型的原著作權人（Google／Adobe、IBM、落霞孤鶩） |
+| DejaVu Sans／DejaVu Serif（符號備援） | **Bitstream Vera／DejaVu 授權** | © 2003 Bitstream, Inc.；© 2006 Tavmjong Bah |
 
 **SIL OFL 1.1 的兩項要求,本專案的處理方式**:
 
-1. **保留授權聲明**:`crossmosa-1.0.0-sd-fonts.zip` 的**每一個字型資料夾內**都附有一份
-   `OFL.txt`,含該字型的著作權行與 SIL OFL 1.1 全文。這件事不靠人記得——打包腳本
+1. **保留授權聲明**：字型包的**每一個字型資料夾內**都附有授權檔
+   （`OFL.txt` 或 `LICENSE.txt`），含該字型的著作權行與授權全文。這件事不靠人記得——打包腳本
    `scripts/mk-release.sh` 會在壓縮**之前**逐一檢查每個家族目錄有沒有授權檔,缺的就補上,
    補不出來就**中止打包**而不是默默出貨一包沒有授權聲明的字型。
 2. **不得單獨販售字型;衍生物不得使用 Reserved Font Name**。本專案的 `.cpfont` 是
    點陣衍生物,檔名沿用家族名(`NotoSerifTC_16.cpfont` 等)。
-   **已查證:四套來源字型都沒有宣告 Reserved Font Name** ——
+   **台灣圓體宣告了 Reserved Font Name「TaiwanPearl」，所以散布時改名為 `RoundTC`**；其餘來源字型沒有宣告。
+   **原本的查證（四套來源字型都沒有宣告 Reserved Font Name）** ——
    逐顆讀 `name` 表 nameID 0(`NotoSerifTC-{Regular,Bold}`、`IBMPlexSansTC-{Regular,Bold}`、
    `Iansui-Regular`)都沒有 "with Reserved Font Name" 字樣,repo 內幾份 `OFL.txt` 的著作權行
    同樣沒有。因此沿用家族名合規,不需要改檔名。
+
+### 6.3 注音字型 ZhuyinKai（獨立下載 `zhuyin-2026-09`，不在 repo 裡）
+
+- **改作自「字嗨注音標楷」** `BpmfZihiKaiStd-Regular.ttf`（ButTaiwan/bpmfvs v1.500，Copyright 2020 But Ko，
+  https://github.com/ButTaiwan/bpmfvs）：漢字部分 **CC BY 4.0**，漢字以外 **SIL OFL 1.1**。
+  它宣告了 Reserved Font Name「字嗨」「Zihi」，所以改作版改名為 `ZhuyinKai`。
+- **注音 IVS 字型規格**：Copyright 2020 But Ko，**Apache License 2.0**。
+- **漢字字形**取自全字庫正楷體：國家發展委員會 2018 CNS11643 中文標準交換碼全字庫 Ver 103。
+- **讀音依據**：教育部《國語小字典》《國語辭典簡編本》《重編國語辭典修訂本》。
+- 字型包內附 `LICENSE-ZihiKaiStd.txt`、`OFL.txt`、`LICENSE-2.0.txt`、`NOTICE.txt`，
+  以及列出出處與修改內容的 `README.txt`。
 
 ---
 

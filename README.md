@@ -2,200 +2,221 @@
 
 # CrossMosa
 
-**終於，你的 X3 能好好讀中文了。**
+**中文書，就該這樣讀。**
 
-給 Xteink X3 的繁體中文系統——免費、開源，刷一次機就有。
+為 Xteink X3 與 X4 打造。裝好之後，拿起來就是中文。<br>
+零碎時間已經夠少了，不該花在跟機器搏鬥上。
 
-**快速前往:**
-[**這一版更新了什麼**](CHANGELOG.md) ·
-[安裝](#安裝) ·
-[字型](docs/fonts.md) ·
-[螢幕停住了？](docs/rescue.md) ·
-[與原版的差異](#與原版-crosspoint-的關係) ·
-[下載](https://github.com/anki630/crossmosa/releases/latest) ·
+**[下載 X3 版](https://github.com/anki630/crossmosa/releases/latest)** ·
+**[下載 X4 版](https://github.com/anki630/crossmosa/releases/tag/v2.1.0-beta.5)** ·
+[怎麼安裝？三步驟](#開始使用) ·
 [English](#crossmosa-english)
 
-![CrossMosa 實機照:全繁中主畫面、明體內文、名畫待機](docs/promo/hero-photo.jpg)
+免費開源・機器免接電腦<br>
+X4 版目前還是測試版。
 
-**書名說中文。選單說中文。**
-連「憨」「璐」「羣」「倂」這些字，它都認得。書名不再是一排 □□□。
+![CrossMosa 實機：全繁中主畫面、明體內文、名畫待機](docs/promo/hero-photo.jpg)
 
-**你的書，你挑字體。**
-明體、黑體、硬筆楷書。小字看不清，還有大字版。
+## 你買它是為了讀中文書，結果打開是這樣
 
-**翻頁，跟得上眼睛。**
-你讀這一頁的時候，下一頁的字已經備好了。
+整頁都是方塊。裝好 CrossMosa，選單是中文，書頁清清楚楚。差別，看圖就好。
 
-**讀到最精彩的一章，它不會重開機。**
+| 裝好之前 | 裝好之後 |
+|:---:|:---:|
+| <img src="docs/promo/compare-tofu.jpg" width="300" alt="裝好之前：滿頁方塊字"> | <img src="docs/promo/compare-serif.jpg" width="300" alt="裝好之後：正常顯示的明體內文"> |
 
-**闔上機器，它是一幅畫。**
-50 張世界名畫輪流待機。今天梵谷，明天北齋。
+## 孩子，也能自己讀
 
-你還可以逛 OPDS 書庫、用瀏覽器傳書進去、換介面主題、加書籤、截圖。
+還不認得的字，看旁邊的注音就會念。破音字，也會照詞來標。<br>
+睡前、週末、坐車的時候，拿起來就能讀完一本。
 
----
+沒有遊戲，沒有廣告，也沒有通知。孩子拿起來，就是讀書。
 
-刷韌體、複製字型、開機切中文。三步，今晚就能開始讀。
+<p align="center"><img src="docs/promo/x3-zhuyin.jpg" width="340" alt="X3 上的注音直排書頁"></p>
 
-刷壞了也回得來。SD 卡救援模式隨時換回任何韌體，第一次刷機不用接電腦。
+注音字型目前搭配測試版使用。[下載測試版與注音字型 →](https://github.com/anki630/crossmosa/releases/tag/v2.1.0-beta.5)
 
-免費，開源，個人專案。
+## 換一套字，換一種心情
 
----
+明體耐讀，黑體清楚，圓體柔和，硬筆楷書像手寫。給孩子有注音，給爸媽有大字版。字型放在 SD 卡上，隨時可以換。
 
-## 這是什麼
+| 明體 | 黑體 | 圓體 |
+|:---:|:---:|:---:|
+| <img src="docs/promo/fonts/serif.png" width="220" alt="明體樣張"><br>長篇首選 | <img src="docs/promo/fonts/sans.png" width="220" alt="黑體樣張"><br>字小也清楚 | <img src="docs/promo/fonts/round.png" width="220" alt="圓體樣張"><br>筆畫圓潤，看久不累 |
+| **硬筆楷書** | **注音楷書**（測試版） | **大字版** |
+| <img src="docs/promo/fonts/iansui.png" width="220" alt="硬筆楷書樣張"><br>像原子筆寫在紙上 | <img src="docs/promo/fonts/zhuyin.png" width="220" alt="注音楷書樣張"><br>破音字也照詞來標 | <img src="docs/promo/fonts/large.png" width="220" alt="大字版樣張"><br>明體、黑體、圓體都有 |
 
-版本:[`2.0.1`](https://github.com/anki630/crossmosa/releases/latest)
+<details>
+<summary>看直排的樣子</summary>
 
-> 🧪 **想試新東西？** 測試版 **2.1.0-beta.5** 有直排閱讀、給孩子的注音字型，也開始支援 X4。
-> 它是預發佈版，**第一次刷 CrossMosa 的人請不要從它開始**——先刷 2.0.1，確認一切正常之後再換上來。用 X4 的話，直接刷這一版。
-> 詳情見 [2.1.0-beta.5 的說明](https://github.com/anki630/crossmosa/releases/tag/v2.1.0-beta.5)。
+| 明體 | 黑體 | 圓體 |
+|:---:|:---:|:---:|
+| <img src="docs/promo/fonts/v-serif.png" width="220" alt="明體直排樣張"> | <img src="docs/promo/fonts/v-sans.png" width="220" alt="黑體直排樣張"> | <img src="docs/promo/fonts/v-round.png" width="220" alt="圓體直排樣張"> |
+| **硬筆楷書** | **注音楷書** | **大字版** |
+| <img src="docs/promo/fonts/v-iansui.png" width="220" alt="硬筆楷書直排樣張"> | <img src="docs/promo/fonts/v-zhuyin.png" width="220" alt="注音楷書直排樣張"> | <img src="docs/promo/fonts/v-large.png" width="220" alt="大字版直排樣張"> |
 
-**我該刷哪一版？**
+</details>
 
-| | |
+樣張是模擬畫面：用機器上的字型檔，照螢幕原本的解析度排出來。範文為朱自清〈背影〉、李白〈靜夜思〉、孟浩然〈春曉〉。
+
+## 零碎時間，拿起來就讀
+
+通勤、午休、睡前。你還在讀這一頁，下一頁已經備好；下次打開，從上次的地方繼續。
+
+<p align="center"><img src="docs/promo/x4-vertical.jpg" width="360" alt="X4 上的直排書頁"></p>
+
+**直排的書，照直排讀。**（測試版）由上而下、由右而左，像翻一本真正的書。
+
+**註腳，一按就到。** 再按一下就回到原處。譯注多的書，終於好讀了。
+
+**書，傳過去就好。** 打開瀏覽器，把書拖進去。書都在 Calibre 的話，機器也能直接連上你的書庫。
+
+## 口袋裡的小美術館
+
+闔上的時候，螢幕上是一幅世界名畫。今天梵谷，明天北齋。
+
+<p align="center">
+  <img src="docs/promo/wp/great_wave.jpg" width="110" alt="神奈川沖浪裏">
+  <img src="docs/promo/wp/girl_pearl_earring.jpg" width="110" alt="戴珍珠耳環的少女">
+  <img src="docs/promo/wp/starry_night.jpg" width="110" alt="星夜">
+  <img src="docs/promo/wp/wanderer_sea_of_fog.jpg" width="110" alt="霧海上的旅人">
+  <img src="docs/promo/wp/mona_lisa.jpg" width="110" alt="蒙娜麗莎">
+  <img src="docs/promo/wp/peacock_skirt.jpg" width="110" alt="孔雀裙">
+</p>
+
+<a id="開始使用"></a>
+
+## 三步驟，今晚就能開始讀
+
+機器你已經有了，SD 卡就插在上面。剩下的只有三步。
+
+**該下載哪一版？** X3 第一次刷，請用[正式版](https://github.com/anki630/crossmosa/releases/latest)；裝好之後想試注音和直排，再換[測試版](https://github.com/anki630/crossmosa/releases/tag/v2.1.0-beta.5)。X4 直接用測試版。
+
+1. **刷機**（只有第一次）：下載 `update.bin`，放進 SD 卡最外層，插回機器。關機後，按住下面兩顆鍵開機，看到載入畫面就放手。等它自己重新開機，就完成了。
+   - **X3**：左側的上一頁鍵＋電源鍵
+   - **X4**：右側上面那顆鍵＋電源鍵。沒有反應的話，接上 USB 電源再試一次。
+2. **放字型**：下載[字型包](https://github.com/anki630/crossmosa/releases/tag/fonts-2026-09)，在 SD 卡最外層建一個 `fonts` 資料夾，把字型包裡的資料夾放進去。沒有字型，書會顯示成方塊。
+3. **開始讀**：在剛剛下載韌體的那一頁，下載使用手冊 `CrossMosa.epub`，放進 SD 卡。到「設定 → 閱讀器 → 閱讀字型」選一套字型，打開手冊，一邊讀一邊按。
+
+**以後更新，不用重刷。** 把新版傳進機器，到「設定 → 系統 → SD 卡韌體更新」選它就好，不用再按鍵開機。[詳細步驟](docs/update.md)
+
+<a id="flash-warning"></a>
+第一次刷機之前，請先讀[安裝說明](docs/install.md)裡的注意事項。刷機有風險，而且不是每一次都救得回來。
+
+<a id="screen-halted"></a><a id="螢幕停住了救援步驟"></a>
+
+| 我想要 | 看這裡 |
 |---|---|
-| **第一次刷，或不知道該選哪一版** | **刷 2.0.1。** 它會自己認出你的螢幕是哪一種，新舊機器都認得。刷舊版才要碰運氣——比較新的 X3 刷上去，畫面就不會再更新 |
-| **用 X4** | **刷 2.1.0-beta.5。** X4 從這一版開始支援 |
-| **已經在用 1.0／1.1／1.2** | 建議升:換一章從十秒左右變成一兩秒，翻頁更順，書裡的圖也更少出不來 |
-| **已經在用 2.0.0** | 建議升:書名裡的黑方塊少了很多，逛 OPDS 書單也不會偶爾當機。設定與進度都不受影響 |
+| 第一次安裝 | [首次安裝](docs/install.md) |
+| 更新到新版 | [更新到新版](docs/update.md) |
+| X3 刷完畫面不動 | [螢幕停住了](docs/rescue.md) |
+| 刷不進去 | [刷不進去怎麼辦](docs/flash-troubleshooting.md) |
+| 挑字型、裝大字版、給孩子的注音 | [字型](docs/fonts.md) |
+| 把書放進機器 | [把書放進去](docs/books.md) |
+| 換待機名畫 | [換待機名畫](docs/wallpaper.md) |
+| 刷回原廠系統 | [社群整理的步驟](https://pocketink.io/firmware/recovery/)（英文） |
 
-CrossMosa 是原版 [CrossPoint](https://github.com/crosspoint-reader/crosspoint-reader)（本分支的來源專案，開發圈慣稱 upstream）的繁體中文分支。
-原版是通用的開源電子書系統，支援兩種機型、二十幾種介面語言、多種檔案格式。
-CrossMosa 把範圍收窄，專心做三件事:
+## 猶豫的話，先看這裡
 
-1. **介面與內文都是繁體中文**——選單、檔名、書名、OPDS 書庫、書的內文。
-2. **閱讀優先**。凡是會讓翻頁掉字、讓長章節排不出來的東西，一律讓路。
-3. **以 X3 為主調校，2.1.0-beta.5 起也支援 X4**。原版同時支援 X3 與 X4;本分支的顯示、記憶體與字型全部照實機實測而定。
+<details>
+<summary>支援哪些機器？</summary>
 
-這是個人專案，不是產品。**沒有任何隸屬於 Xteink 或原版 CrossPoint 專案的關係。**
+Xteink X3 和 X4。X4 版目前還是測試版。觸控的 X4 Pro 不支援。
 
-![OPDS 中文書庫](docs/promo/photo-opds.jpg)
+</details>
+<details>
+<summary>每次更新都要重刷嗎？</summary>
 
----
+不用。只有第一次要按鍵刷機。之後出新版，用手機的瀏覽器把它傳進機器，到「設定 → 系統 → SD 卡韌體更新」選它就好，全程不用接線。
 
-## ☕ 覺得好用的話
+</details>
+<details>
+<summary>不太會用電腦，也裝得起來嗎？</summary>
 
-CrossMosa 是下班後的個人專案。如果它讓你的 X3 變好用了，幾種讓我開心的方式:
+裝得起來。用電腦或手機把檔案放進 SD 卡，再按住兩顆鍵開機就好，機器不用接線。
 
-- 到 [Discussions](../../discussions) 留句話，說說你拿它讀了什麼書——**這是我最想看的**。
-- 推薦給也有 X3 的朋友。
-- 請我喝杯咖啡（連結籌備中）——不影響任何功能，純粹讓下一個版本寫得更有勁。
+</details>
+<details>
+<summary>會把機器刷壞嗎？</summary>
 
-回報缺字或問題，一樣歡迎開 Issue。
+刷機有風險，而且不是每一次都救得回來。開始之前，請先讀完[安裝說明](docs/install.md)裡的注意事項。
 
----
+</details>
+<details>
+<summary>可以刷回原廠系統嗎？</summary>
 
-## 安裝
+可以。社群整理了[刷回原廠的步驟](https://pocketink.io/firmware/recovery/)（英文）：機器接得上電腦的話，用 CrossPoint 的刷機網站；USB 被鎖住的 X3，改用 SD 卡和原廠的更新檔。
 
-三步，順的話十分鐘。
+</details>
+<details>
+<summary>要錢嗎？</summary>
 
-1. **刷韌體** — 把 `update.bin` 放進 SD 卡根目錄，關機後按住左側「上一頁」鍵 ＋ 電源鍵。
-2. **複製字型** — 把字型資料夾放進 SD 卡的 `/.fonts/`。沒有字型，中文書會整頁都是方塊。
-3. **開機** — 設定 → 閱讀器 → 閱讀字型，選剛剛那套。
+免費，開源。
 
-**第一次刷之前，請先讀 [首次安裝](docs/install.md)。** 那裡有風險、備份，和三種刷機方法。
+</details>
+<details>
+<summary>書從哪裡來？</summary>
 
-| | |
-|---|---|
-| [首次安裝](docs/install.md) | 完整步驟、三種刷機方法 |
-| [更新到新版](docs/update.md) | 已經在用 CrossMosa |
-| [螢幕停住了](docs/rescue.md) | 刷完畫面不動 |
-| [刷不進去怎麼辦](docs/flash-troubleshooting.md) | 出現「更新中」卻退回 |
-| [字型](docs/fonts.md) | 選哪一套、大字版、遇到方塊字 |
-| [把書放進去](docs/books.md) | 拔卡、瀏覽器、OPDS、Calibre |
-| [換待機壁紙](docs/wallpaper.md) | 50 張世界名畫 |
+CrossMosa 不提供書。請向正版管道購買沒有 DRM 的電子書，再用瀏覽器傳進機器。有 DRM 的書，這台機器讀不了。
 
----
+</details>
+<details>
+<summary>跟原版 CrossPoint 差在哪？</summary>
 
-## 自行建置
+CrossPoint 是很好的開源起點。CrossMosa 在它上面，把中文閱讀做完整。
 
-```bash
-git submodule update --init --recursive --depth 1   # freeink-sdk 是 submodule,缺了會 link 失敗
-pip install platformio
-export SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)  # 見下方「可重現建置」
-pio run -e gh_release                                # 產物在 .pio/build/gh_release/firmware.bin
-```
+</details>
 
-### 可重現建置
+## 為什麼會有它
 
-**發佈的映像檔（`update.bin`，即建置產物 `firmware.bin` 改名）是逐位元組可重現的**——同一個 commit、同一組釘住版本的相依套件，
-任何人都能建出 sha256 完全相同的檔案。條件只有一個:**必須設 `SOURCE_DATE_EPOCH`**。
+我是電子書閱讀器的愛用者。有工作、有小孩，能讀書的時間都是擠出來的零碎片段——通勤的路上、孩子睡著後的半小時。X3 這種放得進口袋的機器，就是為這些片段準備的。
 
-不設的話，`__DATE__` / `__TIME__` 會把建置當下的時刻編進 binary(其中一處還在 Arduino
-core 裡，不是本專案能改的)，兩次建置就會差幾十個位元組。設了之後 GCC 會用這個值取代那兩個
-巨集，同時本專案的網頁資產壓縮也會用它當 gzip 的 mtime。
+但買來才發現，它不是為中文讀者做的：選單是英文，中文書打開是滿頁方塊。零碎時間已經夠少了，不該再花在跟機器搏鬥上。
 
-**每個 Release 都會公佈當次使用的 `SOURCE_DATE_EPOCH` 與 firmware 的 sha256。**
-打包腳本 [`scripts/mk-release.sh`](scripts/mk-release.sh) 預設直接取 release commit 自己的
-時間戳(`git log -1 --format=%ct`)，所以只要 checkout 同一個 tag 就會自動得到同一個值。
-機制與判讀方式寫在 [`docs/reproducible-builds.md`](docs/reproducible-builds.md)。
+所以我從開源的 CrossPoint 出發，為自己改了一版。一版一版地改，改到我覺得可以拿出來了。
 
----
+它叫 CrossMosa：Cross 來自它的起點，Mosa 來自 Formosa。開機畫面上那隻是台灣黑熊，牠頭上有一彎月牙。
 
-## 與原版 CrossPoint 的關係
+如果你的閱讀時間也是擠出來的，這一版就是為你調的。
 
-**CrossMosa 的一切都建立在 [CrossPoint](https://github.com/crosspoint-reader/crosspoint-reader) 上面。**
-閱讀引擎、EPUB 解析、排版、活動框架、網頁介面、OPDS、Calibre 流程——這些都是原版寫的，
-本分支只是在上面做中文化與 X3 特化。
+—— [anki630](https://github.com/anki630)，CrossMosa 維護者
 
-- 原版作者:**Dave Allie** 與 CrossPoint 貢獻者們。授權 MIT,`LICENSE` 原封保留。
-- 原版的錯誤回報請發到[原版 repo](https://github.com/crosspoint-reader/crosspoint-reader/issues)，
-  不要發到這裡;本 repo 只處理本分支自己改壞的東西。
-- **想要完整功能的人應該用原版**，不是用這個分支。
+## 如果它讓你的閱讀器變好用了
 
-### 與原版的差異
+推薦給也有 X3、X4 的朋友；到[討論區](../../discussions)說說你讀了什麼書；或請維護者喝杯咖啡（連結籌備中）。
+缺字或遇到問題，歡迎[回報](../../issues)。
 
-**已移除**（不是關閉，是程式碼層面拔掉入口讓連結器回收，換 flash 空間給中文字型）:
+**[下載 X3 版](https://github.com/anki630/crossmosa/releases/latest)** ·
+**[下載 X4 版](https://github.com/anki630/crossmosa/releases/tag/v2.1.0-beta.5)**
 
-| 移除 | 原因 |
-|---|---|
-| English / 繁體中文以外的 **29 種 UI 語言** | 約 258 KB，換中文字型 |
-| **KOReader 進度同步** | 沒有伺服器可同步 |
-| **字典查詢**(StarDict) | 未使用 |
-| **OTA 線上更新** | 會指向原版的 release 把本分支蓋掉;**SD 卡韌體更新保留** |
-| **Classic / RoundedRaff 主題** | 字級與語系支援跟不上中文;留 Formosa、Formosa Extended 與 Formosa Pro |
-| **非英文的斷字表**（9 種語言） | 中文不斷字，約 323 KB |
-| **內建斜體字面** | 自動退回正體，約 544 KB |
-| 內建閱讀字型縮成**單一 14px 備援** | 只在沒有 SD 字型時用得到，約 373 KB |
-| **SMB2 伺服器**（iOS「檔案」App 直接管理 SD 卡） | 已移除。先前公開版預設就不編進發佈韌體；這一版連原始碼一併拿掉，無法再開編譯開關編回來。請改用網頁傳檔、Calibre、OPDS 或拔卡複製 |
-| **BLE 翻頁遙控器** | 已移除。發佈韌體本來就沒有；這一版原始碼也不再保留，無法自編加回 |
-
-**保留**:Calibre 無線推書（相容原版外掛生態）、網頁設定與傳檔、WebDAV、OPDS、
-傾斜翻頁、螢幕截圖、按鍵重配、待機畫面。
+**接下來，把零碎時間還給書。**
 
 ---
+
+## 給開發者
+
+- [自行建置、與原版 CrossPoint 的差異、介面字型怎麼做](docs/developers.md)
+- [變更紀錄](CHANGELOG.md)
+- [第三方元件與授權](NOTICE.md)
+
+CrossMosa 建立在 [CrossPoint](https://github.com/crosspoint-reader/crosspoint-reader) 上面，原版作者是 Dave Allie 與 CrossPoint 的貢獻者們。原版的問題，請回報到[原版的專案](https://github.com/crosspoint-reader/crosspoint-reader/issues)。
 
 ## 免責聲明
 
-- **本專案不提供任何書籍內容，也不內建任何書源。** 韌體與 Release 裡沒有書。
-  請從正版管道取得電子書(無 DRM 的正版 EPUB:出版社或獨立書店直售、公共領域書庫、
-  你自己的文件)，放進 SD 卡或自架書庫使用。請支持正版，尊重創作者。
-- **刷機有風險，自負。** 刷第三方韌體可能讓裝置無法開機。**已經有實際變磚的案例，
-  而且救援程序對部分機器無效——請假設有可能救不回來。**
-  開始之前請先讀安裝章開頭的「刷機無法保證成功」與 USB-locked 注意事項:
-  SD 救援模式在韌體卡住開機迴圈時進不去，部分機器的 USB 也沒有資料傳輸。
-- **與 Xteink 無關，與原版 CrossPoint 專案也無隸屬關係。** 兩者都不為這個分支負責。
-- **驗證主力是一台 UC8279 新批次 X3 與一台 X4**，舊批次 X3（UC8253）由使用者回報刷機成功。
-  沒有自動化的硬體測試。
-  很多改動的驗證方式就是「用了幾天沒出事」。
-- **沒有遙測。** 本韌體不會回報使用狀況給任何人。Wi-Fi 憑證、閱讀進度、書籤只存在你自己的
-  SD 卡上(`/.crossmosa/`)。裝置只有在你主動要求時才連外:連 Wi-Fi 後對時(NTP)、
-  你設定的 OPDS 伺服器、Calibre 無線連線。原版的 OTA 更新檢查已經移除，
-  所以本韌體不會主動連任何本專案或原版的伺服器。
-- 「AS IS」，無任何擔保，見 `LICENSE`。
-
----
+- 本專案不提供任何書籍內容，也不內建任何書源。請從正版管道取得沒有 DRM 的電子書，支持正版，尊重創作者。
+- 刷機有風險，風險自負。已經有機器變磚、照著救援步驟也沒救回來的案例。開始之前，請先假設它可能救不回來，詳見[安裝說明](docs/install.md)。
+- 與 Xteink 無關，與原版 CrossPoint 專案也沒有隸屬關係。
+- 測試用的是維護者自己的 X3 與 X4，沒有自動化的硬體測試。
+- 沒有遙測。設定、閱讀進度和書籤只存在你的 SD 卡上。機器不會主動連到本專案或原版的伺服器，只有在你要求時才會連網，例如連上 Wi-Fi 後對時、連你設定的書庫。
+- 依現狀提供，不附任何擔保，詳見 `LICENSE`。
 
 ## 授權
 
-- 原版 CrossPoint:MIT,Copyright (c) 2025 Dave Allie（`LICENSE`，原封保留）。
-- CrossMosa 的修改:MIT,Copyright (c) 2026 CrossMosa contributors。
-- 內含的第三方程式庫與字型各有授權，**完整清單見 [`NOTICE.md`](NOTICE.md)**。
-  ⚠️ 其中有 GPLv2 與 LGPL-2.1 的元件會連結進發佈的韌體 binary，
-  請先讀 NOTICE 的「發佈義務」一節。
+- 原版 CrossPoint：MIT，Copyright (c) 2025 Dave Allie（`LICENSE` 原封保留）。
+- CrossMosa 的修改：MIT，Copyright (c) 2026 CrossMosa contributors。
+- 內含的第三方程式庫與字型各有授權，完整清單見 [`NOTICE.md`](NOTICE.md)。其中有 GPLv2 與 LGPL-2.1 的元件會一起編進發佈的韌體，要再散布的話，請先讀 NOTICE 的「發佈義務」。
 
-維護:**CrossMosa contributors**。
+維護：CrossMosa contributors。
 
 ---
 ---
@@ -204,138 +225,215 @@ core 裡，不是本專案能改的)，兩次建置就會差幾十個位元組�
 
 # CrossMosa (English)
 
-**Jump to:**
-[**What's new**](CHANGELOG.md) ·
-[Install](docs/install.md) ·
-[Fonts](docs/fonts.md) ·
-[Screen frozen?](docs/rescue.md) ·
-[Vs upstream](#relationship-to-upstream) ·
-[Download](https://github.com/anki630/crossmosa/releases/latest)
+**Chinese books, the way they should be read.**
 
-**Finally, your X3 can read Traditional Chinese properly.**
+Made for the Xteink X3 and X4. Install it, and the whole device speaks Chinese.<br>
+Reading time is short enough. It shouldn't go to fighting the device.
 
-**Traditional-Chinese-focused firmware for the Xteink X3 e-reader**, based on
-[CrossPoint](https://github.com/crosspoint-reader/crosspoint-reader) 1.5.0.
-Free, open source, one flash and it's yours.
+**[Download for X3](https://github.com/anki630/crossmosa/releases/latest)** ·
+**[Download for X4](https://github.com/anki630/crossmosa/releases/tag/v2.1.0-beta.5)** ·
+[How to install: three steps](#getting-started)
 
-![CrossMosa on real hardware: Traditional Chinese home menu, serif body text, masterpiece sleep screen](docs/promo/hero-photo.jpg)
+Free and open source · No computer connection needed<br>
+The X4 version is still in beta.
 
-**Titles in Chinese. Menus in Chinese.**
-Including the uncommon characters real book titles use. No more rows of □□□.
+![CrossMosa on real hardware: a Traditional Chinese home screen, serif body text, and a painting on the sleep screen](docs/promo/hero-photo.jpg)
 
-**Your books, your typeface.**
-Serif, sans, brush. Too small to read? There's a large-print pack.
+## You bought it to read Chinese books. Then you opened one.
 
-**Page turns keep up with your eyes.**
-While you read this page, the next page's glyphs are already loaded.
+A whole page of boxes. With CrossMosa, the menus are in Chinese and every page is clear. The pictures say the rest.
 
-**The best chapter of the book won't reboot the device.**
+| Before | After |
+|:---:|:---:|
+| <img src="docs/promo/compare-tofu.jpg" width="300" alt="Before: a page full of boxes"> | <img src="docs/promo/compare-serif.jpg" width="300" alt="After: serif Chinese text displayed properly"> |
 
-**Close it and it's a painting.**
-Fifty masterpieces take turns on the sleep screen. Van Gogh today, Hokusai tomorrow.
+## Children can read on their own
 
-You can also browse OPDS libraries, send books over from a browser, switch themes,
-bookmark, and take screenshots.
+Zhuyin sits beside every character, so new words can be sounded out. Characters with more than one reading get the one that fits the word.<br>
+At bedtime, on weekends, in the car: pick it up and read a whole book.
 
----
+No games, no ads, no notifications. When children pick it up, they read.
 
-Flash the firmware, copy the fonts, boot and pick Chinese. Three steps, and you can start tonight.
+<p align="center"><img src="docs/promo/x3-zhuyin.jpg" width="340" alt="An X3 showing a vertical page with zhuyin"></p>
 
-If a flash goes wrong you can come back. SD rescue mode restores any firmware,
-and the first flash needs no computer.
+The zhuyin font works with the beta for now. [Get the beta and the zhuyin font →](https://github.com/anki630/crossmosa/releases/tag/v2.1.0-beta.5)
 
-Free, open source, a personal project.
+## A new typeface, a new mood
 
-Version: `2.0.1` · [Download](https://github.com/anki630/crossmosa/releases/latest) · [Changelog](CHANGELOG.md)
+Serif for long reads, sans for clarity, rounded for comfort, handwritten for warmth. Zhuyin for children, large print for parents. The fonts live on the SD card, so you can switch anytime.
 
-> 🧪 **Want to try what's next?** Pre-release **2.1.0-beta.5** adds vertical (top-to-bottom) reading,
-> a zhuyin font for children that picks the right reading for polyphonic characters, and X4 support.
-> **Don't start here if this is your first CrossMosa flash** — install 2.0.1 first. On an X4, flash this release directly.
-> See the [2.1.0-beta.5 notes](https://github.com/anki630/crossmosa/releases/tag/v2.1.0-beta.5).
+| Serif | Sans serif | Rounded |
+|:---:|:---:|:---:|
+| <img src="docs/promo/fonts/serif.png" width="220" alt="Serif sample"><br>Made for long reads | <img src="docs/promo/fonts/sans.png" width="220" alt="Sans-serif sample"><br>Clear even when small | <img src="docs/promo/fonts/round.png" width="220" alt="Rounded sample"><br>Soft strokes, easy on the eyes |
+| **Handwritten** | **Zhuyin** (beta) | **Large print** |
+| <img src="docs/promo/fonts/iansui.png" width="220" alt="Handwritten sample"><br>Like ballpoint pen on paper | <img src="docs/promo/fonts/zhuyin.png" width="220" alt="Zhuyin sample"><br>Readings that fit the word | <img src="docs/promo/fonts/large.png" width="220" alt="Large-print sample"><br>In serif, sans serif, and rounded |
 
-## What it is
+<details>
+<summary>See them in vertical text</summary>
 
-A narrow fork of CrossPoint with one goal: read Traditional Chinese books well on the X3.
-It trades away breadth (other languages, other formats) for Chinese typography,
-a reading-first memory policy, and X3-first display tuning. The X4 is supported from 2.1.0-beta.5.
+| Serif | Sans serif | Rounded |
+|:---:|:---:|:---:|
+| <img src="docs/promo/fonts/v-serif.png" width="220" alt="Serif sample, vertical"> | <img src="docs/promo/fonts/v-sans.png" width="220" alt="Sans-serif sample, vertical"> | <img src="docs/promo/fonts/v-round.png" width="220" alt="Rounded sample, vertical"> |
+| **Handwritten** | **Zhuyin** | **Large print** |
+| <img src="docs/promo/fonts/v-iansui.png" width="220" alt="Handwritten sample, vertical"> | <img src="docs/promo/fonts/v-zhuyin.png" width="220" alt="Zhuyin sample, vertical"> | <img src="docs/promo/fonts/v-large.png" width="220" alt="Large-print sample, vertical"> |
 
-Newer X3 units ship a different display controller. This build identifies it at boot, so both
-the newer and the older batches work. If your screen already updates normally, you do not need to flash.
+</details>
 
-## Install
+The samples are simulated: the device's own font files, laid out at the screen's native resolution. Texts: Zhu Ziqing's "Back View", Li Bai's "Quiet Night Thoughts", and Meng Haoran's "Spring Morning".
 
-Three steps, about ten minutes.
+## Spare moments, ready to read
 
-1. **Flash the firmware** — put `update.bin` in the SD card root, power off, then hold the
-   left-edge "previous page" key **+** the power button.
-2. **Copy the fonts** — put the font folder into `/.fonts/` on the SD card. Without them,
-   Chinese books render as boxes.
-3. **Boot** — Settings → Reader → Reading Font, pick the family you just copied.
+On the commute, at lunch, before bed. While you read this page, the next one is already prepared. Open it later and pick up where you left off.
 
-**Read [Install](docs/install.md) before your first flash.** It covers the risks, the backup
-step, and all three flashing methods.
+<p align="center"><img src="docs/promo/x4-vertical.jpg" width="360" alt="An X4 showing a vertical page"></p>
 
-| | |
+**Vertical books, read vertically.** (beta) Top to bottom, right to left, like turning the pages of a real book.
+
+**Footnotes, one press away.** Press again to return to where you were. Books full of translator's notes are finally easy to read.
+
+**Books, just send them over.** Open a browser and drag them in. If your books are in Calibre, the device can connect to your library directly.
+
+## A small museum in your pocket
+
+When you close it, the screen shows a famous painting. Van Gogh today, Hokusai tomorrow.
+
+<p align="center">
+  <img src="docs/promo/wp/great_wave.jpg" width="110" alt="The Great Wave off Kanagawa">
+  <img src="docs/promo/wp/girl_pearl_earring.jpg" width="110" alt="Girl with a Pearl Earring">
+  <img src="docs/promo/wp/starry_night.jpg" width="110" alt="The Starry Night">
+  <img src="docs/promo/wp/wanderer_sea_of_fog.jpg" width="110" alt="Wanderer above the Sea of Fog">
+  <img src="docs/promo/wp/mona_lisa.jpg" width="110" alt="Mona Lisa">
+  <img src="docs/promo/wp/peacock_skirt.jpg" width="110" alt="The Peacock Skirt">
+</p>
+
+<a id="getting-started"></a>
+
+## Three steps. Start reading tonight.
+
+You already have the device, and the SD card is already in it. Three steps are all that's left.
+
+**Which version should I download?** On an X3, flash the [stable release](https://github.com/anki630/crossmosa/releases/latest) first. Once it's installed, switch to the [beta](https://github.com/anki630/crossmosa/releases/tag/v2.1.0-beta.5) if you want zhuyin and vertical text. On an X4, use the beta directly.
+
+1. **Flash** (first time only): Download `update.bin`, put it in the root of the SD card, and put the card back. Turn the device off, then hold the two keys below while powering it on, and let go when the loading screen appears. It restarts by itself when it's done.
+   - **X3:** the previous-page key on the left edge + the power button
+   - **X4:** the upper key on the right edge + the power button. If nothing happens, connect USB power and try again.
+2. **Add fonts:** Download the [font pack](https://github.com/anki630/crossmosa/releases/tag/fonts-2026-09). Create a `fonts` folder in the root of the SD card and put the folders from the pack inside it. Without fonts, books show up as boxes.
+3. **Start reading:** The device starts in Traditional Chinese. To switch to English, go to 設定 → 系統 → 語言 → English. Choose a font under Settings → Reader → Reader Font Family. The release page also has a short manual, `CrossMosa.epub` (in Chinese): put it on the card, open it, and follow along.
+
+**Later updates don't need a reflash.** Copy the new `update.bin` to the card, from a phone or computer browser with the device's File Transfer page or with a card reader, then go to Settings → System → SD Card Firmware Update and pick the file. No key combination. [Detailed steps](docs/update.md) (Chinese)
+
+Before your first flash, read the precautions in the [install guide](docs/install.md#install-english). Flashing carries risks, and recovery is not always possible.
+
+| I want to… | Go to |
 |---|---|
-| [Install](docs/install.md) | Full steps, three flashing methods |
-| [Update](docs/update.md) | Already running CrossMosa |
-| [Screen stopped updating](docs/rescue.md) | Rescue procedure |
-| [Fonts](docs/fonts.md) | Which family, large print, missing glyphs |
+| Install CrossMosa for the first time | [Install](docs/install.md#install-english) |
+| Update CrossMosa | [Update](docs/update.md) (Chinese) |
+| Fix an X3 screen that stopped updating | [Screen stopped updating](docs/rescue.md#screen-stopped-updating-rescue-english) |
+| Fix a flash that won't go through | [Flash troubleshooting](docs/flash-troubleshooting.md) (Chinese) |
+| Choose fonts, install large print, or add zhuyin | [Fonts](docs/fonts.md) (Chinese) |
+| Check why characters are missing | [Missing characters](docs/fonts.md#character-set-limits-english) |
+| Add books | [Add books](docs/books.md) (Chinese) |
+| Change the sleep-screen painting | [Change the sleep screen](docs/wallpaper.md) (Chinese) |
+| Restore the stock firmware | [Community recovery guide](https://pocketink.io/firmware/recovery/) |
+
+## Still deciding?
+
+<details>
+<summary>Which devices are supported?</summary>
+
+The Xteink X3 and X4. The X4 version is still in beta. The touchscreen X4 Pro is not supported.
+
+</details>
+<details>
+<summary>Do I have to reflash for every update?</summary>
+
+No. Only the first install uses the key combination. When a new version comes out, send it to the device from your phone's browser, then go to Settings → System → SD Card Firmware Update and pick it. No cable needed.
+
+</details>
+<details>
+<summary>I'm not good with computers. Can I still install it?</summary>
+
+Yes. Put the files on the SD card with a computer or a phone, then hold two keys while turning the device on. The device never needs to be connected to anything.
+
+</details>
+<details>
+<summary>Can flashing break my device?</summary>
+
+Flashing carries risks, and recovery is not always possible. Before you begin, read the precautions in the [install guide](docs/install.md#install-english).
+
+</details>
+<details>
+<summary>Can I go back to the stock firmware?</summary>
+
+Yes. The community has a [guide to restoring the stock firmware](https://pocketink.io/firmware/recovery/). If your device connects to a computer, use CrossPoint's web flasher; on an X3 with locked USB, use the SD card and the stock update file.
+
+</details>
+<details>
+<summary>Does it cost anything?</summary>
+
+It's free and open source.
+
+</details>
+<details>
+<summary>Where do the books come from?</summary>
+
+CrossMosa doesn't provide books. Buy DRM-free ebooks from legitimate stores, then send them to the device from a browser. Books with DRM can't be read on this device.
+
+</details>
+<details>
+<summary>How is it different from the original CrossPoint?</summary>
+
+CrossPoint is a great open-source starting point. CrossMosa builds on it and makes Chinese reading complete.
+
+</details>
+
+## Why it exists
+
+I love e-readers. Between work and kids, my reading time comes in scraps: the commute, the half hour after the kids fall asleep. A pocket-sized device like the X3 is made for those moments.
+
+Then I bought one and found it wasn't made for Chinese readers. The menus were in English, and Chinese books opened as pages of boxes. Reading time is short enough. It shouldn't go to fighting the device.
+
+So I started from the open-source CrossPoint and made a version for myself. I kept refining it, one version after another, until it felt ready to share.
+
+It's called CrossMosa: Cross from where it started, Mosa from Formosa. The animal on the startup screen is a Formosan black bear, with a crescent moon above it.
+
+If your reading time also comes in scraps, this was made for you.
+
+— [anki630](https://github.com/anki630), CrossMosa maintainer
+
+## If it made your e-reader better
+
+Tell a friend who has an X3 or X4; tell me what you're reading in [Discussions](../../discussions); or buy the maintainer a coffee (link coming).
+Missing characters or other problems are welcome as [issues](../../issues).
+
+**[Download for X3](https://github.com/anki630/crossmosa/releases/latest)** ·
+**[Download for X4](https://github.com/anki630/crossmosa/releases/tag/v2.1.0-beta.5)**
+
+**Now give your spare moments back to books.**
 
 ---
 
-## Building
+## For developers
 
-```bash
-git submodule update --init --recursive --depth 1
-export SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)
-pio run -e gh_release
-```
+- [Build instructions, differences from CrossPoint, and interface font details](docs/developers.md#for-developers-english)
+- [Changelog](CHANGELOG.md)
+- [Third-party components and licenses](NOTICE.md)
 
-**Builds are byte-for-byte reproducible** — but only if `SOURCE_DATE_EPOCH` is set, because
-`__DATE__`/`__TIME__` otherwise bake the wall clock into the image (one of the two sites is in
-the Arduino core, not ours to patch). Every release publishes the epoch it used together with
-the firmware sha256; [`scripts/mk-release.sh`](scripts/mk-release.sh) defaults to the release
-commit's own timestamp, so checking out the tag reproduces the value automatically. See
-[`docs/reproducible-builds.md`](docs/reproducible-builds.md).
-
-## Relationship to upstream
-
-Everything here stands on **CrossPoint** by **Dave Allie** and its contributors (MIT;
-`LICENSE` kept as-is). Report upstream bugs upstream. If you want the full feature set,
-use upstream rather than this fork.
-
-**Removed** (to reclaim flash for Chinese fonts): 29 UI languages beyond English and
-Traditional Chinese, KOReader progress sync, StarDict dictionary,
-the OTA updater (SD-card firmware update is kept), the Classic and RoundedRaff themes
-(kept: **Formosa**, **Formosa Extended**, **Formosa Pro**),
-non-English hyphenation tables, built-in italic faces, and all but one built-in reader font size.
-
-**Also removed from the tree** (not merely disabled; they cannot be compiled back in):
-the **SMB2 server** for the iOS Files app, and the **BLE page-turner remote**.
-Use browser file transfer, Calibre, OPDS, or copy files onto the SD card instead.
-
-## ☕ If it made your X3 better
-
-Say hi in [Discussions](../../discussions) and tell me what you've been reading with it, tell a
-friend with an X3, or buy me a coffee (link coming — it changes nothing about the firmware).
-Issues for missing characters or bugs are welcome too.
+CrossMosa is built on [CrossPoint](https://github.com/crosspoint-reader/crosspoint-reader) by Dave Allie and the CrossPoint contributors. Report upstream issues to the [CrossPoint project](https://github.com/crosspoint-reader/crosspoint-reader/issues).
 
 ## Disclaimer
 
-This project ships **no book content and no book sources** — bring your own legally obtained, DRM-free EPUBs (publisher or indie-store direct sales, public-domain libraries, your own documents). Support the authors. Flash at your own risk; third-party firmware can leave a device unbootable. Not affiliated
-with Xteink or upstream. Verified primarily on **one newer-batch UC8279 X3 and one X4**; an
-older-batch (UC8253) X3 was **flashed successfully by a user**. Much of the verification is "used it for
-a few days and nothing broke". **No telemetry**: credentials, progress and bookmarks stay on
-your SD card, and the device only reaches the network when you ask it to (NTP after joining
-Wi-Fi, your own OPDS server, Calibre). The upstream OTA update check is removed, so this
-firmware never contacts a project server on its own. Provided AS IS, see `LICENSE`.
+- This project provides no book content and includes no book sources. Obtain DRM-free ebooks through legitimate channels. Support legitimate publishing and respect creators.
+- Flashing carries risks, which you accept yourself. Devices have been bricked, and some could not be recovered even with the rescue steps. Before you begin, assume recovery may not be possible. See the [install guide](docs/install.md#install-english).
+- This project is not affiliated with Xteink and is not part of the upstream CrossPoint project.
+- Testing is done on the maintainer's own X3 and X4. There is no automated hardware testing.
+- There is no telemetry. Settings, reading progress, and bookmarks stay on your SD card. The device never contacts this project's or the upstream project's servers on its own; it goes online only when you ask it to, for example to set the clock after joining Wi-Fi or to reach a library you configured.
+- Provided as is, without warranty. See `LICENSE`.
 
-## Licensing
+## License
 
-Upstream CrossPoint: MIT © 2025 Dave Allie. CrossMosa modifications: MIT © 2026 CrossMosa
-contributors. Bundled third-party code and fonts carry their own licences — see
-[`NOTICE.md`](NOTICE.md). ⚠️ Some components linked into the released firmware binary are
-GPLv2 and LGPL-2.1; read the "Distribution obligations" section of NOTICE first.
+- Upstream CrossPoint: MIT, Copyright (c) 2025 Dave Allie. Its `LICENSE` is kept unchanged.
+- CrossMosa modifications: MIT, Copyright (c) 2026 CrossMosa contributors.
+- Bundled third-party libraries and fonts have their own licenses; the complete list is in [`NOTICE.md`](NOTICE.md). Components under GPLv2 and LGPL-2.1 are built into the released firmware. Before redistributing it, read section 2 of NOTICE (distribution obligations; the file is in Chinese).
 
-Maintained by **CrossMosa contributors**.
+Maintained by CrossMosa contributors.

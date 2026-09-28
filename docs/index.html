@@ -3,16 +3,19 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>CrossMosa — 終於，你的 X3 能好好讀中文了</title>
-<meta name="description" content="Xteink X3 的繁體中文開源韌體：七千四百字介面字集、三套內文字型、50 張名畫待機、無線收書。免費開源，附一本教你上手的書。">
-<meta property="og:title" content="CrossMosa — 終於，你的 X3 能好好讀中文了">
-<meta property="og:description" content="滿頁方塊字的日子結束了。免費開源，刷完就是一台真正的中文閱讀器。">
+<title>CrossMosa — 中文書，就該這樣讀</title>
+<meta name="description" content="為 Xteink X3 與 X4 打造的繁體中文系統。中文介面、好讀的字型、給孩子的注音，免費開源。">
+<meta property="og:title" content="CrossMosa — 中文書，就該這樣讀">
+<meta property="og:description" content="為 Xteink X3 與 X4 打造。中文介面、好讀的字型、給孩子的注音，免費開源。">
 <meta property="og:url" content="https://anki630.github.io/crossmosa/">
-<meta property="og:image" content="https://anki630.github.io/crossmosa/promo/hero-photo.jpg">
+<meta property="og:image" content="https://anki630.github.io/crossmosa/promo/og.jpg">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="CrossMosa：中文書，就該這樣讀。X3 與 X4 的實機畫面">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="CrossMosa — 終於，你的 X3 能好好讀中文了">
-<meta name="twitter:description" content="滿頁方塊字的日子結束了。免費開源，刷完就是一台真正的中文閱讀器。">
-<meta name="twitter:image" content="https://anki630.github.io/crossmosa/promo/hero-photo.jpg">
+<meta name="twitter:title" content="CrossMosa — 中文書，就該這樣讀">
+<meta name="twitter:description" content="為 Xteink X3 與 X4 打造。中文介面、好讀的字型、給孩子的注音，免費開源。">
+<meta name="twitter:image" content="https://anki630.github.io/crossmosa/promo/og.jpg">
 <link rel="icon" href="promo/logo.png">
 <style>
   :root { --paper:#fbfbfd; --ink:#1d1d1f; --gray:#6e6e73; --line:#e8e8ed; --dark:#0b0b0c; --darktext:#f5f5f7; }
@@ -39,6 +42,21 @@
   sup.fn { font-size:.62em; color:var(--gray); }
   sup.fn a { text-decoration:none; }
 
+  .tag { display:inline-block; margin-left:10px; padding:1px 9px; border-radius:999px; font-size:.72rem; font-weight:600; letter-spacing:.04em; color:var(--gray); box-shadow:inset 0 0 0 1px var(--line); vertical-align:middle; }
+  .split { display:grid; grid-template-columns:1.05fr .95fr; gap:56px; align-items:center; }
+  .split .sub { margin-bottom:18px; }
+  .photo, .photo-center { text-align:center; }
+  .photo img, .photo-center img { width:100%; max-width:420px; margin:0 auto; mix-blend-mode:multiply; }
+  .photo-center { max-width:420px; margin:0 auto 40px; }
+  .photo figcaption, .photo-center figcaption { margin-top:0; }
+  .seg { display:inline-flex; gap:2px; padding:3px; margin:-22px 0 34px; background:#fff; border:1px solid var(--line); border-radius:999px; }
+  .seg button { font:inherit; font-size:.92rem; border:0; background:transparent; color:var(--gray); padding:6px 20px; border-radius:999px; cursor:pointer; }
+  .seg button[aria-pressed="true"] { background:var(--ink); color:#fff; font-weight:600; }
+  .specimens { display:grid; grid-template-columns:repeat(3,1fr); gap:34px 26px; }
+  .specimens figure { text-align:center; }
+  .specimens img { width:100%; aspect-ratio:3/4; border-radius:12px; box-shadow:0 0 0 1px var(--line), 0 8px 24px rgba(0,0,0,.06); }
+  .specimens figcaption { margin-top:14px; font-weight:600; font-size:1.02rem; }
+  .specimens .cap-sub { font-size:.88rem; color:var(--gray); font-weight:400; margin-top:2px; }
   .dark { background:var(--dark); color:var(--darktext); }
   .dark .sub, .dark .kicker { color:#a1a1a6; }
 
@@ -95,6 +113,7 @@
   .step { display:flex; gap:22px; padding:26px 0; align-items:flex-start; }
   .step + .step { border-top:1px solid var(--line); }
   .step::before { counter-increment:s; content:counter(s); flex:0 0 44px; height:44px; background:var(--ink); color:#fff; border-radius:50%; display:flex; align-items:center; justify-content:center; font-weight:700; font-size:1.15rem; }
+  .tip { max-width:640px; margin:26px auto 0; font-size:1.02rem; }
   .warn { background:#fff; border:1px solid var(--line); border-radius:16px; padding:18px 22px; margin:30px auto 0; max-width:640px; font-size:.92rem; color:var(--gray); }
 
   .log { max-width:700px; margin:0 auto; }
@@ -125,6 +144,8 @@
   @media (max-width:820px) {
     section { padding:70px 0; }
     .trio { grid-template-columns:1fr; max-width:340px; margin:0 auto; }
+    .split { grid-template-columns:1fr; gap:28px; }
+    .specimens { grid-template-columns:repeat(2,1fr); gap:24px 14px; }
     .wp-grid { grid-template-columns:repeat(3,1fr); }
     .feat { grid-template-columns:1fr; gap:8px; padding:32px 0; }
     .ba { grid-template-columns:1fr; max-width:340px; }
@@ -135,27 +156,21 @@
 
 <header class="hero wrap">
   <img class="logo" src="promo/logo-light.png" alt="CrossMosa — 台灣黑熊與月牙">
-  <h1>終於，你的 X3<br>能好好讀中文了</h1>
-  <p class="lead">刷一次機，從選單、內文到翻頁，一路順到底。口袋裡那台 X3，這下是一台真正的中文閱讀器了。</p>
+  <h1>中文書，<br>就該這樣讀。</h1>
+  <p class="lead">為 Xteink X3 與 X4 打造。裝好之後，拿起來就是中文。</p>
   <p class="axis">零碎時間已經夠少了，不該花在跟機器搏鬥上。</p>
   <div class="btns" style="margin-bottom:10px">
-    <a class="btn primary" href="https://github.com/anki630/crossmosa/releases/latest">下載 CrossMosa 2.0.1</a>
+    <a class="btn primary" href="https://github.com/anki630/crossmosa/releases/latest">下載 X3 版</a>
+    <a class="btn primary" href="https://github.com/anki630/crossmosa/releases/tag/v2.1.0-beta.5">下載 X4 版</a>
     <a class="btn ghost" href="#install">怎麼安裝？三步驟 →</a>
-    <a class="btn ghost" href="https://github.com/anki630/crossmosa/blob/main/CHANGELOG.md">看完整的變更紀錄 →</a>
   </div>
   <p class="note" style="margin:0 0 10px">免費開源・機器免接電腦</p>
-  <p class="note" style="margin:0 0 10px"><strong>不知道該刷哪一版？直接刷 2.0。</strong>它會自己認出你的螢幕是哪一種，新舊機器都認得。
-  刷舊版才要碰運氣：比較新的 X3 換了螢幕零件，舊版刷上去畫面就不會再更新。<br>
-  以前換一章要等十秒左右，現在一兩秒；翻頁更順，書裡的圖也更少出不來。</p>
-  <p class="note" style="margin:0 0 10px"><strong>已經刷了舊版、畫面停住不動的</strong>，<a href="https://github.com/anki630/crossmosa#screen-halted">這裡有其他人救回來的步驟 →</a></p>
-  <p class="note" style="margin:0 0 26px"><strong>刷機有風險，不保證成功。</strong>已有使用者的機器變成磚，救援程序也不是每次都有用。<a href="https://github.com/anki630/crossmosa#flash-warning">刷之前請先讀這段 →</a></p>
+  <p class="note" style="margin:0 0 26px">X4 版目前還是測試版。</p>
   <nav class="quicknav" aria-label="頁面快速導覽">
-    <a class="hi" href="#whatsnew">這一版更新了什麼</a>
-    <a href="#install">怎麼安裝</a>
-    <a href="#features">功能</a>
+    <a class="hi" href="#kids">給孩子</a>
     <a href="#fonts">字型</a>
+    <a href="#install">怎麼安裝</a>
     <a href="#faq">常見問題</a>
-    <a href="https://github.com/anki630/crossmosa/blob/main/CHANGELOG.md">完整變更紀錄 ↗</a>
   </nav>
   <div class="devices"><img src="promo/hero-photo.jpg" alt="CrossMosa 實機：全繁中主畫面、明體內文、名畫待機"></div>
   <p class="note">實際拍攝。</p>
@@ -165,17 +180,30 @@
   <div class="wrap">
     <p class="kicker">BEFORE / AFTER</p>
     <h2>你買它是為了讀中文書，結果打開是這樣</h2>
-    <p class="sub">不是書壞了，也不是你不會設定——原版根本沒帶中文字型，整頁都是方塊。刷了 CrossMosa，選單說中文，內文用你挑的字型好好顯示。差別，看圖就好。</p>
+    <p class="sub">整頁都是方塊。裝好 CrossMosa，選單是中文，書頁清清楚楚。差別，看圖就好。</p>
     <div class="ba">
       <figure>
-        <img src="promo/compare-tofu.jpg" alt="原版：滿頁方塊字" loading="lazy">
-        <figcaption>刷機前<div class="cap-sub">同一本書，原版韌體</div></figcaption>
+        <img src="promo/compare-tofu.jpg" alt="裝好之前：滿頁方塊字" loading="lazy">
+        <figcaption>裝好之前<div class="cap-sub">同一本書</div></figcaption>
       </figure>
       <figure>
-        <img src="promo/compare-serif.jpg" alt="CrossMosa:正常明體內文" loading="lazy">
-        <figcaption>刷機後<div class="cap-sub">CrossMosa + 明體</div></figcaption>
+        <img src="promo/compare-serif.jpg" alt="裝好之後：正常顯示的明體內文" loading="lazy">
+        <figcaption>裝好之後<div class="cap-sub">CrossMosa，明體</div></figcaption>
       </figure>
     </div>
+  </div>
+</section>
+
+<section id="kids">
+  <div class="wrap split">
+    <div>
+      <p class="kicker">FOR KIDS</p>
+      <h2>孩子，也能自己讀</h2>
+      <p class="sub">還不認得的字，看旁邊的注音就會念。破音字，也會照詞來標。<br>睡前、週末、坐車的時候，拿起來就能讀完一本。</p>
+      <p class="sub">沒有遊戲，沒有廣告，也沒有通知。孩子拿起來，就是讀書。</p>
+      <p class="note">注音字型目前搭配測試版使用。<a href="https://github.com/anki630/crossmosa/releases/tag/v2.1.0-beta.5">下載測試版與注音字型 →</a></p>
+    </div>
+    <figure class="photo"><img src="promo/x3-zhuyin.jpg" width="900" height="1343" alt="X3 上的注音直排書頁" loading="lazy"><figcaption class="note">X3</figcaption></figure>
   </div>
 </section>
 
@@ -183,20 +211,33 @@
   <div class="wrap">
     <p class="kicker">TYPEFACES</p>
     <h2>換一套字，換一種心情</h2>
-    <p class="sub">明體耐讀、黑體耐小、硬筆楷書像手寫。字型放在 SD 卡上，隨時換，不用重刷機。挑一套，開始暢讀。<br>看不清小字的話，另有大字版（24 / 26 / 28），裝法一樣。</p>
-    <div class="trio">
-      <figure>
-        <img src="promo/compare-serif.jpg" alt="明體 NotoSerifTC" loading="lazy">
-        <figcaption>明體<div class="cap-sub">27,950 個漢字，再冷僻的字幾乎都在。長篇首選</div></figcaption>
-      </figure>
-      <figure>
-        <img src="promo/compare-sans.jpg" alt="黑體 NotoSansTC" loading="lazy">
-        <figcaption>黑體<div class="cap-sub">粗細一致，小字級最不糊。同樣 27,950 個漢字</div></figcaption>
-      </figure>
-      <figure>
-        <img src="promo/compare-iansui.jpg" alt="硬筆楷書 芫荽" loading="lazy">
-        <figcaption>硬筆楷書（芫荽）<div class="cap-sub">像原子筆寫在紙上。同樣 27,950 個漢字</div></figcaption>
-      </figure>
+    <p class="sub">明體耐讀，黑體清楚，圓體柔和，硬筆楷書像手寫。給孩子有注音，給爸媽有大字版。字型放在 SD 卡上，隨時可以換。</p>
+    <div class="seg" role="group" aria-label="排版方向">
+      <button type="button" data-mode="h" aria-pressed="true">橫排</button>
+      <button type="button" data-mode="v" aria-pressed="false">直排</button>
+    </div>
+    <div class="specimens">
+      <figure><img src="promo/fonts/serif.png" data-v="promo/fonts/v-serif.png" alt="明體樣張" loading="lazy"><figcaption>明體<div class="cap-sub">長篇首選</div></figcaption></figure>
+      <figure><img src="promo/fonts/sans.png" data-v="promo/fonts/v-sans.png" alt="黑體樣張" loading="lazy"><figcaption>黑體<div class="cap-sub">字小也清楚</div></figcaption></figure>
+      <figure><img src="promo/fonts/round.png" data-v="promo/fonts/v-round.png" alt="圓體樣張" loading="lazy"><figcaption>圓體<span class="tag">新</span><div class="cap-sub">筆畫圓潤，看久不累</div></figcaption></figure>
+      <figure><img src="promo/fonts/iansui.png" data-v="promo/fonts/v-iansui.png" alt="硬筆楷書樣張" loading="lazy"><figcaption>硬筆楷書<div class="cap-sub">像原子筆寫在紙上</div></figcaption></figure>
+      <figure><img src="promo/fonts/zhuyin.png" data-v="promo/fonts/v-zhuyin.png" alt="注音楷書樣張" loading="lazy"><figcaption>注音楷書<span class="tag">新</span><span class="tag">測試版</span><div class="cap-sub">破音字也照詞來標</div></figcaption></figure>
+      <figure><img src="promo/fonts/large.png" data-v="promo/fonts/v-large.png" alt="大字版樣張" loading="lazy"><figcaption>大字版<div class="cap-sub">明體、黑體、圓體都有</div></figcaption></figure>
+    </div>
+    <p class="note" style="margin-top:28px">樣張是模擬畫面：用機器上的字型檔，照螢幕原本的解析度排出來。範文為朱自清〈背影〉、李白〈靜夜思〉、孟浩然〈春曉〉。</p>
+  </div>
+</section>
+
+<section id="features">
+  <div class="wrap">
+    <p class="kicker">EVERY DAY</p>
+    <h2>零碎時間，拿起來就讀</h2>
+    <p class="sub">通勤、午休、睡前。你還在讀這一頁，下一頁已經備好；下次打開，從上次的地方繼續。</p>
+    <figure class="photo-center"><img src="promo/x4-vertical.jpg" width="900" height="1444" alt="X4 上的直排書頁" loading="lazy"><figcaption class="note">X4</figcaption></figure>
+    <div class="feats">
+      <div class="feat"><h3>直排的書，照直排讀<span class="tag">測試版</span></h3><p>由上而下、由右而左，像翻一本真正的書。</p></div>
+      <div class="feat"><h3>註腳，一按就到</h3><p>再按一下就回到原處。譯注多的書，終於好讀了。</p></div>
+      <div class="feat"><h3>書，傳過去就好</h3><p>打開瀏覽器，把書拖進去。書都在 Calibre 的話，機器也能直接連上你的書庫。</p></div>
     </div>
   </div>
 </section>
@@ -205,7 +246,7 @@
   <div class="wrap">
     <p class="kicker">SLEEP GALLERY</p>
     <h2>口袋裡的小美術館</h2>
-    <p class="sub">待機的時候，展出一幅世界名畫——精選 50 幅館藏<sup class="fn"><a href="#fn-p3">3</a></sup>，逐張裁構圖、調層次，為電子紙重新詮釋。放進 SD 卡，今天梵谷，明天北齋。</p>
+    <p class="sub">闔上的時候，螢幕上是一幅世界名畫。今天梵谷，明天北齋。</p>
     <div class="wp-grid">
       <img src="promo/wp/great_wave.jpg" alt="神奈川沖浪裏" loading="lazy">
       <img src="promo/wp/girl_pearl_earring.jpg" alt="戴珍珠耳環的少女" loading="lazy">
@@ -221,102 +262,25 @@
       <img src="promo/wp/twittering_machine.jpg" alt="吱喳機器" loading="lazy">
     </div>
     <details class="more">
-      <summary>展開全部 50 張</summary>
+      <summary>看全部館藏</summary>
       <div class="wp-grid" id="wp-rest"></div>
     </details>
-  </div>
-</section>
-
-<section id="features">
-  <div class="wrap">
-    <p class="kicker">EXPERIENCE</p>
-    <h2>一路順到底</h2>
-    <p class="sub">113 個版本磨的是同一件事：讓機器消失，只剩下書。</p>
-    <div class="feats">
-      <div class="feat"><h3>整台機器，說中文</h3><p>開機第一眼就是繁體中文。選單、設定、每一句提示，全是台灣用語。連「憨」「璐」這類書名裡的冷僻字，都顯示得出來<sup class="fn"><a href="#fn-p2">2</a></sup>。</p></div>
-      <div class="feat"><h3>翻頁，跟得上你</h3><p>你還在讀這一頁，下一頁已經備好。大多時候更快；任何時候，都不會更慢<sup class="fn"><a href="#fn-p1">1</a></sup>。</p></div>
-      <div class="feat"><h3>無線傳書，無限藏書</h3><p>電腦或手機連上機器的網址，書拖進去就傳好了。不裝 App、不拔卡。</p></div>
-      <div class="feat"><h3>查註腳，不怕迷路</h3><p>正文與註釋，像實體書一樣往返——短按電源鍵跳過去、再跳回來，讀到哪裡不會丟。譯注多的書，終於好讀了。</p></div>
-      <div class="feat"><h3>你的書庫，無線上架</h3><p>電腦上用 Calibre（免費書庫軟體）管書的話，X3 直接連上它：瀏覽、下載、開書，全在機器上完成(OPDS)。</p></div>
-      <div class="feat"><h3>十分鐘，變熟手</h3><p>附一本《歡迎使用 CrossMosa》：十三個短章，一邊讀一邊按。連刷壞了怎麼救回來，都有教。</p></div>
-    </div>
-  </div>
-</section>
-
-<section id="story">
-  <div class="wrap">
-    <p class="kicker">STORY</p>
-    <h2>為什麼會有這個版本</h2>
-    <div class="story">
-      <p>我是電子書閱讀器的愛用者。有工作、有小孩，能讀書的時間都是擠出來的零碎片段——通勤的路上、孩子睡著後的半小時。X3 這種放得進口袋的機器，就是為這些片段準備的。</p>
-      <p>但買來才發現，它不是為中文讀者做的：選單是英文，中文書打開是滿頁方塊。零碎時間已經夠少了，不該再花在跟機器搏鬥上。</p>
-      <p>原版 CrossPoint 是個很好的開源起點，所以我從它出發，為自己改了一版。字型放不下就重做字集，記憶體不夠就一 KB 一 KB 地省，翻頁慢就去面板刷新的空檔裡偷時間。改到第 113 個內部版本<sup class="fn"><a href="#fn-p4">4</a></sup>，我覺得可以拿出來了。</p>
-      <p>這一版叫 CrossMosa:Cross 來自它的起點，Mosa 來自 Formosa。開機畫面上那隻是台灣黑熊，牠頭上有一彎月牙。</p>
-      <p>如果你的閱讀時間也是擠出來的，這一版就是為你調的。</p>
-      <p class="sig">—— <a href="https://github.com/anki630">anki630</a>，CrossMosa 維護者</p>
-    </div>
-  </div>
-</section>
-
-<section id="whatsnew">
-  <div class="wrap">
-    <p class="kicker">WHAT&#39;S NEW</p>
-    <h2>這一版更新了什麼</h2>
-    <p class="sub">2.0.1 · 2026 年 9 月。完整紀錄見 <a href="https://github.com/anki630/crossmosa/blob/main/CHANGELOG.md">CHANGELOG</a>。<br>
-    上一個大版本 2.0.0 讓新批次 X3（UC8279 面板）能正常顯示；這一版是修正版。</p>
-    <div class="log">
-
-      <h3>書名裡的黑方塊</h3>
-      <ul>
-        <li><strong>系統字型多收了 496 個罕用字。</strong>檔案清單和書名裡本來是黑方塊的字（像「羣」「倂」）現在都有字了。</li>
-        <li><strong>挑字的方法也換了。</strong>以前照 BIG5 的字頻表排名次挑，但那份表反映的是一般用字、不是<strong>書名</strong>用字。現在改成掃整個電子書庫的內文，看真正會出現在書名和檔名裡的是哪些字。</li>
-        <li>系統字型是編在韌體裡的，<strong>要重刷才會生效</strong>。書的內文不受影響，那走 SD 卡字型。</li>
-      </ul>
-
-      <h3>逛書單時偶爾會當機</h3>
-      <ul>
-        <li><strong>用 OPDS 抓書時的偶發當機。</strong>畫面在畫書單的同時，抓下一頁的程式會把書單換掉，兩邊撞在一起就會讀到已經清掉的資料。現在換書單一定等畫完才做。</li>
-        <li>另外修了字型解壓縮的兩個潛在當機點（上線前複查時找到的，還沒有人回報中招）。</li>
-      </ul>
-
-      <h3>字型包重做了，請重新下載</h3>
-      <ul>
-        <li><strong>五套內文字型全部重做。</strong>補上中文電子書實際會用到、但先前漏掉的符號：圈圈數字、注音、<strong>直排標點</strong>、方框幾何，以及 CJK 擴充 A 整個區塊。抽 60 本書掃描，<strong>漢字一個都不缺</strong>。</li>
-        <li><strong>新增大字版</strong>：黑體與明體，字級 24 / 26 / 28。複製到 SD 卡即可，不必刷韌體。停在 28 是刻意的——字太大反而不好讀，真正決定舒不舒服的是一頁剩幾個字（22pt 約 138 字、28pt 剩 85 字、36pt 只剩 52 字）。</li>
-      </ul>
-
-      <h3>升級注意</h3>
-      <ul>
-        <li><strong>沒有變更任何快取格式</strong>——既有的書不會重新排版，閱讀進度、書籤、設定都不受影響。</li>
-        <li>已經下載過字型包的<strong>請重新下載</strong>，否則那些補回來的字仍然是方塊。</li>
-      </ul>
-
-    </div>
   </div>
 </section>
 
 <section id="install">
   <div class="wrap">
     <p class="kicker">INSTALL</p>
-    <h2>三步驟，十五分鐘裝好</h2>
+    <h2>三步驟，今晚就能開始讀</h2>
     <p class="sub">機器你已經有了，SD 卡就插在上面。剩下的只有三步。</p>
+    <p class="tip" style="margin:0 auto 22px"><strong>該下載哪一版？</strong>X3 第一次刷，請用<a href="https://github.com/anki630/crossmosa/releases/latest">正式版</a>；裝好之後想試注音和直排，再換<a href="https://github.com/anki630/crossmosa/releases/tag/v2.1.0-beta.5">測試版</a>。X4 直接用測試版。</p>
     <div class="steps">
-      <div class="step"><div><strong>刷韌體</strong><br>把 zip 裡的 <code>update.bin</code> 用讀卡機放進 SD 卡根目錄，插回機器。關機，按住左側鍵+電源。五分鐘後，它就是 CrossMosa 了。</div></div>
-      <div class="step"><div><strong>放字型（跳過這步，書打開仍是方塊）</strong><br>把字型包解壓縮到 SD 卡的 <code>/.fonts/</code>。內文字型在 SD 卡上、不在韌體裡。刷完看到方塊不是刷壞了，是字型還沒放。</div></div>
-      <div class="step"><div><strong>讀第一本書</strong><br>把附的《歡迎使用 CrossMosa》複製進 SD 卡，開機就是繁體中文，打開它。再花十分鐘讀完，你就是熟手。</div></div>
+      <div class="step"><div><strong>刷機</strong>（只有第一次）<br>從下載頁下載 <code>update.bin</code>，放進 SD 卡最外層，插回機器。關機後，按住下面兩顆鍵開機，看到載入畫面就放手：<br>X3：左側的上一頁鍵＋電源鍵<br>X4：右側上面那顆鍵＋電源鍵。沒有反應的話，接上 USB 電源再試一次。<br>等它自己重新開機，就完成了。</div></div>
+      <div class="step"><div><strong>放字型</strong><br>下載<a href="https://github.com/anki630/crossmosa/releases/tag/fonts-2026-09">字型包</a>，在 SD 卡最外層建一個 <code>fonts</code> 資料夾，把字型包裡的資料夾放進去。沒有字型，書會顯示成方塊。</div></div>
+      <div class="step"><div><strong>開始讀</strong><br>在剛剛下載韌體的那一頁，下載使用手冊 <code>CrossMosa.epub</code>，放進 SD 卡。到「設定 → 閱讀器 → 閱讀字型」選一套字型，打開手冊，一邊讀一邊按。</div></div>
     </div>
-    <div class="warn" style="background:var(--paper)">
-      <strong>開始讀之前，對一下這張清單——五格全勾，體驗最完整；前四格就能開讀：</strong><br>
-      ☐ 韌體已刷（<code>update.bin</code> 放 SD 根目錄）<br>
-      ☐ 字型資料夾在 <code>/.fonts/</code>（缺這步=滿頁方塊）<br>
-      ☐ 《歡迎使用 CrossMosa》已複製進 SD 卡<br>
-      ☐ 閱讀字型已選：<strong>設定 → 閱讀器 → 閱讀字型</strong><br>
-      ☐ （可選）名畫放進 <code>/.sleep/</code>，待機變畫框<br>
-      開機就是繁體中文，不用設定——它本來就該如此。
-    </div>
-    <div style="display:none">
-    </div>
-    <div class="warn"><strong>電腦偵測不到機器？本來就不用接。</strong>首刷全程走 SD 卡，檔案用讀卡機放進卡。維護者的 Mac 接了 Hub 也偵測不到，索性整個流程改走 SD。線材、Hub、甚至 USB 被鎖，都不影響。完整說明與退路在 <a href="https://github.com/anki630/crossmosa#%E5%AE%89%E8%A3%9D">安裝文件</a>。</div>
+    <p class="tip"><strong>以後更新，不用重刷。</strong>把新版傳進機器，到「設定 → 系統 → SD 卡韌體更新」選它就好，不用再按鍵開機。</p>
+    <p class="note" style="margin-top:18px">想讓待機畫面變成名畫，照<a href="https://github.com/anki630/crossmosa/blob/main/docs/wallpaper.md">這份說明</a>放進 SD 卡就好。遇到問題，看<a href="https://github.com/anki630/crossmosa/blob/main/docs/install.md">完整的安裝說明</a>。</p>
   </div>
 </section>
 
@@ -325,13 +289,29 @@
     <p class="kicker">FAQ</p>
     <h2>猶豫的話，先看這裡</h2>
     <div class="faq">
-      <details><summary>會把機器刷壞嗎？</summary><div class="a">風險很低。首刷用的是原廠韌體自己的 SD 更新機制；而且 CrossMosa 保留了救援模式：關機後按住左側翻頁鍵再開機，直接進 SD 卡韌體選擇畫面——就算刷了一版開不了機的韌體，也有路回來。風險與退路，安裝文件寫得很白。</div></details>
-      <details><summary>以後怎麼更新？</summary><div class="a">出新版時，到 Release 下載單獨那顆 update.bin（免解壓），手機開瀏覽器連上機器的網頁傳輸把它丟進 SD 卡，再到「設定 → 系統 → SD 卡韌體更新」點一下——全程不用電腦。</div></details>
-      <details><summary>可以刷回去嗎？</summary><div class="a">可以，隨時。SD 卡救援模式（關機按住左側鍵再開機）能刷回原版 CrossPoint 韌體，不用電腦；要回原廠韌體，用原廠的更新檔或網頁 flasher。來去自由。</div></details>
-      <details><summary>跟原版 CrossPoint 差在哪？</summary><div class="a">CrossMosa 基於 CrossPoint 1.4.1，重做了中文字集與介面翻譯、加了翻頁預取、OPDS 中文書庫體驗、名畫待機策展、隨附教學書，並修了一批記憶體與穩定性問題。完整差異列表在 <a href="https://github.com/anki630/crossmosa#%E8%88%87%E5%8E%9F%E7%89%88-crosspoint-%E7%9A%84%E9%97%9C%E4%BF%82">GitHub</a>。</div></details>
-      <details><summary>要錢嗎？</summary><div class="a">免費，開源（MIT 授權），原始碼全部公開。覺得好用的話，頁尾有幾種支持的方式，完全自願。</div></details>
-      <details><summary>書從哪裡來？</summary><div class="a">本專案不提供書，也不處理 DRM。請向正版管道購買、認明「無 DRM」的書（Readmoo、樂天 Kobo、Google Play 圖書都有部分書籍如此，依平台與書而定），搭配 Calibre 整理後用網頁上傳或 OPDS 傳進機器。有 DRM 的書，這台機器讀不了。</div></details>
-      <details><summary>沒有 X3 也能用嗎？</summary><div class="a">CrossMosa 目前只為 Xteink X3 調校。X3 是一台口袋大小、58 克的電子紙閱讀器，在 Xteink 官方通路買得到——本專案與 Xteink 無任何關係，純粹是為這台機器做的愛好者韌體。</div></details>
+      <details><summary>支援哪些機器？</summary><div class="a">Xteink X3 和 X4。X4 版目前還是測試版。觸控的 X4 Pro 不支援。</div></details>
+      <details><summary>每次更新都要重刷嗎？</summary><div class="a">不用。只有第一次要按鍵刷機。之後出新版，用手機的瀏覽器把它傳進機器，到「設定 → 系統 → SD 卡韌體更新」選它就好，全程不用接線。</div></details>
+      <details><summary>不太會用電腦，也裝得起來嗎？</summary><div class="a">裝得起來。用電腦或手機把檔案放進 SD 卡，再按住兩顆鍵開機就好，機器不用接線。</div></details>
+      <details><summary>會把機器刷壞嗎？</summary><div class="a">刷機有風險，而且不是每一次都救得回來。開始之前，請先讀完<a href="https://github.com/anki630/crossmosa/blob/main/docs/install.md">安裝說明</a>裡的注意事項。</div></details>
+      <details><summary>可以刷回原廠系統嗎？</summary><div class="a">可以。社群整理了<a href="https://pocketink.io/firmware/recovery/">刷回原廠的步驟</a>（英文）：機器接得上電腦的話，用 CrossPoint 的刷機網站；USB 被鎖住的 X3，改用 SD 卡和原廠的更新檔。</div></details>
+      <details><summary>要錢嗎？</summary><div class="a">免費，開源。</div></details>
+      <details><summary>書從哪裡來？</summary><div class="a">CrossMosa 不提供書。請向正版管道購買沒有 DRM 的電子書，再用瀏覽器傳進機器。有 DRM 的書，這台機器讀不了。</div></details>
+      <details><summary>跟原版 CrossPoint 差在哪？</summary><div class="a">CrossPoint 是很好的開源起點。CrossMosa 在它上面，把中文閱讀做完整。</div></details>
+    </div>
+  </div>
+</section>
+
+<section id="story">
+  <div class="wrap">
+    <p class="kicker">STORY</p>
+    <h2>為什麼會有它</h2>
+    <div class="story">
+      <p>我是電子書閱讀器的愛用者。有工作、有小孩，能讀書的時間都是擠出來的零碎片段——通勤的路上、孩子睡著後的半小時。X3 這種放得進口袋的機器，就是為這些片段準備的。</p>
+      <p>但買來才發現，它不是為中文讀者做的：選單是英文，中文書打開是滿頁方塊。零碎時間已經夠少了，不該再花在跟機器搏鬥上。</p>
+      <p>所以我從開源的 CrossPoint 出發，為自己改了一版。一版一版地改，改到我覺得可以拿出來了。</p>
+      <p>它叫 CrossMosa：Cross 來自它的起點，Mosa 來自 Formosa。開機畫面上那隻是台灣黑熊，牠頭上有一彎月牙。</p>
+      <p>如果你的閱讀時間也是擠出來的，這一版就是為你調的。</p>
+      <p class="sig">—— <a href="https://github.com/anki630">anki630</a>，CrossMosa 維護者</p>
     </div>
   </div>
 </section>
@@ -339,32 +319,24 @@
 <section id="support">
   <div class="wrap support">
     <p class="kicker">SUPPORT</p>
-    <h2>如果它讓你的 X3 變好用了</h2>
-    <p class="sub" style="margin:0 auto 14px">三件事任何一件都是支持：到 <a href="https://github.com/anki630/crossmosa/discussions">Discussions</a> 留句話說你用得如何；推薦給另一個有 X3 的朋友；或請維護者喝杯咖啡（連結籌備中）。</p>
-    <p class="sub" style="margin:0 auto 30px">這一頁沒有使用者見證——因為我們不編故事。第一句真話，可以是你的。</p>
+    <h2>如果它讓你的閱讀器變好用了</h2>
+    <p class="sub" style="margin:0 auto 30px">推薦給也有 X3、X4 的朋友；到<a href="https://github.com/anki630/crossmosa/discussions">討論區</a>說說你讀了什麼書；或請維護者喝杯咖啡（連結籌備中）。</p>
     <div class="btns" style="margin-bottom:18px">
-      <a class="btn primary" href="https://github.com/anki630/crossmosa/releases/latest">下載 CrossMosa 2.0.1</a>
+      <a class="btn primary" href="https://github.com/anki630/crossmosa/releases/latest">下載 X3 版</a>
+      <a class="btn primary" href="https://github.com/anki630/crossmosa/releases/tag/v2.1.0-beta.5">下載 X4 版</a>
     </div>
     <p style="font-weight:600">接下來，把零碎時間還給書。</p>
   </div>
 </section>
 
-<section style="padding:56px 0">
-  <div class="wrap fnotes" id="fnotes">
-    <p id="fn-p1">1. 機制：面板刷新的空檔預先載入下一頁字型。實機量測（320 次翻頁）:預載完成的頁面繪製中位 952ms，未完成 1,278ms；未完成時走原路徑，無額外代價。</p>
-    <p id="fn-p2">2. 介面字集共 7,973 字 = BIG5 一級全收 + 掃描整個電子書庫內文挑出的常用字；內文另由 SD 卡字型涵蓋（27,950 字，含 CJK 擴充 A 整個區塊）。BIG5 範圍外的罕用字仍是已知缺口，碰到請回報，補字是例行維護。</p>
-    <p id="fn-p3">3. 名畫皆取自公共領域(Wikimedia Commons)，逐張調整對比與構圖裁切以適配 4 階灰階電子紙。</p>
-    <p id="fn-p4">4. 完整版本紀錄公開於 <a href="https://github.com/anki630/crossmosa/blob/main/CHANGELOG.md">GitHub 的 CHANGELOG</a>。</p>
-  </div>
-</section>
-
 <footer>
   <div class="wrap">
-    <p>CrossMosa 是社群維護的開源韌體，與 Xteink 及原版 CrossPoint 專案均無隸屬關係。刷機有風險，風險自負。首刷走 SD 卡，機器不用接電腦；要用原廠網頁 flasher 刷回原廠韌體時，才需要裝置未鎖 USB。</p>
-    <p>本專案不提供任何書籍內容。名畫待機圖均取自公共領域(Wikimedia Commons)。字型：Noto Sans/Serif TC、芫荽 Iansui、IBM Plex Sans TC(SIL OFL 1.1)。</p>
+    <p>CrossMosa 是社群維護的開源韌體，與 Xteink 及原版 CrossPoint 專案均無隸屬關係。刷機有風險，風險自負。</p>
+    <p>本專案不提供任何書籍內容。字型、名畫與程式庫的授權與致謝，見<a href="https://github.com/anki630/crossmosa/blob/main/NOTICE.md">授權說明</a>。</p>
     <p><a href="https://github.com/anki630/crossmosa">GitHub</a> · <a href="https://github.com/anki630/crossmosa/releases/latest">下載</a> · <a href="https://github.com/anki630/crossmosa/discussions">討論區</a> · MIT License</p>
   </div>
 </footer>
+
 
 <script>
 // 展開時才載入其餘 37 張（檔名清單由建置時注入）
@@ -381,6 +353,18 @@ document.querySelector('details.more').addEventListener('toggle', function () {
     }
   }
 }, { once: false });
+</script>
+<script>
+// 字型樣張：橫排／直排切換（沒有 JS 就停在橫排）
+document.querySelectorAll('.seg button').forEach(b => b.addEventListener('click', () => {
+  const v = b.dataset.mode === 'v';
+  document.querySelectorAll('.seg button').forEach(x => x.setAttribute('aria-pressed', String(x === b)));
+  document.querySelectorAll('.specimens img').forEach(img => {
+    if (!img.dataset.h) { img.dataset.h = img.getAttribute('src'); img.dataset.alt = img.alt; }
+    img.src = v ? img.dataset.v : img.dataset.h;
+    img.alt = img.dataset.alt + (v ? '（直排）' : '');
+  });
+}));
 </script>
 <script>
 const io = new IntersectionObserver(es => es.forEach(e => { if (e.isIntersecting) { e.target.classList.add('in'); io.unobserve(e.target); } }), { threshold: .12 });
