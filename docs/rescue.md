@@ -92,95 +92,78 @@
 
 # Screen stopped updating? Rescue (English)
 
-If you flashed 1.x and the screen no longer updates, you can **blind-flash straight to 2.0** —
-no need to go back to stock firmware first. About five to six minutes when it goes smoothly.
-**You will see nothing the whole time — work by the clock, and err on the long side.**
+This page applies to X3. The X4 rescue procedure is still being prepared.
 
-### Get the SD card ready first
+If the screen stopped updating after you flashed 1.x, you can **blind-flash directly to 2.0**. You do not need to return to the stock firmware first.
 
-1. Put the SD card in a computer
-2. **Delete everything on it** (no formatting needed; copy your books off first if you want them)
-3. Download **`update.bin`** (2.0.0 or newer — use the [latest release](https://github.com/anki630/crossmosa/releases/latest))
-4. **Drop it in the card's root exactly as downloaded** — do not unzip, do not rename
-5. That one `update.bin` is the only thing left on the card
-6. Put the card back in the device and **charge it fully**
+The process takes about five to six minutes when everything goes smoothly. **You will not see the screen at any point. Follow the timings closely. It is safer to wait longer than to press early.**
 
-⚠️ Step 2 is the one that matters. An old `.bin` left over from a previous update will be picked
-instead, and you cannot tell.
+### Prepare the SD card first
 
-ℹ️ Losing power mid-write **will not brick it** — it just boots the firmware you already had, so
-you start over.
+1. Put the SD card in a computer.
+2. **Delete everything on the card.** You do not need to format it. If you want to keep your books, copy them to the computer first.
+3. Download **`update.bin`**, version 2.0.0 or later. The [latest release](https://github.com/anki630/crossmosa/releases/latest) is recommended.
+4. **Put the original file directly in the root of the card.** Do not extract or rename it.
+5. Make sure this one `update.bin` is the only file left on the card.
+6. Put the card back in the device and **fully charge the device**.
+
+**Step 2 is the most important.** If an old `.bin` from a previous flash remains on the card, the blind sequence will select it and you will have no way to tell.
+
+Losing power during writing **will not brick the device**. It will start with the firmware it already had, and you can try again.
 
 <img src="img/button-map.png" width="340" alt="X3 button numbers">
 
-| ① left edge | ② top-left | ③ top-right | ⑥ front, 2nd |
+| ① left edge | ② top-left edge | ③ top-right edge | ⑥ front, second from left |
 |---|---|---|---|
 | Previous page | Reset | Power | Confirm |
 
-**Only ① and ⑥ are used. Never press ⑤⑦⑧** (the other three on the front row).
+**You will only use ① and ⑥. Never press ⑤⑦⑧, the other three front keys.**
 
-1. Press **②**
-2. Hold **① + ③** for 4 s → release **③ first, then ①**
-3. Wait **2 s**
-4. Press **①**, then **⑥**
-5. Wait **90 s** → do step 4 again (**①** first, then **⑥**)
-6. Wait **90 s**
-7. Press **⑥**
-8. **Be patient** — writing; do not touch the device or remove the card. **On success it reboots
-   by itself**
-9. If nothing has happened after a good while, start again from step 1
+1. Press **②**.
+2. Hold **① + ③** for four seconds → **release ③ first, then ①**.
+3. Wait **2 seconds**.
+4. Press **①**, then press **⑥**.
+5. Wait **90 seconds** → repeat step 4 once more. Press **①** first, then **⑥**.
+6. Wait **90 seconds**.
+7. Press **⑥**.
+8. **Wait patiently.** The device is writing the firmware. Do not touch it or remove the card. **If the update succeeds, the device will start by itself.**
+9. If nothing happens after a long wait, start again from step 1.
 
-**Try a few times.** Failures are usually just a press that did not register — you cannot see the
-screen, so there is no feedback either way. (If it boots but the screen stays blank, press **②**
-then hold **③**.)
+**Try several times.** A failed attempt usually means that one press did not register. Because you cannot see the screen, you receive no feedback when this happens. Repeating the process a few times will usually work. If the device starts but the screen remains black, press **②**, then hold **③**.
 
 <details>
-<summary>Details: why these buttons, and what each wait is for</summary>
+<summary>Details: why this sequence works and what each wait is for</summary>
 
-**Why "① then ⑥" can be repeated safely** — neither can make things worse on any screen:
+**Why you can safely repeat “①, then ⑥”:** These two keys will not cause a problem, regardless of which screen the device is on.
 
-| Screen | ① | ⑥ |
+| Current screen | ① | ⑥ |
 |---|---|---|
-| File list | wraps selection to your `.bin` | selects it |
-| "Update firmware?" | does nothing | confirms |
-| Checking / writing | ignored | ignored |
+| File list | Moves to your `.bin` | Selects it |
+| “Update firmware?” | No effect | Confirms |
+| Checking or writing | Ignored | Ignored |
 
-So you never need to know which step you are on. That is what steps 5 and 7 are for.
-**Press these one after the other, not together** — the only combinations you hold down at the
-same time are **① + ③** (entering rescue) and **③ + ④** (screenshot).
+You do not need to know which step the device has reached. If you are unsure, repeat the sequence. This is why steps 5 and 7 work.
 
-**Why only one `.bin`** — the rescue list shows only `.bin` files and always sorts folders first,
-so your `.bin` is necessarily the last entry; ① wraps the selection from the first round to the
-last. With several, you get the one that sorts last by name.
+**Press these keys one at a time. Do not hold them together.** The only combinations in this page that you hold together are **① + ③** to enter rescue and **③ + ④** to take a screenshot.
 
-**⛔ Why not ⑤⑦⑧** — on the "Update firmware?" prompt, ⑤ and ⑦ both mean *cancel*. ⑦ is the
-trap: in the list the screen labels it "up" and it behaves exactly like ①, but on the prompt it
-cancels — **and the screen does not say so**.
+**Why the card must contain only one `.bin`:** The rescue file list shows only `.bin` files, and folders always appear first. Your `.bin` is therefore the last item. Pressing ① wraps from the first item to the last and selects it. If the card contains several `.bin` files, the device selects the one whose filename sorts last.
 
-**What each wait is for** — step 1: the rescue combo is only read at the instant of boot, so if
-the device is already on with a dead screen the combo does nothing. Step 3: releasing the ① you
-were holding also counts as a press. Step 5: insurance — it covers step 4 not registering, and is
-ignored if step 4 already worked. Step 6: reading all ~6 MB to verify (measured 30–60 s).
-Step 8: writing (measured 60–90 s), then it restarts by itself — but that restart does **not**
-reset the screen chip, so occasionally the display stays blank until you press ②. All the waits
-above have margin built in; erring on the long side costs nothing.
+**Why you must not press ⑤⑦⑧:** On the “Update firmware?” screen, both ⑤ and ⑦ mean **Cancel**. Key ⑦ is the easiest mistake to make. On the file-list screen, it is labeled **Up** and does the same thing as ①. On the confirmation screen, it becomes Cancel, **but the screen does not show that label**.
 
-**Stuck on 2.0** (no reports so far): same steps. Different mechanism — 2.0's prompt has two
-options and starts on *Cancel*; ① moves it to *Confirm* and ⑥ selects.
+**What each step is waiting for**
 
-**Another community write-up** reports different timings (~7 s combo, stock firmware first):
-[CrossInk #479](https://github.com/uxjulia/CrossInk/discussions/479) ·
-[issue #2](https://github.com/anki630/crossmosa/issues/2) (by @sk5s). Try that if the above fails.
+- Step 1: The key combination is read **only at the moment the device starts**. If the device is already on with no visible screen, pressing the combination does nothing.
+- Step 3: Releasing ① also counts as pressing it once. Wait two seconds for that input to pass.
+- Step 5: This is a safeguard. If the presses in step 4 did not register, it repeats them. If step 4 already worked, the device ignores this round. Either result is safe.
+- Step 6: The device checks the file for damage. It must read the entire file, about 6 MB. This takes 30–60 seconds in testing. The waits above include extra time. **It is safer to wait longer.**
+- Step 8: The device writes the firmware. This takes 60–90 seconds in testing. It restarts automatically when writing finishes. That restart **does not restart the display controller**, so the screen may occasionally remain black. Press ② to perform a complete restart.
 
-**Lost track?** Press **③ + ④** (power + the right-edge button) for a screenshot — the panel is not updating, but the device still
-knows what *should* be on screen. Read `screenshot-*.bmp` from the card. Static screens only;
-nothing happens during the check or the write.
+**If the device is stuck on 2.0**—which has not been reported—the steps are exactly the same, but the internal path is different. The 2.0 confirmation screen has two choices and starts on **Cancel**. Key ① moves to **Confirm**, then ⑥ selects it.
 
-**Not guaranteed** — some users have followed these steps and still not recovered.
+**Procedures for other versions:** The community has another procedure that holds the combination for about 7 seconds and returns to the stock firmware first: [CrossInk #479](https://github.com/uxjulia/CrossInk/discussions/479) · [this project’s issue #2](https://github.com/anki630/crossmosa/issues/2), reported by @sk5s. Try it if the procedure above does not work.
+
+**If you do not know which screen the device has reached:** Press **③ + ④**, the power key and the key on the right edge, to take a screenshot. The display may not update, but the device still knows what it should be showing. Remove the card and open `screenshot-*.bmp` on a computer. This only works while the device is on a static screen. It does nothing during the check in step 6 or the write in step 8.
+
+**Recovery is not guaranteed.** Some users followed these steps and still could not recover their devices.
 
 </details>
-
----
-
-以上都救不回來，還有最後一條（拆機、直接燒 SPI flash）：
-[Recovering a Bricked Xteink](fix-bricked-xteink.md)（英文）。

@@ -16,3 +16,24 @@
 ![在機器上瀏覽中文書庫](promo/photo-opds.jpg)
 
 書請從正版管道取得，選沒有 DRM 的電子書。本專案不提供、也不代找書籍內容。
+
+---
+
+# Adding books (English)
+
+**Transfer books through a browser without removing the card**
+
+1. Select File Transfer on the device’s Home screen.
+2. Select Join a Network to connect to your home Wi-Fi. If no Wi-Fi network is available, select Create Hotspot, then connect your phone or computer to the device’s network.
+3. Open `http://crossmosa.local` in a browser on your phone or computer. Drag your books onto the page.
+
+**Copy books directly:** Remove the SD card and copy files with a card reader. This is the most reliable method for large files.
+
+**If you manage books with Calibre**
+
+- **Calibre Wireless:** Under File Transfer on the device, select Calibre Wireless. Follow the on-screen setup instructions to connect from Calibre on your computer, then send books directly to the device.
+- **OPDS Browser on the Home screen:** First open Settings → System → OPDS Servers and add your library URL. You can then browse, download, and open books on the device. Add `/opds` to the end of a Calibre library URL.
+
+![Browsing a Chinese book library on the device](promo/photo-opds.jpg)
+
+Obtain books from authorized sources and choose DRM-free editions. This project does not provide books or help locate book content.

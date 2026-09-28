@@ -102,99 +102,103 @@ SD 卡
 
 # Install (English)
 
-> ### ⚠️ Read this first
->
-> **Newer X3 batches ship a UC8279 display controller** (older batches use UC8253). Firmware 1.x
-> does not drive UC8279: after flashing, the screen stops updating — it may freeze on the
-> "update complete" page while the device is still running (a blank SD card still gets a data
-> directory written to it). Upstream added detection in
-> [#2707](https://github.com/crosspoint-reader/crosspoint-reader/pull/2707), shipped in 1.5.0;
-> this build includes it.
->
-> **If you want to try it, please do.** Chapter switches drop from ~10 s to a second or two,
-> page turns are smoother, images are more reliable, and clearing the cache can now keep your
-> reading positions. It is a pre-release, so read this section first — beyond that, go ahead.
+Install CrossMosa on your X3 or X4. It takes three steps and about ten minutes when everything goes smoothly.
 
->
-> **It is still not guaranteed to work on every device.** The panel controller is one known
-> cause, not the only one. **E-ink retains its last image, so "something is on screen" does not
-> mean the device is alive** — and conversely the firmware may still be running fine while the
-> panel never hears a command. Judge by **timestamps of files on the SD card, not by the
-> screen.** Upstream has a related unresolved report:
-> [#2183](https://github.com/crosspoint-reader/crosspoint-reader/issues/2183).
->
-> **Before you start:** back up the whole `/.crossmosa/` folder from your SD card (settings,
-> Wi-Fi credentials, OPDS config and every book's reading position live there and cannot be
-> recovered by reflashing); keep **only one** `.bin` in the SD card root (rescue may run with
-> no display at all, so you cannot see what you are selecting); and be sure you can live with
-> the worst case — **which is losing the device.** Users have bricked units, and **the rescue
-> procedure has failed for some of them too.** Rescue is a path that *may* work, not insurance.
-> Assume the device might not come back, and only proceed if you still accept that.
->
-> Already flashed 1.x and **the screen is frozen**? [Rescue steps below](rescue.md).
-> About five to six minutes when it goes smoothly.
+> Already using CrossMosa and only need a newer version? See [Updating](update.md#updating-english).
+> If your X3 screen stopped updating after flashing, see [Screen stopped updating? Rescue](rescue.md#screen-stopped-updating-rescue-english).
 
-Flashing the firmware only fixes the **menus**. **Book text needs fonts on the SD card.**
-The built-in fallback reader font is Latin-only, so **without the SD fonts every Chinese book
-renders as boxes (□□□□)**.
+## Before you start
 
-> ### If the web flasher can't see your device — you don't need it
->
-> The stock firmware has its own SD update mode. **Method A below never connects the device
-> to a computer** (you only need to copy one file onto the SD card),
-> and community documentation confirms it works even on USB-locked units. Do not use the
-> Xteink Unlocker to flash this firmware (that tool officially supports only CrossPoint and
-> CrossInk). Escape hatch on locked units: CrossMosa keeps the full SD rescue mode — but
-> **do not treat it as a guarantee** — some users have followed the rescue procedure and still
-> did not get their device back. At least two known conditions defeat it (both hit by this
-> project in 2026-08), and there are further failures with no explanation yet:
-> (1) rescue mode only triggers on a **power-button wake**, so it is **unreachable once the
-> firmware is stuck in a boot loop** (a reset loop does not wake via the power button); you
-> must let the **battery drain completely** to break the loop first. (2) **on some X3 units the
-> USB port is charge-only with no data lines**, which makes Methods B and C unusable entirely. Full upstream text:
-> [`docs/UPSTREAM-README.md`](UPSTREAM-README.md), "USB-locked devices".
+1. **Back up the `.crossmosa` folder on your SD card.** It contains your settings, Wi-Fi passwords, reading progress, and bookmarks. Reflashing cannot recover them.
+2. **Keep only one `.bin` file in the root of the SD card.** The screen may not respond during flashing or rescue. If the card contains several `.bin` files, you cannot tell which one you selected.
+3. **Flashing has risks.** Some devices have been bricked and could not be recovered even by following the rescue steps. Before you begin, assume you might lose the device and proceed only if you accept that risk.
 
-1. **Flash** (first install) — **Method A, recommended — the device never touches a computer**:
-   copy the zip's **`update.bin`** to the **root** of the SD
-   card (any card reader or phone adapter works), power off, then
-   hold the **left side button + power** (X3) or the **upper right side button + power** (X4)
-   until the loader screen appears; it flashes and reboots in ~5 minutes. Or use the web
-   flasher at https://crosspointreader.com/#flash-tools (X3 or X4 → Custom .bin), or
-   `esptool.py --chip esp32c3 write_flash 0x10000 update.bin`.
-   Later updates never need a computer: grab the standalone `update.bin` from Releases
-   (no unzip), upload it via the device's web transfer page, then
-   **Settings → System → SD Card Firmware Update** — or
-   the rescue combo (power off, hold the left side button, press power) straight into the
-   SD firmware picker.
-2. **Copy the fonts** from `crossmosa-2.0.1-sd-fonts.zip` into `/.fonts/` on the SD card,
-   keeping one folder per family (`/.fonts/NotoSerifTC/…`). One family is enough;
-   **NotoSerifTC** is the recommended first choice. All five carry **27,950 Han characters**,
-   including the whole CJK Extension A block, so rare characters no longer render as black
-   boxes. 2.0.1 also added the symbols Chinese ebooks actually use: circled numbers,
-   bopomofo, **vertical punctuation `︿ ﹀ ﹃ ﹄`**, box drawing.
-   **If you downloaded the fonts before 2.0.1, download them again** — otherwise those
-   characters are still boxes.
-   `GuanKiapTsingKhai-90` is a pre-rotated brush face: on 2.0.x, pick it and turn the screen
-   to landscape to read Chinese vertically. **Do not do this on 2.1** — 2.1 has real vertical
-   layout (Settings -> Reader -> Text Settings -> Layout -> Text Direction), and a pre-rotated
-   face there lays every character on its side. Pick `Iansui` for a brush face instead.
-   Folder names must not contain spaces.
+## Step 1: Flash the firmware
 
-   **Can't read small text?** `crossmosa-2.0.1-sd-fonts-large.zip` has sans and serif at
-   **24 / 26 / 28** — same install, no reflash. It stops at 28 on purpose: what makes reading
-   comfortable is not how big the type is but how much text is left on a page. 22pt fits
-   about 138 characters, 28pt about 85. Past that you spend the evening turning pages.
+1. Download `update.bin`: use the [stable release](https://github.com/anki630/crossmosa/releases/latest) for X3 or the [beta release](https://github.com/anki630/crossmosa/releases/tag/v2.1.0-beta.5) for X4.
+2. Put `update.bin` in the root of the SD card. Do not rename it. A browser may save a repeated download as `update (1).bin`, which will not work.
+3. Put the SD card back in the device. Turn the device off, then hold the following two keys while turning it on. Release them when the loading screen appears:
+   - **X3:** the previous-page key on the left edge + power button
+   - **X4:** the upper key on the right edge + power button. If nothing happens, connect USB power and try again.
+4. Wait for flashing to finish and for the device to restart by itself. This takes about five minutes. Afterward, delete `update.bin` from the card so you do not accidentally install the old version later.
 
-While you have the card out, also copy 《歡迎使用CrossMosa.epub》 from the firmware zip onto
-it — a thirteen-chapter guided tour (in Traditional Chinese) that teaches the device by making
-you press its keys. Read it first.
+You only need this key combination for the first installation. For future releases, update from Settings. See [Updating](update.md#updating-english).
 
-First boot: the UI defaults to **Traditional Chinese** (this fork's whole point). To switch to English: **設定 → 系統 → 語言 → English** (= Settings → System → Language). Then
-**Settings → Reader → Reader Font Family** to pick the SD font. The device creates
-`/.crossmosa/` on the card for progress, bookmarks and Wi-Fi credentials — don't delete it.
+If flashing fails partway through, hold the power button for 5 to 10 seconds to force a restart. Download the file again and retry. An incomplete download is the most common cause.
 
-**Optional — sleep wallpapers.** `crossmosa-2.0.1-wallpapers.zip` holds **50 public-domain
-masterpieces** from Wikimedia Commons, each individually checked and tuned for this panel's
-4 grey levels. Copy the `.bmp` files to `/.sleep/` on the SD card (two or more to rotate),
-then **Settings → Display → Sleep Screen → Custom**. The converter, the curation manifest and
-the reasoning behind the selection are in [`wallpapers/`](../wallpapers/).
+If it still does not work, see [Flash troubleshooting](flash-troubleshooting.md#flash-troubleshooting-english).
+
+This method does not require connecting the device to a computer. It also works with most devices that have USB flashing locked. A few batches also block SD card flashing; see [Flash troubleshooting](flash-troubleshooting.md#flash-troubleshooting-english).
+
+**If you use an X4**
+
+- X4 hardware does not support the clock or tilt page turning.
+- The [rescue procedure](rescue.md#screen-stopped-updating-rescue-english) currently applies only to X3. The X4 procedure is still being prepared.
+
+<details>
+<summary>Other methods: if the device can connect to a computer</summary>
+
+**Web flasher**
+
+1. Connect the device to your computer with a USB-C cable, then wake the device.
+2. Open https://crosspointreader.com/#flash-tools, select **X3** or **X4**, select **Custom .bin**, and upload `update.bin`.
+3. If the browser cannot find the device, try another USB port, connect without a hub, or use Chrome or Edge. If it still does not work, use the SD card method above.
+
+**Command line** (advanced)
+
+```bash
+pip install esptool
+esptool.py --chip esp32c3 --port /dev/ttyACM0 --baud 921600 \
+           write_flash 0x10000 update.bin
+```
+
+The firmware zip also includes `bootloader.bin` and `partitions.bin`. You only need them for a complete reflash from 0x0. A normal update only needs `update.bin`.
+
+**Devices with USB flashing locked**
+
+Some devices sold through third-party channels, such as AliExpress, leave the factory with USB flashing locked. Devices bought directly from xteink.com are not locked.
+
+The SD card method above usually still works. **Do not use Xteink Unlocker to flash CrossMosa.** That tool officially supports only CrossPoint and CrossInk. Flashing other firmware with it can brick the device.
+
+Rescue also has limitations. It is known to fail in at least two situations:
+
+- If the firmware is stuck in a boot loop, SD rescue mode cannot start. It only starts when the device wakes through the power button. You must first let the battery drain completely for a chance to interrupt the loop.
+- Some devices have a charge-only USB connection with no data transfer. Neither the web flasher nor the command-line method will work on them.
+
+No method can guarantee recovery. See “USB-locked devices” in [`UPSTREAM-README.md`](UPSTREAM-README.md) for the original upstream explanation.
+
+</details>
+
+## Step 2: Add fonts
+
+The firmware does not include Chinese fonts for book text. Without this step, the menus appear in Chinese, but an opened book shows a full page of boxes.
+
+1. Download and extract the [font pack](https://github.com/anki630/crossmosa/releases/tag/fonts-2026-09).
+2. Create a `fonts` folder in the root of the SD card. Copy the complete font folders into it:
+
+```
+SD card
+└── fonts/
+    ├── NotoSerifTC/   ← serif (recommended first)
+    ├── RoundTC/       ← rounded
+    ├── NotoSansTC/    ← sans serif
+    └── Iansui/        ← handwritten
+```
+
+You can install only one family. Start with `NotoSerifTC`. You do not need to move fonts already stored in `.fonts`; CrossMosa reads both locations.
+
+To compare fonts or install large-print or zhuyin fonts, see [Fonts](fonts.md#fonts-english).
+
+## Step 3: Start the device
+
+1. The device starts in Traditional Chinese. To use the English interface, open 設定 → 系統 → 語言 → English.
+2. Choose a font at Settings → Reader → Reader Font Family. Select the family you copied. If it is not listed, check that its folder is at `fonts/font-name/`.
+3. Choose a text size at Settings → Reader → Reader Font Size.
+4. On the firmware download page you used earlier, download the `CrossMosa.epub` user guide (in Traditional Chinese). Put it on the SD card and open it. Read along and try each control.
+5. The device creates a `.crossmosa` folder on the SD card for progress, bookmarks, and settings. Do not delete it.
+
+The startup screen and Settings page show the version number. Confirm that it matches the version you installed.
+
+---
+
+After installation: [Add books](books.md#adding-books-english) · [Change the sleep screen](wallpaper.md#changing-the-sleep-screen-english) · [Choose fonts](fonts.md#fonts-english)

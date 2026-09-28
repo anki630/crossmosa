@@ -89,33 +89,80 @@ core 裡，不是本專案能改的），兩次建置就會差幾十個位元組
 
 # For developers (English)
 
-## Building
+This page is for people who want to build CrossMosa, understand how it differs from the original firmware, or add characters to the interface font. Most users do not need it.
+
+## Build it yourself
 
 ```bash
-git submodule update --init --recursive --depth 1
-export SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)
-pio run -e gh_release
+git submodule update --init --recursive --depth 1   # freeink-sdk is a submodule; linking fails without it
+pip install platformio
+export SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)  # see “Reproducible builds” below
+pio run -e gh_release                                # output: .pio/build/gh_release/firmware.bin
 ```
 
-**Builds are byte-for-byte reproducible** — but only if `SOURCE_DATE_EPOCH` is set, because
-`__DATE__`/`__TIME__` otherwise bake the wall clock into the image (one of the two sites is in
-the Arduino core, not ours to patch). Every release publishes the epoch it used together with
-the firmware sha256; [`scripts/mk-release.sh`](../scripts/mk-release.sh) defaults to the release
-commit's own timestamp, so checking out the tag reproduces the value automatically. See
-[`reproducible-builds.md`](reproducible-builds.md).
+### Reproducible builds
 
-## Relationship to upstream
+**Release images are reproducible byte for byte.** The released `update.bin` is the build output `firmware.bin` under a different name. Anyone using the same commit and the same pinned dependencies can produce a file with the same sha256. There is one requirement: **you must set `SOURCE_DATE_EPOCH`**.
 
-Everything here stands on **CrossPoint** by **Dave Allie** and its contributors (MIT;
-`LICENSE` kept as-is). Report upstream bugs upstream. If you want the full feature set,
-use upstream rather than this fork.
+Without it, `__DATE__` and `__TIME__` place the build time in the binary. One occurrence is in the Arduino core and cannot be changed by this project. As a result, two builds differ by several dozen bytes. When `SOURCE_DATE_EPOCH` is set, GCC uses its value for both macros. CrossMosa also uses it as the gzip mtime when compressing web assets.
 
-**Removed** (to reclaim flash for Chinese fonts): 29 UI languages beyond English and
-Traditional Chinese, KOReader progress sync, StarDict dictionary,
-the OTA updater (SD-card firmware update is kept), the Classic and RoundedRaff themes
-(kept: **Formosa**, **Formosa Extended**, **Formosa Pro**),
-non-English hyphenation tables, built-in italic faces, and all but one built-in reader font size.
+**Every release publishes its `SOURCE_DATE_EPOCH` and firmware sha256.** By default, the [`scripts/mk-release.sh`](../scripts/mk-release.sh) packaging script uses the release commit’s timestamp from `git log -1 --format=%ct`. Checking out the same tag therefore produces the same value automatically.
 
-**Also removed from the tree** (not merely disabled; they cannot be compiled back in):
-the **SMB2 server** for the iOS Files app, and the **BLE page-turner remote**.
-Use browser file transfer, Calibre, OPDS, or copy files onto the SD card instead.
+See [`reproducible-builds.md`](reproducible-builds.md) for details and verification instructions.
+
+---
+
+## Relationship to the original CrossPoint
+
+**Everything in CrossMosa is built on [CrossPoint](https://github.com/crosspoint-reader/crosspoint-reader).** CrossPoint provides the reading engine, EPUB parsing, layout, activity framework, web interface, OPDS, and Calibre workflow. This fork adds Chinese support and adjustments for X3 and X4.
+
+- The original authors are **Dave Allie** and the CrossPoint contributors. The project uses the MIT license, and `LICENSE` is preserved unchanged.
+- Report bugs in the original firmware to the [original repository](https://github.com/crosspoint-reader/crosspoint-reader/issues), not here. This repository handles only problems introduced by this fork.
+- **If you need the complete feature set, including multiple languages and more formats, use the original firmware instead of this fork.**
+
+### Differences from the original firmware
+
+The following features are **removed**. They are not merely disabled. Their entry points were removed in code so the linker can reclaim flash space for Chinese fonts.
+
+| Removed | Reason |
+|---|---|
+| **29 interface languages** other than English and Traditional Chinese | Reclaims about 258 KB for Chinese fonts |
+| **KOReader progress sync** | There is no server to sync with |
+| **Dictionary lookup** using StarDict | Not used |
+| **Online OTA updates** | They would point to the original releases and overwrite this fork. **SD Card Firmware Update remains available** |
+| **Classic and RoundedRaff themes** | Their text sizes and language support do not work well with Chinese. Formosa, Formosa Extended, and Formosa Pro remain |
+| **Non-English hyphenation tables** for 9 languages | Chinese does not use hyphenation. Reclaims about 323 KB |
+| **Built-in italic faces** | Italic text falls back to regular. Reclaims about 544 KB |
+| Built-in reader fonts reduced to **one 14 px fallback** | It is only used when no SD card font is available. Reclaims about 373 KB |
+| **SMB2 server** for managing the SD card directly from the iOS Files app | Removed with its source code and cannot be restored with a build option. Use browser file transfer, Calibre, OPDS, or copy files from the card |
+| **BLE page-turner remote** | Removed. Release firmware did not include it, and its source is no longer retained, so you cannot add it back in a custom build |
+
+**Retained:** Calibre wireless book transfer, including compatibility with the original plugin ecosystem; web settings and file transfer; WebDAV; OPDS; tilt page turning on X3; screenshots; key remapping; and sleep screens.
+
+---
+
+## Interface fonts: included characters and rebuilding
+
+The interface font is compiled into the firmware and is used for menus, filenames, book titles, and tables of contents. It contains **all BIG5 Level 1 characters plus common characters selected by scanning an entire ebook library**. It does not contain every Chinese character. The exact character set is defined in `fonts/charsets/charset-ui-v5.txt`.
+
+Book text uses fonts from the SD card and is not affected by this limit.
+
+| Item | Path |
+|---|---|
+| Current interface character set, with complete sources and selection rules in its header | `fonts/charsets/charset-ui-v5.txt` |
+| Characters added in 2.0.1 after scanning the library | `fonts/charsets/charset-ui-v5-additions.txt` |
+| Interface-font regeneration script | `fonts/regen-ui-fonts.sh` |
+| BIG5 Level 2 selection program, including the candidate pool and frequency ranking | `fonts/pick-big5-l2-chars.py` |
+| SD card font generator | `lib/EpdFont/scripts/fontconvert_sdcard.py`, with the `tc-reading` character set |
+
+The process is: add characters to the character-set file → run the regeneration script → rebuild the firmware → reflash the device.
+
+**You cannot replace interface fonts from the SD card. You must rebuild the firmware.**
+
+> The character-set file’s header **must contain only ASCII**. The entire file is passed to `pyftsubset --text-file`. Any Chinese character in the header would silently be included in the font. The regeneration script includes a cmap assertion to prevent this.
+
+### Why not include every character?
+
+Adding all BIG5 characters to the interface font would require about 2 MB more space. The app partition is only 6.5 MB, and the released firmware already uses about 98% of it. Version 2.1.0-beta.5 has less than 100 KB free.
+
+Making enough room would require repartitioning the flash, which carries a risk of bricking the device.

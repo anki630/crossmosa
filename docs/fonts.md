@@ -64,35 +64,83 @@ CrossMosa 的中文字型分成兩種：
 介面字型收的是常用字，不是全部的中文字；書的內文用 SD 卡上的字型，收了完整的中文字。
 所以方塊只會出現在選單、檔名、書名和目錄，不會出現在內文。
 
-碰到的話，請[開一張 Issue](../../issues)，標題寫「缺字」，內容貼上那個字本身，以及它出現在哪裡（選單、檔名、書名或內文）。補字是例行維護。
+碰到的話，請[開一張 Issue](https://github.com/anki630/crossmosa/issues)，標題寫「缺字」，內容貼上那個字本身，以及它出現在哪裡（選單、檔名、書名或內文）。補字是例行維護。
 
 想知道介面字型收了哪些字、怎麼自己重做，看[給開發者](developers.md)。
 
 ---
 
-# Character-set limits (English)
+# Fonts (English)
 
-The built-in UI font covers **7,973 Han characters**, not all of Chinese. Characters outside
-that set render as boxes **in menus, filenames and titles only** — book *text* uses the SD
-font and is unaffected. All five SD families carry 27,950 Han characters.
+CrossMosa uses two kinds of Chinese fonts:
 
-What still bites: rare characters, especially ones **outside BIG5 entirely** — plenty of
-Taiwanese given names are. 2.0.1 added 496 more and changed how they are chosen: instead of
-ranking BIG5 by frequency, it scans the text of whole ebook libraries and takes the
-characters that really show up in titles and filenames. Someone's book will still use one
-that was not in the scan. **Report it — adding characters is routine maintenance.**
+- **Interface fonts:** Used for menus, book titles, and tables of contents. They are built into the system.
+- **Book fonts:** Used for book text. They are stored on the SD card, so you can change them at any time without reflashing.
 
-Report missing characters as a GitHub issue (paste the character itself and say where it
-appeared). To regenerate the UI fonts yourself: edit `fonts/charsets/charset-ui-v5.txt`
-(its ASCII header documents the exact sources and selection rule; the 2.0.1 additions are in
-`charset-ui-v5-additions.txt`), run `fonts/regen-ui-fonts.sh`, rebuild and reflash.
-UI fonts cannot be replaced from the SD card.
+## Choose a font family
 
-Why not include everything: full BIG5 would add ~2 MB to a 6.5 MB app partition that is
-already 96.4% full.
+| Font | Style | Best for |
+|---|---|---|
+| **NotoSerifTC** Noto Serif TC | Serif | Long-form reading. Recommended as your first font |
+| **RoundTC** Taiwan Round | Rounded | Rounded stroke endings for comfortable reading. Includes bold |
+| **NotoSansTC** Noto Sans TC | Sans serif | Clear at small sizes. Includes bold |
+| **Iansui** | Handwritten | Looks like pen on paper. It has no bold face, so bold text appears regular |
+| **GuanKiapTsingKhai-90** GuanKiapTsingKhai | Brush | The vertical-text workaround for 2.0.x. See “Vertical text” below |
+| **IBMPlexSansTC** IBM Plex Sans TC | Sans serif | Kept as a legacy option |
 
-<a id="screen-halted-en"></a>
+Each family includes more than twenty thousand Han characters. It covers almost all uncommon characters found in written Taiwanese, classical Chinese, and names.
+
+Fonts downloaded before 2.0.1 are missing some symbols. Download them again.
+
+Installing every family takes about 430 MB. You can install only one family, but for your first installation, copying the complete folder is recommended.
+
+If space is limited, each text size is a separate file. The number in the filename is the size. For example, `NotoSerifTC_18.cpfont` is 18 pt.
+
+## Large-print fonts
+
+The [font pack download page](https://github.com/anki630/crossmosa/releases/tag/fonts-2026-09) also includes a large-print pack with serif, sans-serif, and rounded fonts. Install it in the same way.
+
+After installation, larger sizes appear under Settings → Reader → Reader Font Size.
+
+Very large text can be harder to read because fewer characters fit on each page and you must turn pages more often. The large-print pack stops at a practical size.
+
+## Zhuyin fonts for children
+
+These fonts place zhuyin beside each character for children who are beginning to read independently. Download them from [`zhuyin-2026-09`](https://github.com/anki630/crossmosa/releases/tag/zhuyin-2026-09) and install them like any other font.
+
+The font is named ZhuyinKai. After installation, select it under Settings → Reader → Reader Font Family. It requires version 2.1.0-beta.5 or later. In testing with previously unseen books, the zhuyin engine misread an average of about 4 characters per thousand.
+
+Context-based pronunciation for characters with multiple readings works only with ZhuyinKai. Zhuyin fonts you convert yourself use the default pronunciations stored in the font.
+
+## Vertical text
+
+Starting with the 2.1 beta, CrossMosa supports true vertical text. Open Settings → Reader → Text Settings → Layout → Text Direction.
+
+For a brush style in vertical text, choose `Iansui`. Do not choose GuanKiapTsingKhai. GuanKiapTsingKhai characters are pre-rotated by 90 degrees, so true vertical layout places every character on its side.
+
+> On 2.0.1, you can use a workaround. Choose GuanKiapTsingKhai, then rotate the screen to landscape. Chinese text will run from top to bottom and right to left.
+
+## Put fonts on the SD card
+
+- Use an SD card formatted as FAT32 or exFAT.
+- Font folder names cannot contain spaces. Use underscores instead.
+- Put the font folders inside either `fonts` or `.fonts` in the root of the SD card.
+
+## User guide
+
+Also download the user guide *Welcome to CrossMosa* (in Traditional Chinese) from the download page and put it on the SD card. Read it while trying each control. By the end, you will know how to use the device.
+
+![X3 reading the Welcome to CrossMosa guide](promo/photo-guide.jpg)
 
 ---
 
-`.cpfont` 的格式與自製字型看 [SD Card Fonts](sd-card-fonts.md)（英文，技術文件）。
+<a id="character-set-limits-english"></a>
+## Seeing boxes?
+
+**It is normal for a book title to appear as boxes in the file list while the book text displays correctly.**
+
+The interface font contains common characters, not every Chinese character. Book text uses the complete Chinese fonts on the SD card. Boxes may therefore appear in menus, filenames, book titles, and tables of contents, but not in the book text.
+
+If you find one, [open an issue](https://github.com/anki630/crossmosa/issues). Use “Missing character” as the title. Include the character itself and say where it appeared: a menu, filename, book title, or book text. Adding missing characters is routine maintenance.
+
+To see which characters the interface font contains or learn how to rebuild it, see [For developers](developers.md#for-developers-english).

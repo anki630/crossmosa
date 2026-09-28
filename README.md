@@ -320,20 +320,20 @@ You already have the device, and the SD card is already in it. Three steps are a
 2. **Add fonts:** Download the [font pack](https://github.com/anki630/crossmosa/releases/tag/fonts-2026-09). Create a `fonts` folder in the root of the SD card and put the folders from the pack inside it. Without fonts, books show up as boxes.
 3. **Start reading:** The device starts in Traditional Chinese. To switch to English, go to 設定 → 系統 → 語言 → English. Choose a font under Settings → Reader → Reader Font Family. The release page also has a short manual, `CrossMosa.epub` (in Chinese): put it on the card, open it, and follow along.
 
-**Later updates don't need a reflash.** Copy the new `update.bin` to the card, from a phone or computer browser with the device's File Transfer page or with a card reader, then go to Settings → System → SD Card Firmware Update and pick the file. No key combination. [Detailed steps](docs/update.md) (Chinese)
+**Later updates don't need a reflash.** Copy the new `update.bin` to the card, from a phone or computer browser with the device's File Transfer page or with a card reader, then go to Settings → System → SD Card Firmware Update and pick the file. No key combination. [Detailed steps](docs/update.md#updating-english)
 
 Before your first flash, read the precautions in the [install guide](docs/install.md#install-english). Flashing carries risks, and recovery is not always possible.
 
 | I want to… | Go to |
 |---|---|
 | Install CrossMosa for the first time | [Install](docs/install.md#install-english) |
-| Update CrossMosa | [Update](docs/update.md) (Chinese) |
+| Update CrossMosa | [Updating](docs/update.md#updating-english) |
 | Fix an X3 screen that stopped updating | [Screen stopped updating](docs/rescue.md#screen-stopped-updating-rescue-english) |
-| Fix a flash that won't go through | [Flash troubleshooting](docs/flash-troubleshooting.md) (Chinese) |
-| Choose fonts, install large print, or add zhuyin | [Fonts](docs/fonts.md) (Chinese) |
+| Fix a flash that won't go through | [Flash troubleshooting](docs/flash-troubleshooting.md#flash-troubleshooting-english) |
+| Choose fonts, install large print, or add zhuyin | [Fonts](docs/fonts.md#fonts-english) |
 | Check why characters are missing | [Missing characters](docs/fonts.md#character-set-limits-english) |
-| Add books | [Add books](docs/books.md) (Chinese) |
-| Change the sleep-screen painting | [Change the sleep screen](docs/wallpaper.md) (Chinese) |
+| Add books | [Adding books](docs/books.md#adding-books-english) |
+| Change the sleep-screen painting | [Changing the sleep screen](docs/wallpaper.md#changing-the-sleep-screen-english) |
 | Restore the stock firmware | [Community recovery guide](https://pocketink.io/firmware/recovery/) |
 
 ## Still deciding?
