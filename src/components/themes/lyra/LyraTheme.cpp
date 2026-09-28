@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <numeric>
 #include <string>
 #include <vector>
 
@@ -281,7 +282,7 @@ void LyraTheme::drawTabBar(const GfxRenderer& renderer, Rect rect, const std::ve
   }
 }
 
-void LyraTheme::drawEmptyCoverPlaceholder(GfxRenderer& renderer, const int x, const int y, const int w, const int h) {
+void LyraTheme::drawEmptyCoverPlaceholder(const GfxRenderer& renderer, const int x, const int y, const int w, const int h) {
   constexpr int kSpineInset = 12;     // 書脊線距左緣
   constexpr int kSpineEndInset = 10;  // 上下留白;必須 > cornerRadius(6),否則線頭會被圓角遮罩咬掉
   constexpr int kIconSize = 32;
@@ -300,7 +301,7 @@ void LyraTheme::drawEmptyCoverPlaceholder(GfxRenderer& renderer, const int x, co
 namespace {
 // 剪裁到矩形內的四分之一圓弧（中點圓演算法、1px）。quadrant：0=右下、1=左下、2=左上、3=右上
 // （相對圓心）。不用 GfxRenderer::drawArc —— 它不剪裁，弧會畫到隔壁卡片上。
-void drawClippedQuarterArc(GfxRenderer& renderer, const int cx, const int cy, const int r, const int quadrant,
+void drawClippedQuarterArc(const GfxRenderer& renderer, const int cx, const int cy, const int r, const int quadrant,
                            const int clipX, const int clipY, const int clipW, const int clipH) {
   auto plot = [&](const int dx, const int dy) {
     const int px = cx + dx;
@@ -327,7 +328,7 @@ void drawClippedQuarterArc(GfxRenderer& renderer, const int cx, const int cy, co
 }
 
 // 點陣格（裝飾）：pitch 像素一點。
-void drawDotGrid(GfxRenderer& renderer, const int x0, const int y0, const int cols, const int rows, const int pitch,
+void drawDotGrid(const GfxRenderer& renderer, const int x0, const int y0, const int cols, const int rows, const int pitch,
                  const int clipX, const int clipY, const int clipW, const int clipH) {
   for (int r = 0; r < rows; r++) {
     for (int c = 0; c < cols; c++) {
@@ -355,8 +356,8 @@ void LyraTheme::drawTitleCoverPlaceholder(GfxRenderer& renderer, const int x, co
   const int innerW = x + w - innerX;
 
   // --- 裝飾：三種變體 ---
-  uint32_t hash = 2166136261u;
-  for (const unsigned char ch : title) hash = (hash ^ ch) * 16777619u;
+  const uint32_t hash = std::accumulate(title.begin(), title.end(), uint32_t{2166136261u},
+                                        [](const uint32_t h, const unsigned char ch) { return (h ^ ch) * 16777619u; });
   const int variant = static_cast<int>(hash % 3u);
   const int bigR = innerW * 3 / 5;
   const int smallR = innerW * 3 / 10;
@@ -397,7 +398,7 @@ void LyraTheme::drawTitleCoverPlaceholder(GfxRenderer& renderer, const int x, co
     if (static_cast<int>(lines.size()) >= maxLines) break;
     const auto wrapped = renderer.wrappedText(UI_12_FONT_ID, seg.c_str(), textW,
                                               maxLines - static_cast<int>(lines.size()), EpdFontFamily::BOLD);
-    for (const auto& ln : wrapped) lines.push_back(ln);
+    lines.insert(lines.end(), wrapped.begin(), wrapped.end());
   }
   if (lines.empty()) return;
   const int blockH = static_cast<int>(lines.size()) * lineH;

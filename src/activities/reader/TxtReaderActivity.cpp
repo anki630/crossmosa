@@ -14,7 +14,9 @@
 #include <FontCacheManager.h>
 #include <GfxRenderer.h>
 
+#include <algorithm>
 #include <cstring>  // v118:memcpy
+#include <numeric>
 #include <optional>  // v121:預取讓 PrewarmScope 只在冷路徑存在(內建字型備援路徑的單碼位緩衝)
 #include <HalStorage.h>
 #include <I18n.h>
@@ -64,6 +66,8 @@ constexpr size_t LEGACY_INDEX_HEADER_V4 = 35;
 constexpr uint32_t LEGACY_INDEX_MAGIC = 0x54585449;  // "TXTI"
 
 // 注音游標讀卡（這一頁記憶體裡那塊以外的上下文）：一定要讀滿（見 Txt::readContentExact）
+// ctx 的型別由 callback 的函式指標型別決定，不能加 const。
+// cppcheck-suppress constParameterCallback
 bool readTxtExact(void* ctx, const size_t offset, uint8_t* dst, const size_t len) {
   return static_cast<const Txt*>(ctx)->readContentExact(dst, offset, len);
 }
@@ -259,9 +263,10 @@ bool TxtReaderActivity::loadPageAtOffset(const size_t offset, std::vector<std::s
   diagGlue_ = static_cast<uint16_t>(r.glueMoved + r.glueForced * 100);
 
   outUnits = std::move(r.units);
-  for (const auto& unit : outUnits) {
-    if (unit) diagZySwaps_ = static_cast<uint16_t>(diagZySwaps_ + unit->swapCount());
-  }
+  diagZySwaps_ = std::accumulate(outUnits.begin(), outUnits.end(), diagZySwaps_,
+                                 [](const uint16_t acc, const std::shared_ptr<TextBlock>& unit) {
+                                   return unit ? static_cast<uint16_t>(acc + unit->swapCount()) : acc;
+                                 });
   nextOffset = readFrom + skip + r.nextOffset;
   return !outUnits.empty();
 }
@@ -945,10 +950,9 @@ void TxtReaderActivity::toggleBookmark() {
 bool TxtReaderActivity::isBookmarked(const size_t from, const size_t to) const {
   const uint32_t lo = static_cast<uint32_t>(from);
   const uint32_t hi = static_cast<uint32_t>(to > from ? to : from + 1);
-  for (const auto& b : bookmarks_) {
-    if (b.hasByteOffset && b.byteOffset >= lo && b.byteOffset < hi) return true;
-  }
-  return false;
+  return std::any_of(bookmarks_.begin(), bookmarks_.end(), [lo, hi](const auto& b) {
+    return b.hasByteOffset && b.byteOffset >= lo && b.byteOffset < hi;
+  });
 }
 
 void TxtReaderActivity::renderStatusBar(const size_t offset, const size_t endOffset) const {
@@ -1145,7 +1149,7 @@ void TxtReaderActivity::loadProgressSd() {
                              (static_cast<uint32_t>(buf[2]) << 16) | (static_cast<uint32_t>(buf[3]) << 24);
         if (off < fileSize) {
           pageStartOffset_ = off;
-          avgBytesPerPage_ = numPages > 0 ? static_cast<uint32_t>(fileSize / numPages) : 0;
+          avgBytesPerPage_ = static_cast<uint32_t>(fileSize / numPages);  // 外層的 if 已保證 numPages > 0
           LOG_DBG("TRS", "Migrated progress: page %d -> offset %u (exact)", page, static_cast<unsigned>(off));
         }
       }
@@ -1422,7 +1426,6 @@ void TxtReaderActivity::prefetchNextPage(const size_t nextOffset) {
   }
 
   std::vector<std::shared_ptr<TextBlock>> lines;
-  size_t after = nextOffset;
   {
     // v255：這是閱讀停留時間（上一頁已經送上面板），CJK 字寬掃描放在這裡做，不放在翻頁當下的排版裡。
     //   掃描途中每批看一次有沒有畫面在等（使用者翻頁了），有就中止、下次再掃。
@@ -1432,6 +1435,7 @@ void TxtReaderActivity::prefetchNextPage(const size_t nextOffset) {
       }
       ~CjkScanAllowScope() { SdCardFont::closeCjkScanWindow(); }
     } scanAllow(this);
+    size_t after = nextOffset;
     if (!loadPageAtOffset(nextOffset, lines, after) || lines.empty()) {
       return;
     }

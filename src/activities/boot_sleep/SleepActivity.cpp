@@ -60,6 +60,8 @@ struct WallCacheFooter {  // 放【檔尾】：寫入時不需要回頭 seek 改
   char magic[4];          // "CMWP"
   uint16_t version;
   uint8_t planes;         // 1＝只有 BW；3＝BW＋LSB＋MSB
+  // SD 卡上的檔案格式：保留欄位，程式不讀。
+  // cppcheck-suppress unusedStructMember
   uint8_t reserved;
   uint32_t bufSize;       // 每個平面的位元組數（＝renderer.getBufferSize()）
   uint32_t srcSize;
@@ -382,8 +384,12 @@ uint32_t wallParamsHash(const Bitmap& bitmap, const int pageWidth, const int pag
     float cropX, cropY;
     uint32_t bufSize;
     uint16_t version, pixelVersion;
+    // pad：把尾端補齊的位元組寫明，讓它跟著歸零、參與雜湊；程式不讀。
+    // cppcheck-suppress unusedStructMember
     uint8_t coverMode, coverFilter, gray, orientation, dither, pad;
   } p;
+  // 用 memset 不用 {}：{} 不保證 padding 歸零。float 全零位元就是 0.0f（IEEE 754）。
+  // cppcheck-suppress memsetClassFloat
   memset(&p, 0, sizeof(p));  // padding 也要歸零，否則雜湊不穩定
   p.bmpW = bitmap.getWidth();
   p.bmpH = bitmap.getHeight();

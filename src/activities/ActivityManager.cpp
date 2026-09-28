@@ -57,7 +57,7 @@ void ActivityManager::renderTaskLoop() {
       // Theme::drawList, which has three implementations (v203's instrument went into
       // LyraTheme while the device runs Formosa Pro, so it never executed).
       extern FontCacheManager fontCacheManager;
-      FontDecompressor* fd = fontCacheManager.getDecompressor();
+      const FontDecompressor* fd = fontCacheManager.getDecompressor();
       const uint32_t t0 = micros();
       const FontDecompressor::Stats s0 = fd ? fd->getStats() : FontDecompressor::Stats{};
       const std::string who = currentActivity->name;

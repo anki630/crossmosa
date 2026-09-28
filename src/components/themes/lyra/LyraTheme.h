@@ -93,7 +93,7 @@ class LyraTheme : public BaseTheme {
   // v124/v156：無封面書籍的佔位封面（書脊線＋置中圖示）。取代上游「下三分之二實心黑」——
   // 那違反「e-ink 的 UI 不塗滿背景」（v50 維護者拍板），實機抱怨「真的很醜」的正是那塊。
   // Lyra 與 Lyra3Covers 共用（v44 已為漏網的自繪站點付過一次代價）。
-  static void drawEmptyCoverPlaceholder(GfxRenderer& renderer, int x, int y, int w, int h);
+  static void drawEmptyCoverPlaceholder(const GfxRenderer& renderer, int x, int y, int w, int h);
   // v174（使用者要求）：沒有封面的 txt → 書名畫進封面框，做成一本書的樣子（書脊線＋置中粗體書名＋上下短橫線）。
   static void drawTitleCoverPlaceholder(GfxRenderer& renderer, int x, int y, int w, int h, const std::string& title);
   // v174：卡片顯示用的書名 —— txt 的「書名」是檔名，去掉副檔名再顯示（store 內容不動，舊條目一樣受惠）。

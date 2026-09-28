@@ -189,8 +189,12 @@ void ClearCacheActivity::clearCache(bool keepProgress) {
       continue;
     }
 
-    if (!(file.isDirectory() && isBookCacheDirectoryName(gName))) {
-      if (file.isDirectory()) seenOther++;  // 資料目錄下的其他資料夾（bookmarks/ 等）
+    if (!file.isDirectory()) {
+      file.close();
+      continue;
+    }
+    if (!isBookCacheDirectoryName(gName)) {
+      seenOther++;  // 資料目錄下的其他資料夾（bookmarks/ 等）
       file.close();
       continue;
     }

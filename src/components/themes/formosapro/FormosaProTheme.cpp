@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
+#include <numeric>
 #include <string>
 #include <vector>
 
@@ -238,9 +239,8 @@ void FormosaProTheme::drawGroupedRows(const GfxRenderer& renderer, const int car
       if (bmp) renderer.drawIcon(bmp, cardX + 16, rowY + (rowH - iconSize) / 2, iconSize);
     }
     int rowTextW = chevronX - 8 - textX;
-    std::string valueText;
     if (value) {
-      valueText = renderer.truncatedText(UI_12_FONT_ID, value(idx).c_str(), maxListValueWidth);
+      const std::string valueText = renderer.truncatedText(UI_12_FONT_ID, value(idx).c_str(), maxListValueWidth);
       if (!valueText.empty()) {
         const int vw = renderer.getTextWidth(UI_12_FONT_ID, valueText.c_str());
         renderer.drawText(UI_12_FONT_ID, chevronX - 8 - vw, rowY + textYOff, valueText.c_str(), true);
@@ -435,10 +435,11 @@ void FormosaProTheme::drawOptionPopup(const GfxRenderer& renderer, const char* t
   constexpr int rowH = 40;
   constexpr int pad = 20;
   const int titleH = renderer.getLineHeight(UI_12_FONT_ID);
-  int maxTextWidth = renderer.getTextWidth(UI_12_FONT_ID, title, EpdFontFamily::BOLD);
-  for (const auto& opt : options) {
-    maxTextWidth = std::max(maxTextWidth, renderer.getTextWidth(UI_12_FONT_ID, opt.c_str(), EpdFontFamily::BOLD));
-  }
+  const int maxTextWidth = std::accumulate(
+      options.begin(), options.end(), renderer.getTextWidth(UI_12_FONT_ID, title, EpdFontFamily::BOLD),
+      [&renderer](const int acc, const std::string& opt) {
+        return std::max(acc, renderer.getTextWidth(UI_12_FONT_ID, opt.c_str(), EpdFontFamily::BOLD));
+      });
   const int optionCount = static_cast<int>(options.size());
   const int dialogW =
       std::max(260, std::min(maxTextWidth + pad * 2 + 24, pageWidth - 2 * m.optionPopupDialogSideMargin));

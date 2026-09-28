@@ -450,10 +450,8 @@ void PageBuilder::streamParagraph(const size_t start, const size_t end, const bo
       std::string piece(chunk_ + k, cut - k);
       std::string composed = utf8ComposeNfc(piece);
       const uint32_t srcCps = countCodepoints(k, cut);
-      uint32_t nfcCps = 0;
-      for (const char ch : composed) {
-        if (!isCont(static_cast<unsigned char>(ch))) ++nfcCps;
-      }
+      const auto nfcCps = static_cast<uint32_t>(std::count_if(
+          composed.begin(), composed.end(), [](const char ch) { return !isCont(static_cast<unsigned char>(ch)); }));
       const bool validUtf8 = isValidUtf8(piece.data(), piece.size());
       const bool exact = composed == piece && validUtf8;
       anchors_.push_back({cp, static_cast<uint32_t>(k), static_cast<uint32_t>(cut - k), exact});

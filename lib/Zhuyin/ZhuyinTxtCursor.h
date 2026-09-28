@@ -80,7 +80,7 @@ class ZhuyinTxtCursor {
 
   ZhuyinSession session_;
   ByteSource& src_;
-  uint8_t buf_[kTxtReadBuffer];
+  uint8_t buf_[kTxtReadBuffer] = {};
   size_t bufStart_ = 0, bufLen_ = 0;
   size_t start_ = 0, pos_ = 0, lookBehind_ = 0;
   uint32_t skip_ = 0;  // 起點之前送進去、讀音要丟掉的漢字數
