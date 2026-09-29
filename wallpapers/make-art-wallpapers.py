@@ -19,12 +19,18 @@ make-art-wallpapers.py — 世界名畫清單批次產生 X3 待機壁紙(2-bit 
   * **先算圖再打字**:整張一起 dither 會把文字反鋸齒邊緣打散成雜點 → 文字糊。標籤區只做就近取整。
   * **dither 在最終 528×792 解析度、當最後一步**:裝置 1:1 不縮放顯示,dither 點才精準落像素。
 
-橫式構圖(依畫作原始比例)先在 792×528 排版再整張轉 90° 存 528×792;看時把裝置順時針轉 90°。
+橫式構圖(依畫作原始比例)先在 792×528 排版再整張轉 90° 存 528×792;看時把裝置逆時針轉 90°
+(ROTATE_270:畫作的上方朝螢幕右邊。2026-09-29 更正,之前寫的「順時針」是改 ROTATE_270 前的舊說法)。
 
 用法:
-  python3 make-art-wallpapers.py            # 全部 50 張
+  python3 make-art-wallpapers.py            # X3 全部(輸出 sleep/)
   python3 make-art-wallpapers.py mona_lisa great_wave   # 只指定 slug
-輸出:sleep/<slug>.bmp(2-bit)。先跑 fetch_sources.py 下載原圖。
+  python3 make-art-wallpapers.py --device x4             # X4 版(480×800,輸出 sleep-x4/)
+輸出:<機型資料夾>/<slug>.bmp(2-bit)。先跑 fetch_sources.py 下載原圖。
+
+機型(2026-09-29 加 X4):X4 螢幕 480×800,拿 X3 的 528×792 去放,韌體會整張縮成 480×720、
+上下留白邊,縮放也打散 dither 點 → 必須從原圖在 X4 的最終解析度重算,不能把 X3 的成品縮小。
+artworks.py 某筆要在 X4 上改裁切,就在那筆加 x4=dict(focus=(x, y)) 或 x4=dict(fit=True)。
 """
 import struct
 import sys
@@ -38,7 +44,8 @@ from artworks import ARTWORKS
 
 HERE = Path(__file__).resolve().parent
 SRC = HERE.parent / "sleep" / "_src"
-OUT = HERE.parent / "sleep"
+OUT = HERE.parent / "sleep"   # set_device() 依機型改
+DEVICE = "x3"
 BN = None  # 不再用 blue noise;保留欄位以防未來切換
 
 LEVELS = np.array([0, 85, 170, 255], dtype=np.float32)
@@ -51,6 +58,29 @@ CAP_MR, CAP_MB, CAP_GAP = 20, 18, 3           # 右邊距 / 下邊距 / 兩行�
 # 舊值 19/13 的作者行只有 ~0.92mm ~10.6′,踩在人眼舒適線下 → 認不出,故加大。
 CAP_TITLE_SIZE, CAP_TITLE_STROKE = 21, 2      # 作品名(bold)字級 / 黑描邊粗細
 CAP_ARTIST_SIZE, CAP_ARTIST_STROKE = 16, 2    # 藝術家(regular)字級 / 黑描邊粗細
+# 機型設定。X3 的值就是上面 2026-07-22 定案的那組,不要動(改了就跟 sleep/ 裡在用的 50 張不同)。
+# X4(2026-09-29):4.26"、800×480、~219 PPI、~0.116 mm/px(SDK BoardConfig.h 的註解)。標籤照實體大小換算,
+#   讓字在兩台上看起來一樣大:px_X4 = px_X3 × 0.099 / 0.116 → 標題 21→18、作者 16→14、右邊距 20→17、下邊距 18→15;
+#   描邊與行距維持 2／3 px(描邊再細就斷)。
+DEVICES = {
+    "x3": dict(portrait=(528, 792), out="sleep", mr=20, mb=18, gap=3, title=21, artist=16, stroke=2),
+    "x4": dict(portrait=(480, 800), out="sleep-x4", mr=17, mb=15, gap=3, title=18, artist=14, stroke=2),
+}
+
+
+def set_device(name):
+    """把機型的尺寸、輸出資料夾、標籤字級套到模組層的常數(其餘程式照舊讀它們)。"""
+    global DEVICE, OUT, PORTRAIT, CAP_MR, CAP_MB, CAP_GAP
+    global CAP_TITLE_SIZE, CAP_TITLE_STROKE, CAP_ARTIST_SIZE, CAP_ARTIST_STROKE
+    d = DEVICES[name]
+    DEVICE = name
+    OUT = HERE.parent / d["out"]
+    PORTRAIT = d["portrait"]
+    CAP_MR, CAP_MB, CAP_GAP = d["mr"], d["mb"], d["gap"]
+    CAP_TITLE_SIZE, CAP_ARTIST_SIZE = d["title"], d["artist"]
+    CAP_TITLE_STROKE = CAP_ARTIST_STROKE = d["stroke"]
+
+
 FONT_DIR = Path("/usr/share/fonts/truetype/dejavu")
 FONT_BOLD = FONT_DIR / "DejaVuSerif-Bold.ttf"
 FONT_REG = FONT_DIR / "DejaVuSerif.ttf"
@@ -146,6 +176,7 @@ def draw_caption_overlay(img, title, artist):
 
 
 def compose_idx(art):
+    art = {**art, **art.get(DEVICE, {})}  # 機型專屬的裁切設定(例如 x4=dict(focus=...))蓋過共用的
     slug, orient = art["slug"], art["orientation"]
     im = Image.open(SRC / (slug + ".jpg"))
     im = ImageOps.exif_transpose(im).convert("L")
@@ -165,7 +196,7 @@ def compose_idx(art):
     draw_caption_overlay(img, art["title"], art["artist"])         # 疊低調右下標籤
     full = nearest_idx(img)  # 藝術區已是原生值→不變;文字反鋸齒邊緣就近取整→乾淨不 dither
     if orient == "landscape":
-        # ROTATE_270 = 相對舊版(ROTATE_90)轉 180°:橫式構圖看的時候把裝置往順時針轉 90 度
+        # ROTATE_270 = 相對舊版(ROTATE_90)轉 180°:畫作的上方朝螢幕右邊,看的時候把裝置往逆時針轉 90 度
         full = np.asarray(Image.fromarray(full, "L").transpose(Image.ROTATE_270))
     return full
 
@@ -210,7 +241,17 @@ def verify_2bit(path, expected_idx):
 
 
 def main():
-    slugs = sys.argv[1:]
+    args = sys.argv[1:]
+    if "--device" in args:
+        i = args.index("--device")
+        name = args[i + 1] if i + 1 < len(args) else ""
+        if name not in DEVICES:
+            sys.exit("--device 要是 %s 之一" % "／".join(DEVICES))
+        set_device(name)
+        del args[i:i + 2]
+    OUT.mkdir(exist_ok=True)
+    print("機型 %s:%d×%d → %s/" % (DEVICE, PORTRAIT[0], PORTRAIT[1], OUT.name))
+    slugs = args
     todo = [a for a in ARTWORKS if not slugs or a["slug"] in slugs]
     t0 = time.time()
     ok_all = True
@@ -235,11 +276,12 @@ def main():
 
     print("\n完成 %d 張,總 %.1fs。" % (len(todo), time.time() - t0))
     if landscape:
-        print("\n橫式構圖(需轉 90° 觀看,方向依 ROTATE_270 = 你選的收納習慣那面)共 %d 張:" % len(landscape))
+        print("\n橫式構圖(看的時候把裝置逆時針轉 90°)共 %d 張:" % len(landscape))
         for f in landscape:
             print("  - " + f)
     print("\n全部合格。" if ok_all else "\n有檔案 roundtrip 不符,請看上面。")
-    print("複製 sleep/*.bmp 到 SD 卡 /.sleep/ 即可(2-bit 原生格式,韌體原樣顯示、不再 dither)。")
+    print("複製 %s/*.bmp 到 %s 的 SD 卡 /.sleep/ 即可(2-bit 原生格式,韌體原樣顯示、不再 dither)。"
+          % (OUT.name, DEVICE.upper()))
     sys.exit(0 if ok_all else 1)
 
 

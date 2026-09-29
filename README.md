@@ -115,7 +115,7 @@
 | 刷不進去 | [刷不進去怎麼辦](docs/flash-troubleshooting.md) |
 | 挑字型、裝大字版、給孩子的注音 | [字型](docs/fonts.md) |
 | 把書放進機器 | [把書放進去](docs/books.md) |
-| 換待機名畫 | [換待機名畫](docs/wallpaper.md) |
+| 換桌布 | [桌布](docs/wallpaper.md) |
 | 刷回原廠系統 | [社群整理的步驟](https://pocketink.io/firmware/recovery/)（英文） |
 
 ## 猶豫的話，先看這裡
@@ -337,7 +337,7 @@ Before your first flash, read the precautions in the [install guide](docs/instal
 | Choose fonts, install large print, or add zhuyin | [Fonts](docs/fonts.md#fonts-english) |
 | Check why characters are missing | [Missing characters](docs/fonts.md#character-set-limits-english) |
 | Add books | [Adding books](docs/books.md#adding-books-english) |
-| Change the sleep-screen painting | [Changing the sleep screen](docs/wallpaper.md#changing-the-sleep-screen-english) |
+| Change the wallpaper | [Wallpapers](docs/wallpaper.md#wallpapers-english) |
 | Restore the stock firmware | [Community recovery guide](https://pocketink.io/firmware/recovery/) |
 
 ## Still deciding?

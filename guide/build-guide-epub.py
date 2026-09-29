@@ -92,7 +92,7 @@ CHAPTERS = [
     ("06-power-key.xhtml", "6　右上角那顆鍵"),
     ("07-images.xhtml", "7　圖片與灰階"),
     ("08-getting-books.xhtml", "8　書怎麼進來"),
-    ("09-wallpaper.xhtml", "9　名畫待機"),
+    ("09-wallpaper.xhtml", "9　桌布"),
     ("10-prefetch.xhtml", "10　為什麼翻頁變快了"),
     ("11-missing-glyphs.xhtml", "11　遇到方塊字"),
     ("12-support.xhtml", "12　如果它讓你的 X3 變好用了"),

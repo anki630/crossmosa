@@ -96,7 +96,7 @@ SD 卡
 
 ---
 
-裝好之後：[把書放進去](books.md) · [換待機名畫](wallpaper.md) · [挑字型](fonts.md)
+裝好之後：[把書放進去](books.md) · [換桌布](wallpaper.md) · [挑字型](fonts.md)
 
 ---
 
@@ -201,4 +201,4 @@ The startup screen and Settings page show the version number. Confirm that it ma
 
 ---
 
-After installation: [Add books](books.md#adding-books-english) · [Change the sleep screen](wallpaper.md#changing-the-sleep-screen-english) · [Choose fonts](fonts.md#fonts-english)
+After installation: [Add books](books.md#adding-books-english) · [Change the wallpaper](wallpaper.md#wallpapers-english) · [Choose fonts](fonts.md#fonts-english)

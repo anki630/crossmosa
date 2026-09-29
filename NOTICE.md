@@ -214,7 +214,7 @@ UI 字型是**多套字型的子集合併**後轉成點陣資料編進 binary �
 
 | 內容 | 來源 | 授權狀態 | 位置 |
 |---|---|---|---|
-| **50 張世界名畫**的待機壁紙 | [Wikimedia Commons](https://commons.wikimedia.org/) | **公共領域(public domain)——無額外授權義務** | 產物在 `crossmosa-1.0.0-wallpapers.zip`;逐張出處與轉檔工具在 `wallpapers/` |
+| 桌布・名畫系列(**50 幅世界名畫**) | [Wikimedia Commons](https://commons.wikimedia.org/) | **公共領域(public domain)——無額外授權義務** | 產物在 [`wallpapers-masterpieces-2026-09`](https://github.com/anki630/crossmosa/releases/tag/wallpapers-masterpieces-2026-09) 下載頁(X3、X4 各一包);逐張出處與轉檔工具在 `wallpapers/` |
 
 **為什麼沒有義務**:兩層都落在公共領域。
 

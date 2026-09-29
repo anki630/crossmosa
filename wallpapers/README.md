@@ -1,24 +1,25 @@
-# wallpapers — X3 待機壁紙:50 張世界名畫 + 轉檔工具
+# wallpapers — 桌布・名畫系列(50 幅世界名畫)+ 轉檔工具
 
-X3 闔上之後不是黑畫面,是一幅畫。
+闔上之後不是黑畫面,是一幅畫。名畫系列是桌布的第一個系列,X3、X4 各一包。
 
 ![X3 待機顯示葛飾北齋《神奈川沖浪裏》](../docs/promo/mock_wave_white.png)
 
-**大部分人不需要跑這裡的任何東西**——算好的 50 張 BMP 直接放在 Release 的
-`crossmosa-<版本>-wallpapers.zip` 裡,解開複製到 SD 卡就好(見下方「安裝」)。
+**大部分人不需要跑這裡的任何東西**——算好的 BMP 放在獨立的下載頁
+[`wallpapers-masterpieces-2026-09`](https://github.com/anki630/crossmosa/releases/tag/wallpapers-masterpieces-2026-09),
+X3、X4 各一包,解開複製到 SD 卡就好(見下方「安裝」或 [`docs/wallpaper.md`](../docs/wallpaper.md))。
 這個資料夾是給想**換成自己的圖**、或想知道**這 50 張是怎麼挑的**的人。
 
 ---
 
 ## 安裝
 
-1. 把 `.bmp` 複製到 SD 卡的 **`/.sleep/`**(**放兩張以上才會輪播**)。
+1. 在 SD 卡最外層建一個 `sleep` 資料夾,把 `.bmp` 放進去(**放兩張以上才會輪播**;已經放在 `.sleep` 的不用搬)。
 2. 裝置上:**設定 → 顯示 → 待機畫面 → 自訂**(或**封面+自訂**)。
 
 > ⚠️ SD 根目錄**不要**放單獨一個 `/sleep.bmp` —— 它會優先、固定顯示、不輪播。
 
-橫式構圖的那幾張是**整張轉 90 度**存的(待機畫面固定跑 528×792 直向,韌體不會自動轉正)。
-看到橫的畫時,把裝置**往順時針方向轉 90 度**。
+橫式構圖的那幾張是**整張轉 90 度**存的(待機畫面固定跑直向,韌體不會自動轉正)。
+看到橫的畫時,把裝置**往逆時針方向轉 90 度**(存檔用 `ROTATE_270`,畫作的上方朝螢幕右邊)。
 
 ---
 
@@ -28,7 +29,7 @@ X3 闔上之後不是黑畫面,是一幅畫。
 忠實攝影翻拍在美國不產生新的著作權)。清單、出處檔名與每一筆的取捨理由寫在
 [`artworks.py`](artworks.py) 的註解裡。
 
-挑選標準只有一個:**在 4 階灰階、528×792、沒有背光的螢幕上,這張畫還是不是那張畫。**
+挑選標準只有一個:**在 4 階灰階、沒有背光的小螢幕上,這張畫還是不是那張畫。**
 這跟「這張畫有沒有名」是兩回事,好幾張名畫因此被換掉:
 
 - **透納《被拖去解體的戰艦無畏號》→ 換掉。** 透納那種柔霧氛圍靠的是低幅度的局部對比,
@@ -62,7 +63,7 @@ X3 闔上之後不是黑畫面,是一幅畫。
 |---|---|---|
 | 壓縮 | **未壓縮 BI_RGB(compression=0)** | ⚠️ 最常錯:匯出時選到 **RLE 壓縮**會被裝置直接跳過 |
 | 位元深度 | 1/2/4/8/24/32 bpp | 名畫管線輸出 **2-bit**,通用轉檔輸出 **8-bit 灰階** |
-| 尺寸 | ≤ 2048×3072 | 輸出 **528×792**(直向,1:1 對上待機,裝置不縮放) |
+| 尺寸 | ≤ 2048×3072 | X3 輸出 **528×792**、X4 輸出 **480×800**(直向,1:1 對上待機,裝置不縮放;尺寸不合的圖會被等比縮放、留白邊) |
 | 副檔名 | `.bmp` | 檔名開頭是 `.` 或放在子資料夾會被裝置忽略 |
 
 ---
@@ -75,11 +76,11 @@ python3 wallpapers/make-wallpaper.py a.jpg b.png # 只轉指定檔案(輸出放�
 python3 wallpapers/make-wallpaper.py --dir 路徑  # 換一個資料夾
 python3 wallpapers/make-wallpaper.py --mode fit  # 完整放入、四周留邊(預設 cover=裁切填滿)
 python3 wallpapers/make-wallpaper.py --pad white # fit 模式的留邊改白色(預設黑)
-python3 wallpapers/make-wallpaper.py --size 792x528  # 換目標尺寸(橫向的話)
+python3 wallpapers/make-wallpaper.py --size 480x800  # X4(預設 528x792 是 X3)
 python3 wallpapers/make-wallpaper.py --tidy      # 把用過的非 bmp 原檔移到 sleep/_src/ 保留
 ```
 
-- **cover(預設)**:縮放後裁切,填滿整個 528×792(不留邊,但邊緣可能被切掉)。
+- **cover(預設)**:縮放後裁切,填滿整個畫面(不留邊,但邊緣可能被切掉)。
 - **fit**:完整放入、比例不變,不足處用 `--pad` 的顏色補滿。
 
 轉完會**直接解析輸出 BMP 的標頭 bytes**(寬高 / bpp / compression),用與韌體
@@ -92,6 +93,8 @@ pip install pillow numpy
 python3 wallpapers/fetch_sources.py        # 依 artworks.py 從 Wikimedia Commons 下載原圖
 python3 wallpapers/make-art-wallpapers.py  # 全部 50 張 → <repo>/sleep/<slug>.bmp
 python3 wallpapers/make-art-wallpapers.py mona_lisa great_wave   # 或只做指定的 slug
+python3 wallpapers/make-art-wallpapers.py --device x4    # X4 版 → <repo>/sleep-x4/<slug>.bmp
+python3 wallpapers/contact_sheet.py sleep-x4 overview.png   # 總覽圖(只看構圖與裁切)
 ```
 
 - [`artworks.py`](artworks.py):清單資料(slug / 標題 / 藝術家 / 直向或橫向 /
@@ -110,7 +113,7 @@ python3 wallpapers/make-art-wallpapers.py mona_lisa great_wave   # 或只做指�
 ## 正式管線(經實機驗證,每一條都踩過坑,別亂改)
 
 ```
-原圖 → 灰階 → autocontrast(cutoff=1) → Lanczos 縮 528×792(最終顯示解析度)
+原圖 → 灰階 → autocontrast(cutoff=1) → Lanczos 縮到最終顯示解析度(X3 528×792、X4 480×800)
      → Floyd-Steinberg dither(僅畫作區,4 階) → 疊乾淨標籤(就近取整,不 dither)
      → 橫式最後無損旋轉 90° → 寫 2-bit 原生 BMP(色盤 0/85/170/255)
 ```
@@ -122,8 +125,13 @@ python3 wallpapers/make-art-wallpapers.py mona_lisa great_wave   # 或只做指�
   (核小、誤差不亂散);色調比韌體的 Atkinson 平滑(不丟誤差)。多輪實機 A/B 後定案。
 - **autocontrast**:對比與可見度這一軸跟 dither 演算法無關,靠它補;不加會顯得淡、費眼。
 - **先算圖再打字**:整張一起 dither 會把文字的反鋸齒邊緣打散成雜點 → 字糊。標籤區只做就近取整。
-- **dither 放在最終 528×792、當最後一步**:裝置 1:1 不縮放顯示,dither 的點才精準落在像素上;
+- **dither 放在最終解析度、當最後一步**:裝置 1:1 不縮放顯示,dither 的點才精準落在像素上;
   任何 dither 之後的重新取樣都會毀掉點陣(所以旋轉用整數無損 90°、文字最後才疊)。
+
+**X4 版**:不能把 X3 的成品縮小(縮放會毀掉 dither 點陣),要從原圖在 480×800 重算。
+標籤字級照實體大小換算(X4 ~219 PPI、X3 ~258 PPI → 標題 21→18 px、作者 16→14 px),兩台上的字一樣大。
+X4 比 X3 瘦長,直式畫左右多裁、橫式畫上下多裁;會切到主體的那幾張,在 `artworks.py` 那一筆用
+`x4=dict(focus=(x, y))` 或 `x4=dict(fit=True)` 另外指定,只影響 X4。
 
 **驗證**:`make-art-wallpapers.py` 會用**與韌體相同的邏輯**把產出的 2-bit BMP 完整解碼回來,
 逐 byte 比對是否等於輸入的四階 index,每張都印 `roundtrip=True/False`。

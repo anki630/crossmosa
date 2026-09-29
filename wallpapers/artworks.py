@@ -39,6 +39,7 @@ ARTWORKS = [
         artist="Johannes Vermeer",
         orientation="portrait",
         commons_file="Johannes Vermeer - Girl with a Pearl Earring - 670 - Mauritshuis.jpg",
+        x4=dict(focus=(0.62, 0.5)),  # X4:左右多裁,頭巾垂下的尾巴在右邊 → 焦點右移(臉仍完整)
     ),
     dict(
         slug="night_watch",
@@ -117,6 +118,7 @@ ARTWORKS = [
         artist="Vincent van Gogh",
         orientation="landscape",
         commons_file="Starry Night Over the Rhone.jpg",
+        x4=dict(focus=(0.5, 0.8)),  # X4(2026-09-29):上下多裁,置中會切掉右下角那對情侶 → 焦點下移
     ),
     dict(
         slug="cafe_terrace_night",
@@ -239,14 +241,16 @@ ARTWORKS = [
          orientation="portrait", commons_file="Johannes Vermeer - Het melkmeisje - Google Art Project.jpg",
          focus=(0.6, 0.5)),  # 女僕在畫面右側,裁寬時焦點右移保住人物
     dict(slug="goya_third_may", title="The Third of May 1808", artist="Francisco Goya",
-         orientation="landscape", commons_file="El Tres de Mayo, by Francisco de Goya, from Prado in Google Earth.jpg"),
+         orientation="landscape", commons_file="El Tres de Mayo, by Francisco de Goya, from Prado in Google Earth.jpg",
+         x4=dict(focus=(0.5, 0.65))),  # X4:上下多裁,置中會切到左下角的屍體 → 焦點下移
     dict(slug="manet_dejeuner", title="Le Déjeuner sur l'herbe", artist="Édouard Manet",
          orientation="landscape", commons_file="Édouard Manet - Le Déjeuner sur l'herbe.jpg"),
     dict(slug="degas_star", title="The Star", artist="Edgar Degas",
          orientation="portrait", commons_file="Edgar Degas - The Star - Google Art Project.jpg"),
     # 雷諾瓦《煎餅磨坊》實測 e-ink 失敗(斑斕光→雜訊),2026-07-22 換卡耶博特(灰調雨天、明暗強)。
     dict(slug="caillebotte_rainy", title="Paris Street; Rainy Day", artist="Gustave Caillebotte",
-         orientation="landscape", commons_file="Gustave Caillebotte - Paris Street; Rainy Day - Google Art Project.jpg"),
+         orientation="landscape", commons_file="Gustave Caillebotte - Paris Street; Rainy Day - Google Art Project.jpg",
+         x4=dict(focus=(0.5, 0.65))),  # X4:上下多裁,置中會切到右邊那對夫妻的腳 → 焦點下移
     dict(slug="cezanne_cardplayers", title="The Card Players", artist="Paul Cézanne",
          orientation="landscape", commons_file="Paul Cézanne, Les joueurs de carte (1892-95).jpg"),
     # 秀拉《大碗島》實測 e-ink 失敗(點描+粉色→灰糊),2026-07-22 換沙金《X 夫人》(黑禮服 vs 蒼白膚,對比極強)。
