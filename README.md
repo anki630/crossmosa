@@ -84,6 +84,8 @@
   <img src="docs/promo/wp/peacock_skirt.jpg" width="110" alt="孔雀裙">
 </p>
 
+<p align="center"><a href="https://anki630.github.io/crossmosa/masterpieces.html">每一幅畫的故事 →</a></p>
+
 <a id="開始使用"></a>
 
 ## 三步驟，今晚就能開始讀
@@ -307,6 +309,8 @@ When you close it, the screen shows a famous painting. Van Gogh today, Hokusai t
   <img src="docs/promo/wp/mona_lisa.jpg" width="110" alt="Mona Lisa">
   <img src="docs/promo/wp/peacock_skirt.jpg" width="110" alt="The Peacock Skirt">
 </p>
+
+<p align="center"><a href="https://anki630.github.io/crossmosa/masterpieces.html">See all fifty paintings →</a></p>
 
 <a id="getting-started"></a>
 
