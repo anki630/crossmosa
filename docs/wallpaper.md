@@ -4,7 +4,7 @@
 
 ## 名畫系列
 
-五十幅世界名畫，都取自 Wikimedia Commons 的公共領域作品，每一幅都為電子紙重新調過。
+五十幅世界名畫，都取自 Wikimedia Commons 的公共領域作品，每一幅都為電子紙重新調過。每一幅畫的故事，在[口袋裡的小美術館](https://anki630.github.io/crossmosa/masterpieces.html)。
 
 [下載 X3 版](https://github.com/anki630/crossmosa/releases/download/wallpapers-masterpieces-2026-09/crossmosa-wallpapers-masterpieces-x3-2026-09.zip) · [下載 X4 版](https://github.com/anki630/crossmosa/releases/download/wallpapers-masterpieces-2026-09/crossmosa-wallpapers-masterpieces-x4-2026-09.zip)
 
@@ -30,7 +30,7 @@ When the device is closed, a painting stays on the screen. Each wallpaper series
 
 ## Masterpieces
 
-Fifty famous paintings. Each one is a public-domain work from Wikimedia Commons and has been adjusted for the e-paper display.
+Fifty famous paintings. Each one is a public-domain work from Wikimedia Commons and has been adjusted for the e-paper display. [See all fifty paintings](https://anki630.github.io/crossmosa/masterpieces.html).
 
 [Download for X3](https://github.com/anki630/crossmosa/releases/download/wallpapers-masterpieces-2026-09/crossmosa-wallpapers-masterpieces-x3-2026-09.zip) · [Download for X4](https://github.com/anki630/crossmosa/releases/download/wallpapers-masterpieces-2026-09/crossmosa-wallpapers-masterpieces-x4-2026-09.zip)
 

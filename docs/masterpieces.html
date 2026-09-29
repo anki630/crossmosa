@@ -1,0 +1,768 @@
+<!doctype html>
+<html lang="zh-Hant-TW">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>口袋裡的小美術館 — CrossMosa</title>
+<meta name="description" content="CrossMosa 桌布・名畫系列：五十幅世界名畫，每一幅都為電子紙重新調過。">
+<meta property="og:title" content="口袋裡的小美術館 — CrossMosa">
+<meta property="og:description" content="五十幅世界名畫，每一幅都為電子紙重新調過。闔上的時候，螢幕上是一幅畫。">
+<meta property="og:url" content="https://anki630.github.io/crossmosa/masterpieces.html">
+<meta property="og:image" content="https://anki630.github.io/crossmosa/promo/og.jpg">
+<link rel="icon" href="promo/logo.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@700&display=swap">
+<style>
+  :root { --paper:#fbfbfd; --ink:#1d1d1f; --gray:#6e6e73; --line:#e8e8ed; --dark:#0b0b0c; --darktext:#f5f5f7;
+          --darkgray:#a1a1a6; --mat:#ffffff; color-scheme:light; }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html { scroll-behavior:smooth; }
+  body { background:var(--paper); color:var(--ink); font-family:"PingFang TC","Noto Sans TC","Microsoft JhengHei",sans-serif;
+         line-height:1.7; -webkit-font-smoothing:antialiased; }
+  a { color:inherit; }
+  img { max-width:100%; height:auto; display:block; }
+  .wrap { max-width:1020px; margin:0 auto; padding-inline:24px; }
+  h1, h2, h3 { font-family:"Noto Serif TC","Songti TC","PMingLiU",serif; font-weight:700; text-wrap:balance; }
+  .kicker { letter-spacing:.32em; font-size:.75rem; text-transform:uppercase; }
+
+  /* 牆：深色區掛三幅，像美術館入口 */
+  .hero { background:var(--dark); color:var(--darktext); padding-block:72px 80px; }
+  .hero .kicker { color:var(--darkgray); margin-bottom:18px; }
+  .hero h1 { font-size:clamp(2.3rem,6vw,3.6rem); line-height:1.15; letter-spacing:.02em; margin-bottom:18px; }
+  .hero .sub { color:#c7c7cc; font-size:1.08rem; max-width:38em; margin-bottom:30px; text-wrap:pretty; }
+  .btns { display:flex; flex-wrap:wrap; gap:12px; align-items:center; }
+  .btn { display:inline-block; padding:11px 22px; border-radius:980px; text-decoration:none; font-size:.98rem; font-weight:600; }
+  .btn.primary { background:var(--darktext); color:var(--dark); }
+  .btn.ghost { border:1px solid #48484a; color:var(--darktext); }
+  .btn:focus-visible, .eras a:focus-visible { outline:2px solid #0a84ff; outline-offset:3px; }
+  .hero .howto { color:var(--darkgray); font-size:.9rem; }
+  .hero .howto a { color:var(--darktext); }
+  .wall { display:flex; gap:clamp(12px,3vw,32px); align-items:flex-end; justify-content:center; margin-top:56px; }
+  .wall img { height:clamp(150px,26vw,260px); width:auto; border:5px solid #fff; box-shadow:0 18px 40px rgba(0,0,0,.55); }
+  .wall .land img { height:clamp(100px,17vw,173px); }
+
+  /* 策展說明 */
+  .story { padding-block:72px 28px; }
+  .story h2 { font-size:clamp(1.5rem,3vw,2rem); margin-bottom:18px; }
+  .story p { max-width:36em; margin-bottom:1em; font-size:1.02rem; text-wrap:pretty; }
+  .story p.en { color:var(--gray); font-size:.93rem; max-width:42em; }
+
+  /* 年代導覽 */
+  .eras { position:sticky; top:env(safe-area-inset-top, 0px); z-index:5; background:rgba(251,251,253,.94);
+          -webkit-backdrop-filter:blur(10px); backdrop-filter:blur(10px); border-bottom:1px solid var(--line); }
+  .eras .wrap { display:flex; gap:6px 18px; flex-wrap:wrap; padding-block:12px; font-size:.92rem; }
+  .eras a { text-decoration:none; color:var(--gray); white-space:nowrap; }
+  .eras a:hover { color:var(--ink); }
+
+  /* 圖錄 */
+  .era { padding-block:64px 8px; scroll-margin-top:56px; }
+  .era-head { display:flex; flex-wrap:wrap; align-items:baseline; gap:8px 18px; border-bottom:1px solid var(--line);
+              padding-bottom:12px; margin-bottom:40px; }
+  .era-head h2 { font-size:clamp(1.6rem,3.2vw,2.2rem); }
+  .range { color:var(--gray); font-size:.92rem; font-variant-numeric:tabular-nums; }
+  .grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:60px 48px; }
+  .work { scroll-margin-top:64px; }
+  .work figure { margin-bottom:18px; }
+  .work figure img { height:250px; width:auto; max-width:100%; object-fit:contain; background:var(--mat);
+                     border:6px solid var(--mat); box-shadow:0 1px 2px rgba(0,0,0,.08), 0 10px 26px rgba(0,0,0,.08); }
+  .label h3 { font-size:1.35rem; line-height:1.35; margin-bottom:2px; }
+  .label .orig { color:var(--gray); font-size:.9rem; font-style:italic; margin-bottom:6px; }
+  .label .meta { font-size:.9rem; font-variant-numeric:tabular-nums; }
+  .label .meta.sub { color:var(--gray); margin-bottom:10px; }
+  .label .meta .i { white-space:nowrap; }
+  .label .meta .sep { color:#b0b0b5; margin-inline:.45em; }
+  .label .blurb { font-size:.98rem; max-width:32em; text-wrap:pretty; }
+  .label .blurb.en { color:var(--gray); font-size:.88rem; margin-top:6px; }
+
+  .closing { padding-block:80px 64px; border-top:1px solid var(--line); margin-top:64px; }
+  .closing h2 { font-size:clamp(1.5rem,3vw,2rem); margin-bottom:12px; }
+  .closing p { color:var(--gray); max-width:36em; margin-bottom:22px; }
+  .closing .btn.primary { background:var(--ink); color:var(--paper); }
+  .closing .btn.ghost { border-color:#d2d2d7; color:var(--ink); }
+  footer { padding-block:28px 48px; color:var(--gray); font-size:.85rem; }
+  footer a { color:var(--ink); }
+
+  @media (max-width:760px) {
+    .grid { grid-template-columns:1fr; gap:48px; }
+    .work figure img { height:220px; }
+    .hero { padding-block:56px 64px; }
+  }
+  @media (prefers-reduced-motion:reduce) { html { scroll-behavior:auto; } }
+</style>
+</head>
+<body>
+<header class="hero">
+  <div class="wrap">
+    <p class="kicker">Wallpapers · Masterpieces</p>
+    <h1>口袋裡的小美術館</h1>
+    <p class="sub">五十幅世界名畫，每一幅都為電子紙重新調過。闔上的時候，螢幕上是一幅畫。</p>
+    <div class="btns">
+      <a class="btn primary" href="https://github.com/anki630/crossmosa/releases/download/wallpapers-masterpieces-2026-09/crossmosa-wallpapers-masterpieces-x3-2026-09.zip">下載 X3 版</a>
+      <a class="btn ghost" href="https://github.com/anki630/crossmosa/releases/download/wallpapers-masterpieces-2026-09/crossmosa-wallpapers-masterpieces-x4-2026-09.zip">下載 X4 版</a>
+      <span class="howto"><a href="https://github.com/anki630/crossmosa/blob/main/docs/wallpaper.md">怎麼裝</a></span>
+    </div>
+    <div class="wall">
+      <figure class="port"><img src="promo/masterpieces/girl_pearl_earring.jpg" width="264" height="396" alt="戴珍珠耳環的少女，維梅爾"></figure>
+      <figure class="land"><img src="promo/masterpieces/great_wave.jpg" width="396" height="264" alt="神奈川沖浪裏，葛飾北齋"></figure>
+      <figure class="port"><img src="promo/masterpieces/sargent_madame_x.jpg" width="264" height="396" alt="X 夫人，薩金特"></figure>
+    </div>
+  </div>
+</header>
+
+<main>
+  <section class="story">
+    <div class="wrap">
+      <h2>為什麼是這五十幅</h2>
+      <p>挑選的標準只有一條：在四階灰、沒有背光的小螢幕上，這張畫還是不是那張畫。</p>
+      <p>這跟有不有名是兩回事。莫內的《印象・日出》靠橘色的太陽對上藍灰的霧撐著，兩者亮度幾乎一樣，轉成灰階就只剩一片灰，所以換成了北齋的《凱風快晴》。秀拉的點描和雷諾瓦的斑斕光點也沒撐過去，換成了沙金的《X 夫人》和卡耶博特的《巴黎街道：雨天》。</p>
+      <p>另一半的工夫花在確認拿到的是畫本身。同一幅名作在 Wikimedia Commons 上常有好幾個檔案，其中一份下載核對之後，是遊客在展場對著畫拍的照片。</p>
+      <p>原作最大的是《最後的晚餐》，將近九公尺寬；最小的是杜勒的《憂鬱 I》，比一張 A4 紙還小。現在它們都在同一塊螢幕上。</p>
+      <p>每一幅都從原圖重新計算，照 X3 和 X4 各自的螢幕做成四階灰，放進去就是一個像素對一個像素。橫式的畫在機器上是轉 90 度存的，這裡轉正給你看。</p>
+      <p class="en" lang="en">One rule decided the collection: on a small four-gray screen without a backlight, is this still the same painting? Fame had nothing to do with it. Monet's Impression, Sunrise depends on an orange sun against a blue-gray haze of nearly the same brightness, so it turns into flat gray and was replaced by Hokusai's Red Fuji. The largest original, The Last Supper, is almost nine meters wide; the smallest, Dürer's Melencolia I, is smaller than a sheet of A4 paper. Now they share one screen. Every painting is computed from the original image for the X3 and X4 screens separately, pixel for pixel.</p>
+    </div>
+  </section>
+
+  <nav class="eras" aria-label="年代">
+    <div class="wrap">
+      <a href="#renaissance">文藝復興</a>
+      <a href="#baroque">巴洛克</a>
+      <a href="#ukiyoe">浮世繪</a>
+      <a href="#c19">十九世紀</a>
+      <a href="#finde">世紀末</a>
+      <a href="#c20">二十世紀</a>
+    </div>
+  </nav>
+
+  <section class="era" id="renaissance">
+    <div class="wrap">
+      <header class="era-head">
+        <h2>文藝復興</h2>
+        <p class="range"><span lang="en">Renaissance</span>　1434–1565　9 幅</p>
+      </header>
+      <div class="grid">
+      <article class="work" id="arnolfini">
+        <figure class="port"><img src="promo/masterpieces/arnolfini.jpg" width="264" height="396" alt="阿諾菲尼夫婦像，范艾克" loading="lazy"></figure>
+        <div class="label">
+          <h3>阿諾菲尼夫婦像</h3>
+          <p class="orig" lang="en">The Arnolfini Portrait</p>
+          <p class="meta"><span class="i">范艾克</span><span class="sep">·</span><span class="i">法蘭德斯</span><span class="sep">·</span><span class="i">1434</span></p>
+          <p class="meta sub"><span class="i">油彩、橡木板</span><span class="sep">·</span><span class="i">82 × 60 公分</span><span class="sep">·</span><span class="i">倫敦國家美術館</span></p>
+          <p class="blurb">牆上的小圓鏡裡映出房間另一頭的兩個人，其中一個可能就是畫家。</p>
+          <p class="blurb en" lang="en">The small convex mirror reflects two more people across the room, perhaps the painter himself.</p>
+        </div>
+      </article>
+      <article class="work" id="birth_of_venus_botticelli">
+        <figure class="land"><img src="promo/masterpieces/birth_of_venus_botticelli.jpg" width="396" height="264" alt="維納斯的誕生，波提且利" loading="lazy"></figure>
+        <div class="label">
+          <h3>維納斯的誕生</h3>
+          <p class="orig" lang="en">The Birth of Venus</p>
+          <p class="meta"><span class="i">波提且利</span><span class="sep">·</span><span class="i">義大利</span><span class="sep">·</span><span class="i">約 1484–1486</span></p>
+          <p class="meta sub"><span class="i">蛋彩、畫布</span><span class="sep">·</span><span class="i">173 × 279 公分</span><span class="sep">·</span><span class="i">佛羅倫斯烏菲茲美術館</span></p>
+          <p class="blurb">西風把剛從海中誕生的維納斯吹向岸邊，季節女神張開斗篷等著她。</p>
+          <p class="blurb en" lang="en">The west wind blows the newborn Venus ashore while a goddess of the seasons waits with a cloak.</p>
+        </div>
+      </article>
+      <article class="work" id="last_supper">
+        <figure class="land"><img src="promo/masterpieces/last_supper.jpg" width="396" height="264" alt="最後的晚餐，達文西" loading="lazy"></figure>
+        <div class="label">
+          <h3>最後的晚餐</h3>
+          <p class="orig" lang="en">The Last Supper</p>
+          <p class="meta"><span class="i">達文西</span><span class="sep">·</span><span class="i">義大利</span><span class="sep">·</span><span class="i">1495–1498</span></p>
+          <p class="meta sub"><span class="i">油彩與蛋彩、乾灰泥牆</span><span class="sep">·</span><span class="i">460 × 880 公分</span><span class="sep">·</span><span class="i">米蘭恩寵聖母教堂</span></p>
+          <p class="blurb">「你們中間有一個人要出賣我」話一出口，十二門徒三人一組騷動起來。</p>
+          <p class="blurb en" lang="en">The moment after “One of you will betray me”: the twelve apostles stir in groups of three.</p>
+        </div>
+      </article>
+      <article class="work" id="mona_lisa">
+        <figure class="port"><img src="promo/masterpieces/mona_lisa.jpg" width="264" height="396" alt="蒙娜麗莎，達文西" loading="lazy"></figure>
+        <div class="label">
+          <h3>蒙娜麗莎</h3>
+          <p class="orig" lang="en">Mona Lisa</p>
+          <p class="meta"><span class="i">達文西</span><span class="sep">·</span><span class="i">義大利</span><span class="sep">·</span><span class="i">約 1503–1519</span></p>
+          <p class="meta sub"><span class="i">油彩、楊木板</span><span class="sep">·</span><span class="i">77 × 53 公分</span><span class="sep">·</span><span class="i">巴黎羅浮宮</span></p>
+          <p class="blurb">沒有清楚輪廓的微笑，是達文西用一層又一層的暈塗堆出來的。</p>
+          <p class="blurb en" lang="en">A smile without a hard outline, built up by Leonardo in layer after layer of sfumato.</p>
+        </div>
+      </article>
+      <article class="work" id="school_of_athens">
+        <figure class="land"><img src="promo/masterpieces/school_of_athens.jpg" width="396" height="264" alt="雅典學院，拉斐爾" loading="lazy"></figure>
+        <div class="label">
+          <h3>雅典學院</h3>
+          <p class="orig" lang="en">The School of Athens</p>
+          <p class="meta"><span class="i">拉斐爾</span><span class="sep">·</span><span class="i">義大利</span><span class="sep">·</span><span class="i">1509–1511</span></p>
+          <p class="meta sub"><span class="i">濕壁畫</span><span class="sep">·</span><span class="i">500 × 770 公分</span><span class="sep">·</span><span class="i">梵蒂岡宗座宮</span></p>
+          <p class="blurb">柏拉圖指著天，亞里斯多德掌心朝地，古希臘的哲學家齊聚一堂。</p>
+          <p class="blurb en" lang="en">Plato points up, Aristotle gestures to the earth, and the philosophers of ancient Greece gather around them.</p>
+        </div>
+      </article>
+      <article class="work" id="creation_of_adam">
+        <figure class="land"><img src="promo/masterpieces/creation_of_adam.jpg" width="396" height="264" alt="創造亞當，米開朗基羅" loading="lazy"></figure>
+        <div class="label">
+          <h3>創造亞當</h3>
+          <p class="orig" lang="en">The Creation of Adam</p>
+          <p class="meta"><span class="i">米開朗基羅</span><span class="sep">·</span><span class="i">義大利</span><span class="sep">·</span><span class="i">約 1511–1512</span></p>
+          <p class="meta sub"><span class="i">濕壁畫</span><span class="sep">·</span><span class="i">280 × 570 公分</span><span class="sep">·</span><span class="i">梵蒂岡西斯汀禮拜堂</span></p>
+          <p class="blurb">上帝與亞當的手指差一點就要碰到，那一點空隙是整幅畫的中心。</p>
+          <p class="blurb en" lang="en">God&#x27;s finger and Adam&#x27;s almost touch; the gap between them is the center of the painting.</p>
+        </div>
+      </article>
+      <article class="work" id="durer_melencolia">
+        <figure class="port"><img src="promo/masterpieces/durer_melencolia.jpg" width="264" height="396" alt="憂鬱 I，杜勒" loading="lazy"></figure>
+        <div class="label">
+          <h3>憂鬱 I</h3>
+          <p class="orig" lang="en">Melencolia I</p>
+          <p class="meta"><span class="i">杜勒</span><span class="sep">·</span><span class="i">德國</span><span class="sep">·</span><span class="i">1514</span></p>
+          <p class="meta sub"><span class="i">銅版畫</span><span class="sep">·</span><span class="i">24 × 19 公分</span></p>
+          <p class="blurb">有翅膀的人物托著臉出神，身邊散著工具、多面體和一個魔方陣。</p>
+          <p class="blurb en" lang="en">A winged figure sits lost in thought among tools, a polyhedron and a magic square.</p>
+        </div>
+      </article>
+      <article class="work" id="tower_of_babel">
+        <figure class="land"><img src="promo/masterpieces/tower_of_babel.jpg" width="396" height="264" alt="巴別塔，老布勒哲爾" loading="lazy"></figure>
+        <div class="label">
+          <h3>巴別塔</h3>
+          <p class="orig" lang="en">The Tower of Babel</p>
+          <p class="meta"><span class="i">老布勒哲爾</span><span class="sep">·</span><span class="i">法蘭德斯</span><span class="sep">·</span><span class="i">1563</span></p>
+          <p class="meta sub"><span class="i">油彩、橡木板</span><span class="sep">·</span><span class="i">114 × 155 公分</span><span class="sep">·</span><span class="i">維也納藝術史博物館</span></p>
+          <p class="blurb">一座蓋進雲裡的塔，細看才發現上面爬滿了工人和起重機。</p>
+          <p class="blurb en" lang="en">A tower rising into the clouds — look closely and it is crawling with workers and cranes.</p>
+        </div>
+      </article>
+      <article class="work" id="hunters_snow">
+        <figure class="land"><img src="promo/masterpieces/hunters_snow.jpg" width="396" height="264" alt="雪中獵人，老布勒哲爾" loading="lazy"></figure>
+        <div class="label">
+          <h3>雪中獵人</h3>
+          <p class="orig" lang="en">The Hunters in the Snow</p>
+          <p class="meta"><span class="i">老布勒哲爾</span><span class="sep">·</span><span class="i">法蘭德斯</span><span class="sep">·</span><span class="i">1565</span></p>
+          <p class="meta sub"><span class="i">油彩、木板</span><span class="sep">·</span><span class="i">117 × 162 公分</span><span class="sep">·</span><span class="i">維也納藝術史博物館</span></p>
+          <p class="blurb">獵人帶著獵犬走下雪坡，山谷裡的人在結冰的池塘上溜冰。</p>
+          <p class="blurb en" lang="en">Hunters and their dogs come down a snowy slope while villagers skate on frozen ponds below.</p>
+        </div>
+      </article>
+      </div>
+    </div>
+  </section>
+  <section class="era" id="baroque">
+    <div class="wrap">
+      <header class="era-head">
+        <h2>巴洛克</h2>
+        <p class="range"><span lang="en">Baroque</span>　1599–1665　5 幅</p>
+      </header>
+      <div class="grid">
+      <article class="work" id="caravaggio_judith">
+        <figure class="land"><img src="promo/masterpieces/caravaggio_judith.jpg" width="396" height="264" alt="茱蒂絲斬首赫羅弗尼斯，卡拉瓦喬" loading="lazy"></figure>
+        <div class="label">
+          <h3>茱蒂絲斬首赫羅弗尼斯</h3>
+          <p class="orig" lang="en">Judith Beheading Holofernes</p>
+          <p class="meta"><span class="i">卡拉瓦喬</span><span class="sep">·</span><span class="i">義大利</span><span class="sep">·</span><span class="i">約 1599</span></p>
+          <p class="meta sub"><span class="i">油彩、畫布</span><span class="sep">·</span><span class="i">145 × 195 公分</span><span class="sep">·</span><span class="i">羅馬巴貝里尼宮國立古代藝術館</span></p>
+          <p class="blurb">卡拉瓦喬最拿手的強烈明暗，讓這一刻像舞台上只打了一盞燈。</p>
+          <p class="blurb en" lang="en">Caravaggio&#x27;s fierce light and shadow make the moment look lit by a single stage spotlight.</p>
+        </div>
+      </article>
+      <article class="work" id="night_watch">
+        <figure class="land"><img src="promo/masterpieces/night_watch.jpg" width="396" height="264" alt="夜巡，林布蘭" loading="lazy"></figure>
+        <div class="label">
+          <h3>夜巡</h3>
+          <p class="orig" lang="en">The Night Watch</p>
+          <p class="meta"><span class="i">林布蘭</span><span class="sep">·</span><span class="i">荷蘭</span><span class="sep">·</span><span class="i">1642</span></p>
+          <p class="meta sub"><span class="i">油彩、畫布</span><span class="sep">·</span><span class="i">363 × 437 公分</span><span class="sep">·</span><span class="i">阿姆斯特丹國家博物館</span></p>
+          <p class="blurb">民兵隊出發的一刻，光打在隊長和副官身上，其他人退進陰影。</p>
+          <p class="blurb en" lang="en">A militia company sets off; the light falls on the captain and his lieutenant, and the rest step back into shadow.</p>
+        </div>
+      </article>
+      <article class="work" id="las_meninas">
+        <figure class="port"><img src="promo/masterpieces/las_meninas.jpg" width="264" height="396" alt="侍女，維拉斯奎茲" loading="lazy"></figure>
+        <div class="label">
+          <h3>侍女</h3>
+          <p class="orig" lang="en">Las Meninas</p>
+          <p class="meta"><span class="i">維拉斯奎茲</span><span class="sep">·</span><span class="i">西班牙</span><span class="sep">·</span><span class="i">1656</span></p>
+          <p class="meta sub"><span class="i">油彩、畫布</span><span class="sep">·</span><span class="i">321 × 282 公分</span><span class="sep">·</span><span class="i">馬德里普拉多博物館</span></p>
+          <p class="blurb">畫家本人站在畫布前望向我們，後牆鏡子裡映出的是國王與王后。</p>
+          <p class="blurb en" lang="en">The painter looks out at us from behind his canvas; the mirror on the back wall reflects the king and queen.</p>
+        </div>
+      </article>
+      <article class="work" id="milkmaid">
+        <figure class="port"><img src="promo/masterpieces/milkmaid.jpg" width="264" height="396" alt="倒牛奶的女僕，維梅爾" loading="lazy"></figure>
+        <div class="label">
+          <h3>倒牛奶的女僕</h3>
+          <p class="orig" lang="en">The Milkmaid</p>
+          <p class="meta"><span class="i">維梅爾</span><span class="sep">·</span><span class="i">荷蘭</span><span class="sep">·</span><span class="i">約 1660</span></p>
+          <p class="meta sub"><span class="i">油彩、畫布</span><span class="sep">·</span><span class="i">46 × 41 公分</span><span class="sep">·</span><span class="i">阿姆斯特丹國家博物館</span></p>
+          <p class="blurb">安靜的室內，牛奶細細流下的那一刻被留了下來。</p>
+          <p class="blurb en" lang="en">A quiet interior, held at the moment the milk pours.</p>
+        </div>
+      </article>
+      <article class="work" id="girl_pearl_earring">
+        <figure class="port"><img src="promo/masterpieces/girl_pearl_earring.jpg" width="264" height="396" alt="戴珍珠耳環的少女，維梅爾" loading="lazy"></figure>
+        <div class="label">
+          <h3>戴珍珠耳環的少女</h3>
+          <p class="orig" lang="en">Girl with a Pearl Earring</p>
+          <p class="meta"><span class="i">維梅爾</span><span class="sep">·</span><span class="i">荷蘭</span><span class="sep">·</span><span class="i">約 1665</span></p>
+          <p class="meta sub"><span class="i">油彩、畫布</span><span class="sep">·</span><span class="i">45 × 39 公分</span><span class="sep">·</span><span class="i">海牙莫瑞泰斯皇家美術館</span></p>
+          <p class="blurb">沒有人知道她是誰。她回頭的那一瞬間，珍珠上只有兩筆亮光。</p>
+          <p class="blurb en" lang="en">No one knows who she is. The pearl is little more than two strokes of light.</p>
+        </div>
+      </article>
+      </div>
+    </div>
+  </section>
+  <section class="era" id="ukiyoe">
+    <div class="wrap">
+      <header class="era-head">
+        <h2>浮世繪</h2>
+        <p class="range"><span lang="en">Ukiyo-e</span>　1794–1857　7 幅</p>
+      </header>
+      <div class="grid">
+      <article class="work" id="sharaku_otani_oniji">
+        <figure class="port"><img src="promo/masterpieces/sharaku_otani_oniji.jpg" width="264" height="396" alt="三代目大谷鬼次之奴江戶兵衛，東洲齋寫樂" loading="lazy"></figure>
+        <div class="label">
+          <h3>三代目大谷鬼次之奴江戶兵衛</h3>
+          <p class="orig" lang="en">Ōtani Oniji III as Yakko Edobei</p>
+          <p class="meta"><span class="i">東洲齋寫樂</span><span class="sep">·</span><span class="i">日本</span><span class="sep">·</span><span class="i">1794</span></p>
+          <p class="meta sub"><span class="i">木刻版畫、大判</span></p>
+          <p class="blurb">歌舞伎演員瞪眼張手的定格。寫樂只活躍約十個月，留下百餘幅版畫後，就不再見於任何可靠的記錄。</p>
+          <p class="blurb en" lang="en">A kabuki actor frozen mid-pose. Sharaku was active for only about ten months and left more than a hundred prints; after that, he disappears from the record.</p>
+        </div>
+      </article>
+      <article class="work" id="great_wave">
+        <figure class="land"><img src="promo/masterpieces/great_wave.jpg" width="396" height="264" alt="神奈川沖浪裏，葛飾北齋" loading="lazy"></figure>
+        <div class="label">
+          <h3>神奈川沖浪裏</h3>
+          <p class="orig" lang="en">The Great Wave off Kanagawa</p>
+          <p class="meta"><span class="i">葛飾北齋</span><span class="sep">·</span><span class="i">日本</span><span class="sep">·</span><span class="i">約 1831</span></p>
+          <p class="meta sub"><span class="i">木刻版畫、大判</span></p>
+          <p class="blurb">浪頭像爪子一樣撲向三艘小船，遠方的富士山反而像最小的一座浪。</p>
+          <p class="blurb en" lang="en">The wave&#x27;s claws reach for three boats, and distant Mount Fuji looks like the smallest wave of all.</p>
+        </div>
+      </article>
+      <article class="work" id="red_fuji">
+        <figure class="land"><img src="promo/masterpieces/red_fuji.jpg" width="396" height="264" alt="凱風快晴，葛飾北齋" loading="lazy"></figure>
+        <div class="label">
+          <h3>凱風快晴</h3>
+          <p class="orig" lang="en">Fine Wind, Clear Morning</p>
+          <p class="meta"><span class="i">葛飾北齋</span><span class="sep">·</span><span class="i">日本</span><span class="sep">·</span><span class="i">約 1831</span></p>
+          <p class="meta sub"><span class="i">木刻版畫、大判</span></p>
+          <p class="blurb">又叫「赤富士」：晨光把山染紅，整座山只用幾塊色面就立了起來。</p>
+          <p class="blurb en" lang="en">Also called Red Fuji: morning light turns the mountain red, built from just a few planes of color.</p>
+        </div>
+      </article>
+      <article class="work" id="ejiri_suruga">
+        <figure class="land"><img src="promo/masterpieces/ejiri_suruga.jpg" width="396" height="264" alt="駿州江尻，葛飾北齋" loading="lazy"></figure>
+        <div class="label">
+          <h3>駿州江尻</h3>
+          <p class="orig" lang="en">Ejiri in Suruga Province</p>
+          <p class="meta"><span class="i">葛飾北齋</span><span class="sep">·</span><span class="i">日本</span><span class="sep">·</span><span class="i">約 1831</span></p>
+          <p class="meta sub"><span class="i">木刻版畫、大判</span></p>
+          <p class="blurb">一陣強風把旅人的紙張吹上天，只有富士山動也不動。</p>
+          <p class="blurb en" lang="en">A gust sends travellers&#x27; papers flying; only Mount Fuji stays still.</p>
+        </div>
+      </article>
+      <article class="work" id="takiyasha_skeleton">
+        <figure class="port"><img src="promo/masterpieces/takiyasha_skeleton.jpg" width="264" height="396" alt="相馬的古內裏，歌川國芳" loading="lazy"></figure>
+        <div class="label">
+          <h3>相馬的古內裏</h3>
+          <p class="orig" lang="en">Takiyasha the Witch and the Skeleton Spectre</p>
+          <p class="meta"><span class="i">歌川國芳</span><span class="sep">·</span><span class="i">日本</span><span class="sep">·</span><span class="i">約 1844</span></p>
+          <p class="meta sub"><span class="i">木刻版畫、大判三聯作，這裡取中幅</span></p>
+          <p class="blurb">妖術召來的巨大骷髏，從破敗的宮殿裡探出身子。</p>
+          <p class="blurb en" lang="en">A giant skeleton summoned by sorcery leans out of a ruined palace.</p>
+        </div>
+      </article>
+      <article class="work" id="sudden_shower_shin_ohashi">
+        <figure class="port"><img src="promo/masterpieces/sudden_shower_shin_ohashi.jpg" width="264" height="396" alt="大橋安宅驟雨，歌川廣重" loading="lazy"></figure>
+        <div class="label">
+          <h3>大橋安宅驟雨</h3>
+          <p class="orig" lang="en">Sudden Shower over Shin-Ōhashi Bridge</p>
+          <p class="meta"><span class="i">歌川廣重</span><span class="sep">·</span><span class="i">日本</span><span class="sep">·</span><span class="i">1857</span></p>
+          <p class="meta sub"><span class="i">木刻版畫、大判</span></p>
+          <p class="blurb">驟雨刻成一根根細線，橋上的人縮著身子趕路。梵谷臨摹過這一張。</p>
+          <p class="blurb en" lang="en">The downpour is carved as fine lines while people hurry across the bridge. Van Gogh once painted a copy of it.</p>
+        </div>
+      </article>
+      <article class="work" id="plum_park_kameido">
+        <figure class="port"><img src="promo/masterpieces/plum_park_kameido.jpg" width="264" height="396" alt="龜戶梅屋舖，歌川廣重" loading="lazy"></figure>
+        <div class="label">
+          <h3>龜戶梅屋舖</h3>
+          <p class="orig" lang="en">Plum Park in Kameido</p>
+          <p class="meta"><span class="i">歌川廣重</span><span class="sep">·</span><span class="i">日本</span><span class="sep">·</span><span class="i">1857</span></p>
+          <p class="meta sub"><span class="i">木刻版畫、大判</span></p>
+          <p class="blurb">前景的梅枝大得出奇，把整座庭園推到後面。梵谷也臨摹過這一張。</p>
+          <p class="blurb en" lang="en">An oversized plum branch in the foreground pushes the garden into the distance. Van Gogh copied this one too.</p>
+        </div>
+      </article>
+      </div>
+    </div>
+  </section>
+  <section class="era" id="c19">
+    <div class="wrap">
+      <header class="era-head">
+        <h2>十九世紀</h2>
+        <p class="range"><span lang="en">The nineteenth century</span>　1814–1883　12 幅</p>
+      </header>
+      <div class="grid">
+      <article class="work" id="goya_third_may">
+        <figure class="land"><img src="promo/masterpieces/goya_third_may.jpg" width="396" height="264" alt="1808 年 5 月 3 日，哥雅" loading="lazy"></figure>
+        <div class="label">
+          <h3>1808 年 5 月 3 日</h3>
+          <p class="orig" lang="en">The Third of May 1808</p>
+          <p class="meta"><span class="i">哥雅</span><span class="sep">·</span><span class="i">西班牙</span><span class="sep">·</span><span class="i">1814</span></p>
+          <p class="meta sub"><span class="i">油彩、畫布</span><span class="sep">·</span><span class="i">268 × 347 公分</span><span class="sep">·</span><span class="i">馬德里普拉多博物館</span></p>
+          <p class="blurb">行刑隊背對著我們，所有的光都落在那個張開雙臂的人身上。</p>
+          <p class="blurb en" lang="en">The firing squad turns its back to us, and all the light falls on the man with his arms flung open.</p>
+        </div>
+      </article>
+      <article class="work" id="wanderer_sea_of_fog">
+        <figure class="port"><img src="promo/masterpieces/wanderer_sea_of_fog.jpg" width="264" height="396" alt="霧海上的旅人，佛烈德利赫" loading="lazy"></figure>
+        <div class="label">
+          <h3>霧海上的旅人</h3>
+          <p class="orig" lang="en">Wanderer above the Sea of Fog</p>
+          <p class="meta"><span class="i">佛烈德利赫</span><span class="sep">·</span><span class="i">德國</span><span class="sep">·</span><span class="i">約 1818</span></p>
+          <p class="meta sub"><span class="i">油彩、畫布</span><span class="sep">·</span><span class="i">95 × 75 公分</span><span class="sep">·</span><span class="i">漢堡美術館</span></p>
+          <p class="blurb">背對我們的旅人站在岩頂，腳下是一整片翻湧的霧海。</p>
+          <p class="blurb en" lang="en">A traveller stands on a rocky summit with his back to us, above a sea of fog.</p>
+        </div>
+      </article>
+      <article class="work" id="hay_wain">
+        <figure class="land"><img src="promo/masterpieces/hay_wain.jpg" width="396" height="264" alt="乾草車，康斯塔伯" loading="lazy"></figure>
+        <div class="label">
+          <h3>乾草車</h3>
+          <p class="orig" lang="en">The Hay Wain</p>
+          <p class="meta"><span class="i">康斯塔伯</span><span class="sep">·</span><span class="i">英國</span><span class="sep">·</span><span class="i">1821</span></p>
+          <p class="meta sub"><span class="i">油彩、畫布</span><span class="sep">·</span><span class="i">130 × 185 公分</span><span class="sep">·</span><span class="i">倫敦國家美術館</span></p>
+          <p class="blurb">一輛乾草車涉水過河，英國鄉間夏日的正午就停在這一刻。</p>
+          <p class="blurb en" lang="en">A hay wain fords a river at midday in the English countryside.</p>
+        </div>
+      </article>
+      <article class="work" id="millais_ophelia">
+        <figure class="land"><img src="promo/masterpieces/millais_ophelia.jpg" width="396" height="264" alt="奧菲莉亞，米萊" loading="lazy"></figure>
+        <div class="label">
+          <h3>奧菲莉亞</h3>
+          <p class="orig" lang="en">Ophelia</p>
+          <p class="meta"><span class="i">米萊</span><span class="sep">·</span><span class="i">英國</span><span class="sep">·</span><span class="i">1851–1852</span></p>
+          <p class="meta sub"><span class="i">油彩、畫布</span><span class="sep">·</span><span class="i">76 × 112 公分</span><span class="sep">·</span><span class="i">倫敦泰特不列顛美術館</span></p>
+          <p class="blurb">《哈姆雷特》裡的奧菲莉亞漂在溪水上，四周的花草一株株都畫得清清楚楚。</p>
+          <p class="blurb en" lang="en">Hamlet&#x27;s Ophelia floats down a stream, every plant around her painted in precise detail.</p>
+        </div>
+      </article>
+      <article class="work" id="dore_dante_inferno">
+        <figure class="port"><img src="promo/masterpieces/dore_dante_inferno.jpg" width="264" height="396" alt="神曲・地獄篇　第一歌，多雷" loading="lazy"></figure>
+        <div class="label">
+          <h3>神曲・地獄篇　第一歌</h3>
+          <p class="orig" lang="en">Dante&#x27;s Inferno, Canto I</p>
+          <p class="meta"><span class="i">多雷</span><span class="sep">·</span><span class="i">法國</span><span class="sep">·</span><span class="i">1861</span></p>
+          <p class="meta sub"><span class="i">木口木刻、書籍插畫</span></p>
+          <p class="blurb">「在人生旅程的中途，我在一座幽暗的森林裡迷了路。」神曲從這裡開始。</p>
+          <p class="blurb en" lang="en">“Midway upon the journey of our life I found myself within a forest dark” — where the Divine Comedy begins.</p>
+        </div>
+      </article>
+      <article class="work" id="manet_dejeuner">
+        <figure class="land"><img src="promo/masterpieces/manet_dejeuner.jpg" width="396" height="264" alt="草地上的午餐，馬內" loading="lazy"></figure>
+        <div class="label">
+          <h3>草地上的午餐</h3>
+          <p class="orig" lang="en">Le Déjeuner sur l&#x27;herbe</p>
+          <p class="meta"><span class="i">馬內</span><span class="sep">·</span><span class="i">法國</span><span class="sep">·</span><span class="i">1863</span></p>
+          <p class="meta sub"><span class="i">油彩、畫布</span><span class="sep">·</span><span class="i">207 × 265 公分</span><span class="sep">·</span><span class="i">巴黎奧賽美術館</span></p>
+          <p class="blurb">兩位衣著整齊的紳士和一位裸身的女子野餐，當年在巴黎引起軒然大波。</p>
+          <p class="blurb en" lang="en">Two dressed gentlemen picnic with a nude woman — a scandal in the Paris of its day.</p>
+        </div>
+      </article>
+      <article class="work" id="whistlers_mother">
+        <figure class="land"><img src="promo/masterpieces/whistlers_mother.jpg" width="396" height="264" alt="惠斯勒的母親，惠斯勒" loading="lazy"></figure>
+        <div class="label">
+          <h3>惠斯勒的母親</h3>
+          <p class="orig" lang="en">Whistler&#x27;s Mother</p>
+          <p class="meta"><span class="i">惠斯勒</span><span class="sep">·</span><span class="i">美國</span><span class="sep">·</span><span class="i">1871</span></p>
+          <p class="meta sub"><span class="i">油彩、畫布</span><span class="sep">·</span><span class="i">144 × 162 公分</span><span class="sep">·</span><span class="i">巴黎奧賽美術館</span></p>
+          <p class="blurb">原名《灰與黑的編排一號》：畫家的母親靜靜側坐，畫面幾乎只有灰與黑。</p>
+          <p class="blurb en" lang="en">Its real title is Arrangement in Grey and Black No. 1: the painter&#x27;s mother, seated in profile.</p>
+        </div>
+      </article>
+      <article class="work" id="degas_star">
+        <figure class="port"><img src="promo/masterpieces/degas_star.jpg" width="264" height="396" alt="舞台上的舞者，竇加" loading="lazy"></figure>
+        <div class="label">
+          <h3>舞台上的舞者</h3>
+          <p class="orig" lang="en">The Star</p>
+          <p class="meta"><span class="i">竇加</span><span class="sep">·</span><span class="i">法國</span><span class="sep">·</span><span class="i">約 1876–1878</span></p>
+          <p class="meta sub"><span class="i">粉彩、單刷版畫</span><span class="sep">·</span><span class="i">58 × 42 公分</span><span class="sep">·</span><span class="i">巴黎奧賽美術館</span></p>
+          <p class="blurb">從高處俯看舞台中央伸展的舞者，側幕旁露出一個黑衣人的身影。</p>
+          <p class="blurb en" lang="en">Seen from a high viewpoint, a dancer extends across the stage while a dark-clad figure stands in the wings.</p>
+        </div>
+      </article>
+      <article class="work" id="caillebotte_rainy">
+        <figure class="land"><img src="promo/masterpieces/caillebotte_rainy.jpg" width="396" height="264" alt="巴黎街道：雨天，卡耶博特" loading="lazy"></figure>
+        <div class="label">
+          <h3>巴黎街道：雨天</h3>
+          <p class="orig" lang="en">Paris Street; Rainy Day</p>
+          <p class="meta"><span class="i">卡耶博特</span><span class="sep">·</span><span class="i">法國</span><span class="sep">·</span><span class="i">1877</span></p>
+          <p class="meta sub"><span class="i">油彩、畫布</span><span class="sep">·</span><span class="i">212 × 276 公分</span><span class="sep">·</span><span class="i">芝加哥藝術博物館</span></p>
+          <p class="blurb">雨中的巴黎街口，傘下的人們擦身而過，路面的石磚還在發亮。</p>
+          <p class="blurb en" lang="en">A rainy Paris intersection: people pass under umbrellas and the paving stones still shine.</p>
+        </div>
+      </article>
+      <article class="work" id="birth_of_venus_bouguereau">
+        <figure class="port"><img src="promo/masterpieces/birth_of_venus_bouguereau.jpg" width="264" height="396" alt="維納斯的誕生，布格羅" loading="lazy"></figure>
+        <div class="label">
+          <h3>維納斯的誕生</h3>
+          <p class="orig" lang="en">The Birth of Venus</p>
+          <p class="meta"><span class="i">布格羅</span><span class="sep">·</span><span class="i">法國</span><span class="sep">·</span><span class="i">1879</span></p>
+          <p class="meta sub"><span class="i">油彩、畫布</span><span class="sep">·</span><span class="i">300 × 218 公分</span><span class="sep">·</span><span class="i">巴黎奧賽美術館</span></p>
+          <p class="blurb">同一個題材晚了將近四百年，布格羅把維納斯畫得像大理石一樣光滑。</p>
+          <p class="blurb en" lang="en">The same subject nearly four hundred years later; Bouguereau paints Venus as smooth as marble.</p>
+        </div>
+      </article>
+      <article class="work" id="bocklin_isle">
+        <figure class="land"><img src="promo/masterpieces/bocklin_isle.jpg" width="396" height="264" alt="死之島，勃克林" loading="lazy"></figure>
+        <div class="label">
+          <h3>死之島</h3>
+          <p class="orig" lang="en">Isle of the Dead</p>
+          <p class="meta"><span class="i">勃克林</span><span class="sep">·</span><span class="i">瑞士</span><span class="sep">·</span><span class="i">1880</span></p>
+          <p class="meta sub"><span class="i">油彩、畫布</span><span class="sep">·</span><span class="i">111 × 155 公分</span><span class="sep">·</span><span class="i">巴塞爾美術館</span></p>
+          <p class="blurb">一艘小船載著白衣人駛向岩島，島上高聳的柏樹一片漆黑。</p>
+          <p class="blurb en" lang="en">A small boat carries a white-robed figure toward a rocky island dark with cypresses.</p>
+        </div>
+      </article>
+      <article class="work" id="sargent_madame_x">
+        <figure class="port"><img src="promo/masterpieces/sargent_madame_x.jpg" width="264" height="396" alt="X 夫人，薩金特" loading="lazy"></figure>
+        <div class="label">
+          <h3>X 夫人</h3>
+          <p class="orig" lang="en">Madame X</p>
+          <p class="meta"><span class="i">薩金特</span><span class="sep">·</span><span class="i">美國</span><span class="sep">·</span><span class="i">1883–1884</span></p>
+          <p class="meta sub"><span class="i">油彩、畫布</span><span class="sep">·</span><span class="i">209 × 110 公分</span><span class="sep">·</span><span class="i">紐約大都會藝術博物館</span></p>
+          <p class="blurb">黑色禮服、蒼白的肩膀，這幅肖像在 1884 年的巴黎沙龍引起一片譁然。</p>
+          <p class="blurb en" lang="en">A black gown and pale shoulders — the portrait caused a scandal at the 1884 Paris Salon.</p>
+        </div>
+      </article>
+      </div>
+    </div>
+  </section>
+  <section class="era" id="finde">
+    <div class="wrap">
+      <header class="era-head">
+        <h2>世紀末</h2>
+        <p class="range"><span lang="en">Fin de siècle</span>　1888–1899　12 幅</p>
+      </header>
+      <div class="grid">
+      <article class="work" id="starry_night_rhone">
+        <figure class="land"><img src="promo/masterpieces/starry_night_rhone.jpg" width="396" height="264" alt="隆河上的星夜，梵谷" loading="lazy"></figure>
+        <div class="label">
+          <h3>隆河上的星夜</h3>
+          <p class="orig" lang="en">Starry Night Over the Rhône</p>
+          <p class="meta"><span class="i">梵谷</span><span class="sep">·</span><span class="i">荷蘭</span><span class="sep">·</span><span class="i">1888</span></p>
+          <p class="meta sub"><span class="i">油彩、畫布</span><span class="sep">·</span><span class="i">73 × 92 公分</span><span class="sep">·</span><span class="i">巴黎奧賽美術館</span></p>
+          <p class="blurb">亞爾的隆河岸邊，煤氣燈的倒影在水面上拉成一道道光。</p>
+          <p class="blurb en" lang="en">On the Rhône at Arles, the gaslights stretch into streaks of light across the water.</p>
+        </div>
+      </article>
+      <article class="work" id="cafe_terrace_night">
+        <figure class="port"><img src="promo/masterpieces/cafe_terrace_night.jpg" width="264" height="396" alt="夜晚的露天咖啡座，梵谷" loading="lazy"></figure>
+        <div class="label">
+          <h3>夜晚的露天咖啡座</h3>
+          <p class="orig" lang="en">Café Terrace at Night</p>
+          <p class="meta"><span class="i">梵谷</span><span class="sep">·</span><span class="i">荷蘭</span><span class="sep">·</span><span class="i">1888</span></p>
+          <p class="meta sub"><span class="i">油彩、畫布</span><span class="sep">·</span><span class="i">81 × 65 公分</span><span class="sep">·</span><span class="i">荷蘭庫勒慕勒美術館</span></p>
+          <p class="blurb">梵谷第一次用星空當背景。他在信裡說，這是一幅沒有用黑色的夜景。</p>
+          <p class="blurb en" lang="en">Van Gogh&#x27;s first painting with a starry sky; in a letter he called it a night painting without black.</p>
+        </div>
+      </article>
+      <article class="work" id="gauguin_vision">
+        <figure class="land"><img src="promo/masterpieces/gauguin_vision.jpg" width="396" height="264" alt="佈道後的幻象，高更" loading="lazy"></figure>
+        <div class="label">
+          <h3>佈道後的幻象</h3>
+          <p class="orig" lang="en">Vision after the Sermon</p>
+          <p class="meta"><span class="i">高更</span><span class="sep">·</span><span class="i">法國</span><span class="sep">·</span><span class="i">1888</span></p>
+          <p class="meta sub"><span class="i">油彩、畫布</span><span class="sep">·</span><span class="i">72 × 91 公分</span><span class="sep">·</span><span class="i">愛丁堡蘇格蘭國家美術館</span></p>
+          <p class="blurb">布列塔尼的婦人聽完佈道，眼前浮現雅各與天使摔角的景象。</p>
+          <p class="blurb en" lang="en">Breton women, fresh from a sermon, see Jacob wrestling the angel.</p>
+        </div>
+      </article>
+      <article class="work" id="starry_night">
+        <figure class="land"><img src="promo/masterpieces/starry_night.jpg" width="396" height="264" alt="星夜，梵谷" loading="lazy"></figure>
+        <div class="label">
+          <h3>星夜</h3>
+          <p class="orig" lang="en">The Starry Night</p>
+          <p class="meta"><span class="i">梵谷</span><span class="sep">·</span><span class="i">荷蘭</span><span class="sep">·</span><span class="i">1889</span></p>
+          <p class="meta sub"><span class="i">油彩、畫布</span><span class="sep">·</span><span class="i">74 × 92 公分</span><span class="sep">·</span><span class="i">紐約現代藝術博物館</span></p>
+          <p class="blurb">梵谷以聖雷米療養院窗外的景色為本，把夜空畫成翻騰的漩渦。</p>
+          <p class="blurb en" lang="en">Drawing on the view from his window at the Saint-Rémy asylum, van Gogh turned the night sky into swirling currents.</p>
+        </div>
+      </article>
+      <article class="work" id="lautrec_moulin">
+        <figure class="port"><img src="promo/masterpieces/lautrec_moulin.jpg" width="264" height="396" alt="紅磨坊：拉古留，羅特列克" loading="lazy"></figure>
+        <div class="label">
+          <h3>紅磨坊：拉古留</h3>
+          <p class="orig" lang="en">Moulin Rouge: La Goulue</p>
+          <p class="meta"><span class="i">羅特列克</span><span class="sep">·</span><span class="i">法國</span><span class="sep">·</span><span class="i">1891</span></p>
+          <p class="meta sub"><span class="i">彩色石版畫海報</span></p>
+          <p class="blurb">紅磨坊的海報：拉古留在舞池中央起舞，觀眾成了後方一排黑色剪影，前景是瓦倫丁的側影。</p>
+          <p class="blurb en" lang="en">A Moulin Rouge poster: La Goulue dances at the center, the crowd behind her reduced to black silhouettes, with Valentin in profile in the foreground.</p>
+        </div>
+      </article>
+      <article class="work" id="cezanne_cardplayers">
+        <figure class="land"><img src="promo/masterpieces/cezanne_cardplayers.jpg" width="396" height="264" alt="玩紙牌的人，塞尚" loading="lazy"></figure>
+        <div class="label">
+          <h3>玩紙牌的人</h3>
+          <p class="orig" lang="en">The Card Players</p>
+          <p class="meta"><span class="i">塞尚</span><span class="sep">·</span><span class="i">法國</span><span class="sep">·</span><span class="i">約 1892–1896</span></p>
+          <p class="meta sub"><span class="i">油彩、畫布</span><span class="sep">·</span><span class="i">60 × 73 公分</span><span class="sep">·</span><span class="i">倫敦考陶爾德美術館</span></p>
+          <p class="blurb">兩個普羅旺斯鄉間的男人面對面打牌，誰都不說話，只有酒瓶立在兩人中間。</p>
+          <p class="blurb en" lang="en">Two men from rural Provence play cards face to face in silence, a bottle standing between them.</p>
+        </div>
+      </article>
+      <article class="work" id="munch_scream">
+        <figure class="port"><img src="promo/masterpieces/munch_scream.jpg" width="264" height="396" alt="吶喊，孟克" loading="lazy"></figure>
+        <div class="label">
+          <h3>吶喊</h3>
+          <p class="orig" lang="en">The Scream</p>
+          <p class="meta"><span class="i">孟克</span><span class="sep">·</span><span class="i">挪威</span><span class="sep">·</span><span class="i">1893</span></p>
+          <p class="meta sub"><span class="i">蛋彩與油性蠟筆、紙板</span><span class="sep">·</span><span class="i">91 × 74 公分</span><span class="sep">·</span><span class="i">奧斯陸挪威國家博物館</span></p>
+          <p class="blurb">橋上的人抱著頭，天空和峽灣一起扭曲成波浪。</p>
+          <p class="blurb en" lang="en">A figure on a bridge clutches its head as the sky and fjord twist into waves.</p>
+        </div>
+      </article>
+      <article class="work" id="peacock_skirt">
+        <figure class="port"><img src="promo/masterpieces/peacock_skirt.jpg" width="264" height="396" alt="孔雀裙，比亞茲萊" loading="lazy"></figure>
+        <div class="label">
+          <h3>孔雀裙</h3>
+          <p class="orig" lang="en">The Peacock Skirt</p>
+          <p class="meta"><span class="i">比亞茲萊</span><span class="sep">·</span><span class="i">英國</span><span class="sep">·</span><span class="i">1893</span></p>
+          <p class="meta sub"><span class="i">鋼筆與墨水、書籍插畫</span></p>
+          <p class="blurb">為王爾德《莎樂美》畫的插圖，只用黑與白就畫出孔雀羽毛的華麗。</p>
+          <p class="blurb en" lang="en">An illustration for Wilde&#x27;s Salome, rendering peacock splendor in nothing but black and white.</p>
+        </div>
+      </article>
+      <article class="work" id="zodiac">
+        <figure class="port"><img src="promo/masterpieces/zodiac.jpg" width="264" height="396" alt="黃道十二宮，慕夏" loading="lazy"></figure>
+        <div class="label">
+          <h3>黃道十二宮</h3>
+          <p class="orig" lang="en">Zodiac</p>
+          <p class="meta"><span class="i">慕夏</span><span class="sep">·</span><span class="i">捷克</span><span class="sep">·</span><span class="i">1896</span></p>
+          <p class="meta sub"><span class="i">彩色石版畫</span></p>
+          <p class="blurb">慕夏的招牌：女子的側臉、飄動的髮絲，和環繞著她的十二星座。</p>
+          <p class="blurb en" lang="en">Mucha&#x27;s signature: a woman in profile, flowing hair, and the twelve signs of the zodiac around her.</p>
+        </div>
+      </article>
+      <article class="work" id="rousseau_gypsy">
+        <figure class="land"><img src="promo/masterpieces/rousseau_gypsy.jpg" width="396" height="264" alt="沉睡的吉普賽人，盧梭" loading="lazy"></figure>
+        <div class="label">
+          <h3>沉睡的吉普賽人</h3>
+          <p class="orig" lang="en">The Sleeping Gypsy</p>
+          <p class="meta"><span class="i">盧梭</span><span class="sep">·</span><span class="i">法國</span><span class="sep">·</span><span class="i">1897</span></p>
+          <p class="meta sub"><span class="i">油彩、畫布</span><span class="sep">·</span><span class="i">130 × 201 公分</span><span class="sep">·</span><span class="i">紐約現代藝術博物館</span></p>
+          <p class="blurb">月光下，一頭獅子嗅著熟睡的旅人，沙漠安靜得不可思議。</p>
+          <p class="blurb en" lang="en">In the moonlight, a lion sniffs a sleeping traveller in an impossibly quiet desert.</p>
+        </div>
+      </article>
+      <article class="work" id="gulf_stream">
+        <figure class="land"><img src="promo/masterpieces/gulf_stream.jpg" width="396" height="264" alt="墨西哥灣流，霍默" loading="lazy"></figure>
+        <div class="label">
+          <h3>墨西哥灣流</h3>
+          <p class="orig" lang="en">The Gulf Stream</p>
+          <p class="meta"><span class="i">霍默</span><span class="sep">·</span><span class="i">美國</span><span class="sep">·</span><span class="i">1899，1906 年前重修</span></p>
+          <p class="meta sub"><span class="i">油彩、畫布</span><span class="sep">·</span><span class="i">71 × 125 公分</span><span class="sep">·</span><span class="i">紐約大都會藝術博物館</span></p>
+          <p class="blurb">斷了桅杆的小船、四周的鯊魚、遠方的水龍捲，船上的人卻一臉平靜。</p>
+          <p class="blurb en" lang="en">A dismasted boat, circling sharks, a distant waterspout — and a sailor who looks strangely calm.</p>
+        </div>
+      </article>
+      <article class="work" id="water_lily_pond">
+        <figure class="land"><img src="promo/masterpieces/water_lily_pond.jpg" width="396" height="264" alt="睡蓮池，莫內" loading="lazy"></figure>
+        <div class="label">
+          <h3>睡蓮池</h3>
+          <p class="orig" lang="en">Water-Lily Pond</p>
+          <p class="meta"><span class="i">莫內</span><span class="sep">·</span><span class="i">法國</span><span class="sep">·</span><span class="i">1899</span></p>
+          <p class="meta sub"><span class="i">油彩、畫布</span><span class="sep">·</span><span class="i">88 × 93 公分</span><span class="sep">·</span><span class="i">倫敦國家美術館</span></p>
+          <p class="blurb">莫內在自家花園搭的日本橋。橋下的睡蓮，他畫了將近三十年。</p>
+          <p class="blurb en" lang="en">The Japanese bridge in Monet&#x27;s own garden. He painted the water lilies below it for nearly thirty years.</p>
+        </div>
+      </article>
+      </div>
+    </div>
+  </section>
+  <section class="era" id="c20">
+    <div class="wrap">
+      <header class="era-head">
+        <h2>二十世紀</h2>
+        <p class="range"><span lang="en">The twentieth century</span>　1907–1930　5 幅</p>
+      </header>
+      <div class="grid">
+      <article class="work" id="the_kiss">
+        <figure class="port"><img src="promo/masterpieces/the_kiss.jpg" width="264" height="396" alt="吻，克林姆" loading="lazy"></figure>
+        <div class="label">
+          <h3>吻</h3>
+          <p class="orig" lang="en">The Kiss</p>
+          <p class="meta"><span class="i">克林姆</span><span class="sep">·</span><span class="i">奧地利</span><span class="sep">·</span><span class="i">1907–1908</span></p>
+          <p class="meta sub"><span class="i">油彩、金箔與銀箔、畫布</span><span class="sep">·</span><span class="i">180 × 180 公分</span><span class="sep">·</span><span class="i">維也納美景宮</span></p>
+          <p class="blurb">金色的紋樣包住相擁的兩人，只露出臉、手，和女子的腳。</p>
+          <p class="blurb en" lang="en">Golden patterns wrap an embracing couple, leaving only their faces, hands and the woman&#x27;s feet.</p>
+        </div>
+      </article>
+      <article class="work" id="modigliani">
+        <figure class="port"><img src="promo/masterpieces/modigliani.jpg" width="264" height="396" alt="珍妮・赫布特尼像，莫迪利亞尼" loading="lazy"></figure>
+        <div class="label">
+          <h3>珍妮・赫布特尼像</h3>
+          <p class="orig" lang="en">Portrait of Jeanne Hébuterne</p>
+          <p class="meta"><span class="i">莫迪利亞尼</span><span class="sep">·</span><span class="i">義大利</span><span class="sep">·</span><span class="i">1919</span></p>
+          <p class="meta sub"><span class="i">油彩、畫布</span><span class="sep">·</span><span class="i">91 × 55 公分</span><span class="sep">·</span><span class="i">倉敷大原美術館</span></p>
+          <p class="blurb">拉長的臉、細長的脖子，這是莫迪利亞尼畫給伴侶珍妮的肖像。</p>
+          <p class="blurb en" lang="en">An elongated face and slender neck — Modigliani&#x27;s portrait of his partner, Jeanne.</p>
+        </div>
+      </article>
+      <article class="work" id="twittering_machine">
+        <figure class="port"><img src="promo/masterpieces/twittering_machine.jpg" width="264" height="396" alt="吱喳機器，克利" loading="lazy"></figure>
+        <div class="label">
+          <h3>吱喳機器</h3>
+          <p class="orig" lang="en">Twittering Machine</p>
+          <p class="meta"><span class="i">克利</span><span class="sep">·</span><span class="i">德國</span><span class="sep">·</span><span class="i">1922</span></p>
+          <p class="meta sub"><span class="i">油彩轉印、水彩與墨水、紙，裱於紙板</span><span class="sep">·</span><span class="i">41 × 31 公分</span><span class="sep">·</span><span class="i">紐約現代藝術博物館</span></p>
+          <p class="blurb">四隻怪鳥站在一根曲柄上，好像一轉就會開始唱歌。</p>
+          <p class="blurb en" lang="en">Four strange birds perch on a crank, as if a turn of the handle would set them singing.</p>
+        </div>
+      </article>
+      <article class="work" id="composition_viii">
+        <figure class="land"><img src="promo/masterpieces/composition_viii.jpg" width="396" height="264" alt="構成第八號，康丁斯基" loading="lazy"></figure>
+        <div class="label">
+          <h3>構成第八號</h3>
+          <p class="orig" lang="en">Composition VIII</p>
+          <p class="meta"><span class="i">康丁斯基</span><span class="sep">·</span><span class="i">俄羅斯</span><span class="sep">·</span><span class="i">1923</span></p>
+          <p class="meta sub"><span class="i">油彩、畫布</span><span class="sep">·</span><span class="i">140 × 201 公分</span><span class="sep">·</span><span class="i">紐約古根漢美術館</span></p>
+          <p class="blurb">康丁斯基把繪畫當成音樂：圓、三角和線條各自發出聲音。</p>
+          <p class="blurb en" lang="en">Kandinsky treated painting like music: circles, triangles and lines each sound their own note.</p>
+        </div>
+      </article>
+      <article class="work" id="american_gothic">
+        <figure class="port"><img src="promo/masterpieces/american_gothic.jpg" width="264" height="396" alt="美國哥德式，伍德" loading="lazy"></figure>
+        <div class="label">
+          <h3>美國哥德式</h3>
+          <p class="orig" lang="en">American Gothic</p>
+          <p class="meta"><span class="i">伍德</span><span class="sep">·</span><span class="i">美國</span><span class="sep">·</span><span class="i">1930</span></p>
+          <p class="meta sub"><span class="i">油彩、纖維板</span><span class="sep">·</span><span class="i">78 × 65 公分</span><span class="sep">·</span><span class="i">芝加哥藝術博物館</span></p>
+          <p class="blurb">農夫和女兒站在有哥德式尖窗的房子前，手上的乾草叉跟窗框一樣尖。</p>
+          <p class="blurb en" lang="en">A farmer and his daughter stand before a house with a Gothic window, his pitchfork as pointed as its frame.</p>
+        </div>
+      </article>
+      </div>
+    </div>
+  </section>
+
+  <section class="closing">
+    <div class="wrap">
+      <h2>把它們放進口袋</h2>
+      <p>下載跟你的機器相同的那一包，放進 SD 卡的 sleep 資料夾，再到「設定 → 顯示 → 待機畫面」選「自訂」。</p>
+      <div class="btns">
+        <a class="btn primary" href="https://github.com/anki630/crossmosa/releases/download/wallpapers-masterpieces-2026-09/crossmosa-wallpapers-masterpieces-x3-2026-09.zip">下載 X3 版</a>
+        <a class="btn ghost" href="https://github.com/anki630/crossmosa/releases/download/wallpapers-masterpieces-2026-09/crossmosa-wallpapers-masterpieces-x4-2026-09.zip">下載 X4 版</a>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <p>畫作都是公共領域作品，取自 Wikimedia Commons。逐幅出處見 <a href="https://github.com/anki630/crossmosa/blob/main/wallpapers/artworks.py">artworks.py</a>。年代與館藏參考 Wikidata。</p>
+    <p><a href="index.html">CrossMosa 首頁</a></p>
+  </div>
+</footer>
+
+</body>
+</html>
