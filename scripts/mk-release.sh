@@ -264,15 +264,15 @@ bootloader.bin 與 partitions.bin 只有在做完整重刷(從 0x0 起)時才需
 2. 選內文字型:設定 → 閱讀器 → 閱讀字型(選你複製進去的那套)
 3. 版號應顯示 $VERSION_FULL(開機畫面下緣與設定頁右上角)
 
-本次建置(可重現)
+本次建置
 ----------------------------------------------------------------
   commit             $COMMIT
   SOURCE_DATE_EPOCH  $SOURCE_DATE_EPOCH
   update.bin         $FLASH_BYTES bytes
   sha256             $SHA1
 
-設定同一個 SOURCE_DATE_EPOCH 重建這個 commit,會得到 sha256 完全
-相同的映像檔。做法見 repo 的 docs/reproducible-builds.md。
+下載的 update.bin 算出來的 sha256 應該跟上面一樣;不一樣就是檔案
+壞了,請重新下載。
 
 刷機有風險,自負。與 Xteink 及上游 CrossPoint 專案均無隸屬關係。
 授權見 repo 的 LICENSE 與 NOTICE.md(含 GPLv2 / LGPL-2.1 元件的發佈義務)。
