@@ -7,8 +7,8 @@
 為 Xteink X3 與 X4 打造。裝好之後，拿起來就是中文。<br>
 零碎時間已經夠少了，不該花在跟機器搏鬥上。
 
-**[下載 X3 版](https://github.com/anki630/crossmosa/releases/tag/v2.1.0-beta.5)** ·
-**[下載 X4 版](https://github.com/anki630/crossmosa/releases/tag/v2.1.0-beta.5)** ·
+**[下載 X3 版](https://github.com/anki630/crossmosa/releases/latest)** ·
+**[下載 X4 版](https://github.com/anki630/crossmosa/releases/latest)** ·
 [怎麼安裝？三步驟](#開始使用) ·
 [English](#crossmosa-english)
 
@@ -34,7 +34,7 @@
 
 <p align="center"><img src="docs/promo/x3-zhuyin.jpg" width="340" alt="X3 上的注音直排書頁"></p>
 
-注音字型目前搭配 Beta 版使用。[下載 Beta 版與注音字型 →](https://github.com/anki630/crossmosa/releases/tag/v2.1.0-beta.5)
+注音字型需要 2.1.0 以後的韌體。[下載注音字型 →](https://github.com/anki630/crossmosa/releases/tag/zhuyin-2026-09)
 
 ## 換一套字，換一種心情
 
@@ -43,7 +43,7 @@
 | 明體 | 黑體 | 圓體 |
 |:---:|:---:|:---:|
 | <img src="docs/promo/fonts/serif.png" width="220" alt="明體樣張"><br>長篇首選 | <img src="docs/promo/fonts/sans.png" width="220" alt="黑體樣張"><br>字小也清楚 | <img src="docs/promo/fonts/round.png" width="220" alt="圓體樣張"><br>筆畫圓潤，看久不累 |
-| **硬筆楷書** | **注音楷書**（Beta 版） | **大字版** |
+| **硬筆楷書** | **注音楷書** | **大字版** |
 | <img src="docs/promo/fonts/iansui.png" width="220" alt="硬筆楷書樣張"><br>像原子筆寫在紙上 | <img src="docs/promo/fonts/zhuyin.png" width="220" alt="注音楷書樣張"><br>破音字也照詞來標 | <img src="docs/promo/fonts/large.png" width="220" alt="大字版樣張"><br>明體、黑體、圓體都有 |
 
 <details>
@@ -65,7 +65,7 @@
 
 <p align="center"><img src="docs/promo/x4-vertical.jpg" width="360" alt="X4 上的直排書頁"></p>
 
-**直排的書，照直排讀。**（Beta 版）由上而下、由右而左，像翻一本真正的書。
+**直排的書，照直排讀。**由上而下、由右而左，像翻一本真正的書。
 
 **註腳，一按就到。** 再按一下就回到原處。譯注多的書，終於好讀了。
 
@@ -94,7 +94,7 @@
 
 **適用機型**：Xteink X3、X4。觸控的 X4 Pro 和其他機型都不適用。
 
-**該下載哪一版？** 建議用 [Beta 版](https://github.com/anki630/crossmosa/releases/tag/v2.1.0-beta.5)：注音、直排和最新的修正都在裡面，X3、X4 都能直接刷。X3 也可以用[正式版](https://github.com/anki630/crossmosa/releases/latest)。
+**該下載哪一版？** 下載[最新的正式版](https://github.com/anki630/crossmosa/releases/latest)就好，X3、X4 都能直接刷。想先試還在測試的新功能，可以到[下載頁](https://github.com/anki630/crossmosa/releases)找 Beta 版。
 
 1. **刷機**（只有第一次）：下載 `update.bin`，放進 SD 卡最外層，插回機器。關機後，按住下面兩顆鍵開機，看到載入畫面就放手。等它自己重新開機，就完成了。
    - **X3**：左側的上一頁鍵＋電源鍵
@@ -190,8 +190,8 @@ CrossPoint 是很好的開源起點。CrossMosa 在它上面，把中文閱讀�
 推薦給也有 X3、X4 的朋友；到[討論區](../../discussions)說說你讀了什麼書；或請維護者喝杯咖啡（連結籌備中）。
 缺字或遇到問題，歡迎[回報](../../issues)。
 
-**[下載 X3 版](https://github.com/anki630/crossmosa/releases/tag/v2.1.0-beta.5)** ·
-**[下載 X4 版](https://github.com/anki630/crossmosa/releases/tag/v2.1.0-beta.5)**
+**[下載 X3 版](https://github.com/anki630/crossmosa/releases/latest)** ·
+**[下載 X4 版](https://github.com/anki630/crossmosa/releases/latest)**
 
 **接下來，把零碎時間還給書。**
 
@@ -234,8 +234,8 @@ CrossMosa 建立在 [CrossPoint](https://github.com/crosspoint-reader/crosspoint
 Made for the Xteink X3 and X4. Install it, and the whole device speaks Chinese.<br>
 Reading time is short enough. It shouldn't go to fighting the device.
 
-**[Download for X3](https://github.com/anki630/crossmosa/releases/tag/v2.1.0-beta.5)** ·
-**[Download for X4](https://github.com/anki630/crossmosa/releases/tag/v2.1.0-beta.5)** ·
+**[Download for X3](https://github.com/anki630/crossmosa/releases/latest)** ·
+**[Download for X4](https://github.com/anki630/crossmosa/releases/latest)** ·
 [How to install: three steps](#getting-started)
 
 Free and open source · No computer connection needed<br>
@@ -260,7 +260,7 @@ No games, no ads, no notifications. When children pick it up, they read.
 
 <p align="center"><img src="docs/promo/x3-zhuyin.jpg" width="340" alt="An X3 showing a vertical page with zhuyin"></p>
 
-The zhuyin font works with the beta for now. [Get the beta and the zhuyin font →](https://github.com/anki630/crossmosa/releases/tag/v2.1.0-beta.5)
+The zhuyin font needs firmware 2.1.0 or later. [Get the zhuyin font →](https://github.com/anki630/crossmosa/releases/tag/zhuyin-2026-09)
 
 ## A new typeface, a new mood
 
@@ -269,7 +269,7 @@ Serif for long reads, sans for clarity, rounded for comfort, handwritten for war
 | Serif | Sans serif | Rounded |
 |:---:|:---:|:---:|
 | <img src="docs/promo/fonts/serif.png" width="220" alt="Serif sample"><br>Made for long reads | <img src="docs/promo/fonts/sans.png" width="220" alt="Sans-serif sample"><br>Clear even when small | <img src="docs/promo/fonts/round.png" width="220" alt="Rounded sample"><br>Soft strokes, easy on the eyes |
-| **Handwritten** | **Zhuyin** (beta) | **Large print** |
+| **Handwritten** | **Zhuyin** | **Large print** |
 | <img src="docs/promo/fonts/iansui.png" width="220" alt="Handwritten sample"><br>Like ballpoint pen on paper | <img src="docs/promo/fonts/zhuyin.png" width="220" alt="Zhuyin sample"><br>Readings that fit the word | <img src="docs/promo/fonts/large.png" width="220" alt="Large-print sample"><br>In serif, sans serif, and rounded |
 
 <details>
@@ -291,7 +291,7 @@ On the commute, at lunch, before bed. While you read this page, the next one is 
 
 <p align="center"><img src="docs/promo/x4-vertical.jpg" width="360" alt="An X4 showing a vertical page"></p>
 
-**Vertical books, read vertically.** (beta) Top to bottom, right to left, like turning the pages of a real book.
+**Vertical books, read vertically.** Top to bottom, right to left, like turning the pages of a real book.
 
 **Footnotes, one press away.** Press again to return to where you were. Books full of translator's notes are finally easy to read.
 
@@ -320,7 +320,7 @@ You already have the device, and the SD card is already in it. Three steps are a
 
 **Compatible devices:** Xteink X3 and X4. The touchscreen X4 Pro and other devices are not supported.
 
-**Which version should I download?** We recommend the [beta](https://github.com/anki630/crossmosa/releases/tag/v2.1.0-beta.5): it has zhuyin, vertical text, and the latest fixes, and it works on both the X3 and X4. On an X3, you can also use the [stable release](https://github.com/anki630/crossmosa/releases/latest).
+**Which version should I download?** Just get the [latest release](https://github.com/anki630/crossmosa/releases/latest); it works on both the X3 and X4. To try new features that are still being tested, look for the beta on the [releases page](https://github.com/anki630/crossmosa/releases).
 
 1. **Flash** (first time only): Download `update.bin`, put it in the root of the SD card, and put the card back. Turn the device off, then hold the two keys below while powering it on, and let go when the loading screen appears. It restarts by itself when it's done.
    - **X3:** the previous-page key on the left edge + the power button
@@ -414,8 +414,8 @@ If your reading time also comes in scraps, this was made for you.
 Tell a friend who has an X3 or X4; tell me what you're reading in [Discussions](../../discussions); or buy the maintainer a coffee (link coming).
 Missing characters or other problems are welcome as [issues](../../issues).
 
-**[Download for X3](https://github.com/anki630/crossmosa/releases/tag/v2.1.0-beta.5)** ·
-**[Download for X4](https://github.com/anki630/crossmosa/releases/tag/v2.1.0-beta.5)**
+**[Download for X3](https://github.com/anki630/crossmosa/releases/latest)** ·
+**[Download for X4](https://github.com/anki630/crossmosa/releases/latest)**
 
 **Now give your spare moments back to books.**
 

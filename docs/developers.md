@@ -82,7 +82,7 @@ core 裡，不是本專案能改的），兩次建置就會差幾十個位元組
 ### 為什麼不乾脆全部收進去
 
 全 BIG5 加進 UI 字型大約要多 2 MB，而 app 分割區只有 6.5 MB，發佈的韌體已經用掉約 98%
-（2.1.0-beta.5：剩不到 100 KB）。要放得下就得先重新分割 flash——有變磚風險。
+（2.1.0：剩不到 100 KB）。要放得下就得先重新分割 flash——有變磚風險。
 
 ---
 ---
@@ -163,6 +163,6 @@ The process is: add characters to the character-set file → run the regeneratio
 
 ### Why not include every character?
 
-Adding all BIG5 characters to the interface font would require about 2 MB more space. The app partition is only 6.5 MB, and the released firmware already uses about 98% of it. Version 2.1.0-beta.5 has less than 100 KB free.
+Adding all BIG5 characters to the interface font would require about 2 MB more space. The app partition is only 6.5 MB, and the released firmware already uses about 98% of it. Version 2.1.0 has less than 100 KB free.
 
 Making enough room would require repartitioning the flash, which carries a risk of bricking the device.

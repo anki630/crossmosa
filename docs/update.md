@@ -2,7 +2,7 @@
 
 不用重刷，也不用按鍵開機。裝好 CrossMosa 之後，新版都在設定裡更新，連讀卡機都不用。
 
-1. 在[下載頁](https://github.com/anki630/crossmosa/releases)下載新版的 `update.bin`，不用解壓縮。X4 請選 2.1.0-beta.5 以後、有支援 X4 的版本。
+1. 在[下載頁](https://github.com/anki630/crossmosa/releases)下載新版的 `update.bin`，不用解壓縮。X4 請選 2.1.0 以後的版本。
 2. 把它傳進 SD 卡：用機器的「檔案傳輸」從手機或電腦的瀏覽器上傳（做法見[把書放進去](books.md)），或照舊用讀卡機複製。
 3. 在機器上打開：設定 → 系統 → SD 卡韌體更新，選剛剛那個檔案。
 
@@ -21,7 +21,7 @@
 
 You do not need to reflash the device or start it with a key combination. After installing CrossMosa, you can install new versions from Settings without using a card reader.
 
-1. Download the new `update.bin` from the [releases page](https://github.com/anki630/crossmosa/releases). Do not extract it. For X4, choose version 2.1.0-beta.5 or later with X4 support.
+1. Download the new `update.bin` from the [releases page](https://github.com/anki630/crossmosa/releases). Do not extract it. For X4, choose version 2.1.0 or later.
 2. Transfer it to the SD card. You can upload it from a phone or computer through File Transfer on the device; see [Adding books](books.md#adding-books-english) for instructions. You can also copy it with a card reader.
 3. On the device, open Settings → System → SD Card Firmware Update and select the file you transferred.
 
