@@ -58,10 +58,13 @@ std::unique_ptr<Epub> ReaderActivity::loadEpub(const std::string& path) {
   // indexing popup so it isn't a silent wait on the home screen. The cachePath/hash is known at
   // construction, so this check is valid before load(); a cached open loads in a blink -> no popup.
   const bool uncached = !Storage.exists((epub->getCachePath() + "/book.bin").c_str());
+  unsigned long popupMs = 0;  // v357：「建立索引」彈窗那一次刷新（BOOKOPEN 的 load= 含它）
   if (uncached) {
     // The popup replaces the restored Quick Resume frame, so the reader must clean it.
     allowFastInitialRefresh = false;
+    const unsigned long popupT0 = millis();
     GUI.drawPopup(renderer, tr(STR_INDEXING));
+    popupMs = millis() - popupT0;
   }
   bool loaded;
   {
@@ -73,12 +76,22 @@ std::unique_ptr<Epub> ReaderActivity::loadEpub(const std::string& path) {
     takeXmlControlDrops();  // v345：歸零 → 下面 BOOKOPEN 的 xmlfix 只算這次開書
     loaded = epub->load(true, SETTINGS.embeddedStyle == 0);
   }
+  // v350：固定版面清單讀不到、壞了、或對不上這份 book.bin（舊韌體建過索引的書，升級後第一次開都會走到）→
+  //   解一次 OPF（manifest＋spine）補清單。不重建索引、不動排好的章節，所以不顯示「建立索引」；但跟建索引一樣
+  //   借 framebuffer —— 這一趟吃的記憶體跟建索引的 OPF 那一段相同，而 -fno-exceptions 下配不到＝當機（複查）。
+  //   借出去再還回來的 framebuffer 是全白的 → 第一頁不走快速刷新（跟建索引那條路相同的處理）。
+  const bool layoutParse = loaded && epub->layoutComputePending();
+  if (layoutParse) {
+    allowFastInitialRefresh = false;
+    GfxRenderer::FrameBufferLoan loan(renderer);
+    epub->computePendingLayout();
+  }
   // load() only reports that the metadata cache is readable; it says nothing about
   // whether the book has any content. A spine of 0 renders as the End-of-Book screen
   // (EpubReaderActivity's `currentSpineIndex == getSpineItemsCount()`), which reads as
   // "you finished this book" rather than "this book could not be parsed". Refuse it
   // here so the failure is reported as a failure.
-  const unsigned long openTLoad = millis();
+  const unsigned long openTLoad = millis();  // v350：含上面固定版面清單的補算（FXLINFO 的 ms 是其中那一段）
   // ⚠️ 不印路徑或書名（隱私）；`spine=` 是章節數，判讀時用得上。
   // v345（帳本 D14）：xmlfix＝這次開書時 XML 解析器濾掉幾個控制字元（> 0 ＝ 這本書的描述檔本來會被拒收）。
   DiagLog::line("BOOKOPEN exists=%lu ctor=%lu load=%lu total=%lu cached=%d spine=%d xmlfix=%lu",
@@ -86,6 +99,52 @@ std::unique_ptr<Epub> ReaderActivity::loadEpub(const std::string& path) {
                 static_cast<unsigned long>(openTLoad - openTCtor), static_cast<unsigned long>(openTLoad - existsT0),
                 uncached ? 0 : 1, loaded ? static_cast<int>(epub->getSpineItemsCount()) : -1,
                 static_cast<unsigned long>(takeXmlControlDrops()));
+  // v357：建索引的分段（開書量測：大書 2–8.6 秒，這一段原本只有 LOG_DBG）。popup＝「建立索引」彈窗那次（含它的刷新：
+  //   drawPopup 是阻塞刷新）；opf／cssfind／toc／bin／css／secrm／reload／layout＝Epub::IndexProfile
+  //   各段、total＝整段； ok＝load() 成功。只在這次有試著建索引時印（失敗也印：做完的段有數字、沒做到的是 0，total
+  //   到失敗為止）。
+  if (const auto& ip = epub->indexProfile(); ip.built) {
+    DiagLog::line(
+        "BOOKIDX popup=%lu opf=%lu cssfind=%lu toc=%lu bin=%lu css=%lu secrm=%lu reload=%lu layout=%lu total=%lu "
+        "spine=%u toc_n=%u css_n=%u ok=%d",
+        popupMs, static_cast<unsigned long>(ip.opfMs), static_cast<unsigned long>(ip.cssFindMs),
+        static_cast<unsigned long>(ip.tocMs), static_cast<unsigned long>(ip.binMs),
+        static_cast<unsigned long>(ip.cssParseMs), static_cast<unsigned long>(ip.sectionsRmMs),
+        static_cast<unsigned long>(ip.reloadMs), static_cast<unsigned long>(ip.layoutMs),
+        static_cast<unsigned long>(ip.totalMs), static_cast<unsigned>(ip.spines), static_cast<unsigned>(ip.tocs),
+        static_cast<unsigned>(ip.cssFiles), loaded ? 1 : 0);
+    // v358：各段花在 SD 介面裡的時間 —— r／w／s／m＝讀／寫（含 flush）／移位置／開關檔等雜項的次數，*ms＝花在上面的毫秒
+    //   （牆上時間，含 SdFat 自己的 CPU 與等鎖；lk＝其中等鎖的部分），rkb＝實際讀到的 KB（下限）。
+    //   段的毫秒（BOOKIDX）扣掉 rms＋wms＋sms＋mms，剩下的是解析、inflate 等 CPU 加上被別的 task 搶走的時間。
+    //   計時本身每個操作約 1–2 µs。
+    //   v359：wmax／mmax＝這一段裡最久的那一次寫／開關檔（ms），wslow＝單次 ≥ 50 ms 的寫有幾次 ——
+    //   分得出「一次卡 1 秒」（wslow=1、wmax≈wms）跟「每次都慢」（wslow 大、wmax 小）。
+    if (!ip.ioArmed) {
+      DiagLog::line("BOOKIO skipped why=busy");
+    } else {
+      static constexpr const char* kIoNames[] = {"opf", "toc", "bin", "css", "layout", "all"};
+      static_assert(sizeof(kIoNames) / sizeof(kIoNames[0]) == Epub::IndexProfile::kIoPhases, "BOOKIO names");
+      const auto ms = [](const uint32_t us) {
+        return static_cast<unsigned long>((static_cast<uint64_t>(us) + 500) / 1000);
+      };
+      for (int i = 0; i < Epub::IndexProfile::kIoPhases; i++) {
+        const HalStorage::IoStats& s = ip.io[i];
+        DiagLog::line(
+            "BOOKIO ph=%s r=%lu rms=%lu rkb=%lu w=%lu wms=%lu s=%lu sms=%lu m=%lu mms=%lu lk=%lu wmax=%lu wslow=%lu "
+            "mmax=%lu",
+            kIoNames[i], static_cast<unsigned long>(s.reads), ms(s.readUs),
+            static_cast<unsigned long>(s.readBytes / 1024), static_cast<unsigned long>(s.writes), ms(s.writeUs),
+            static_cast<unsigned long>(s.seeks), ms(s.seekUs), static_cast<unsigned long>(s.metas), ms(s.metaUs),
+            ms(s.lockUs), ms(s.writeMaxUs), static_cast<unsigned long>(s.writeSlow), ms(s.metaMaxUs));
+      }
+    }
+  }
+  // v350 證人：固定版面清單從哪裡來（見 Epub::LayoutInfoStats）、花多久、有幾項；loan＝這次有沒有借 framebuffer。
+  {
+    const auto& ls = epub->layoutInfoStats();
+    DiagLog::line("FXLINFO load=%s ms=%lu fixed=%u loan=%u", ls.load, static_cast<unsigned long>(ls.ms),
+                  static_cast<unsigned>(epub->fixedLayoutSpineCount()), layoutParse ? 1u : 0u);
+  }
   if (loaded && epub->getSpineItemsCount() > 0) {
     return epub;
   }

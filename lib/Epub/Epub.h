@@ -1,5 +1,6 @@
 #pragma once
 
+#include <HalStorage.h>
 #include <Print.h>
 
 #include <memory>
@@ -8,6 +9,7 @@
 #include <vector>
 
 #include "Epub/BookMetadataCache.h"
+#include "Epub/SpineList.h"
 #include "Epub/css/CssParser.h"
 
 class ZipFile;
@@ -66,8 +68,74 @@ class Epub {
   };
   const ThumbStats& thumbStats() const { return thumbStats_; }
 
+  // v350：EPUB 3 固定版面（rendition:layout-pre-paginated）的 spine 項目。存在書的快取目錄的 layout.bin，
+  //   **不在 book.bin 裡** —— book.bin 改格式會讓每一本書重建索引，而重建索引會刪掉那本書全部排好的章節。
+  //   ⚠️ 實測（2026-09-30，書庫 304 本）：**72% 的書有固定版面的項目**（封面、插圖頁、章名圖），不是少數 ——
+  //   所以舊韌體建過索引的書不重建索引：load() 發現沒有清單（或清單壞了、對不上這份 book.bin）就讀一次 OPF 只收清單，
+  //   寫進 layout.bin；book.bin 與排好的章節都不動（只有固定版面那幾章的版心變了，會在讀到時各自重排）。
+  struct LayoutInfoStats {
+    // file＝讀到 layout.bin／opf＝從 OPF
+    // 重算並寫回（opf-nowrite：寫不成功）／opf-fail、opf-overflow＝重算不成（這次當一般版面）／
+    // index＝剛建索引（index-nowrite／index-fail／index-overflow
+    // 同上）／missing＝不畫頁的呼叫端沒去重算／noid＝book.bin 讀不到身分
+    const char* load = "-";
+    uint32_t ms = 0;  // 從 OPF 重算花的時間（只有 opf* 才有）
+  };
+  // load() 之後：清單讀不到、壞了、或對不上這份 book.bin → 要從 OPF 重算（只有 load(buildIfMissing=true) 才會標記）。
+  //   重算由呼叫端決定時機 —— 閱讀器借 framebuffer 之後才呼叫 computePendingLayout()（跟建索引一樣，OPF 解析吃記憶體；
+  //   複查：只看檔案在不在來猜要不要借是錯的，壞掉但還在的檔一樣要重算）。沒呼叫＝這次照一般版面顯示，安全。
+  bool layoutComputePending() const { return layoutComputePending_; }
+  void computePendingLayout();
+  bool isSpineFixedLayout(int spineIndex) const;
+  uint16_t fixedLayoutSpineCount() const { return static_cast<uint16_t>(fixedLayoutSpines_.size()); }
+  const LayoutInfoStats& layoutInfoStats() const { return layoutStats_; }
+  // v357：建索引（book.bin）這一次的分段毫秒（開書量測：大書建索引 2–8.6 秒，而這一段原本只有 LOG_DBG ＝ 實機看不到）。
+  //   lib 記、閱讀器讀走印成 BOOKIDX。built＝這次 load() 真的建了索引；沒建的時候其他欄位沒有意義。
+  struct IndexProfile {
+    bool built = false;
+    uint32_t opfMs = 0;         // 解 content.opf（manifest＋spine，寫 spine 暫存）
+    uint32_t cssFindMs = 0;     // 從 zip 目錄找 CSS 檔
+    uint32_t tocMs = 0;         // 解目錄（nav 或 ncx）
+    uint32_t binMs = 0;         // 組 book.bin（查 zip 大小、spine↔目錄對應）
+    uint32_t cssParseMs = 0;    // 解 CSS 檔（含放掉 metadata cache；skipLoadingCss 時是 0）
+    uint32_t sectionsRmMs = 0;  // 刪掉舊的章節快取目錄
+    uint32_t reloadMs = 0;      // 重讀剛建好的 book.bin
+    uint32_t layoutMs = 0;      // 固定版面清單寫進 layout.bin
+    // 從開始建到離開 load()（成功＝layout.bin 寫完；各段之和之外還有 pass 之間的收尾、暫存檔清理）
+    uint32_t totalMs = 0;
+    uint16_t spines = 0;
+    uint16_t tocs = 0;
+    uint16_t cssFiles = 0;
+    // v358：各段花在 SD 介面裡的時間與次數（只算建索引這個 task；HalStorage::IoStats）。段的毫秒扣掉這些，剩下的是
+    //   解析、inflate 等 CPU 加上被別的 task 搶走的時間。只量花時間的段：cssfind／secrm／reload 都在 100 ms 以下。
+    //   kIoAll＝從開始建到離開 load()。ioArmed＝false：別的 task 正在量（不會發生，但不假設），io 沒有意義。
+    enum IoPhase { kIoOpf, kIoToc, kIoBin, kIoCss, kIoLayout, kIoAll, kIoPhases };
+    bool ioArmed = false;
+    HalStorage::IoStats io[kIoPhases];
+  };
+  const IndexProfile& indexProfile() const { return indexProfile_; }
+  // 閱讀器排完一個固定版面的章，發現它不是「整頁只有圖」（有字、或不止一頁）→ 退回一般版面，並寫回 layout.bin，
+  //   之後開書不必再試。只在 render task 持 RenderLock 時呼叫（清單的讀取點都在同一把鎖裡）。
+  void demoteFixedLayoutSpine(int spineIndex);
+
  private:
   mutable ThumbStats thumbStats_;
+  SpineIndexList fixedLayoutSpines_;  // 遞增；一般的書是空的（nothrow 陣列，見 SpineList.h）
+  SpineIndexList builtLayoutSpines_;  // 建索引那一次從 OPF 收來的，book.bin 建好之後寫進 layout.bin
+  bool layoutComputePending_ = false;
+  bool builtLayoutOverflow_ = false;
+  uint32_t builtLayoutSpineCount_ = 0;
+  LayoutInfoStats layoutStats_;
+  IndexProfile indexProfile_;
+  // layout.bin 綁定的身分（load() 時從 book.bin 取一次；demote 寫回時用，不再碰 book.bin 的檔案位置）
+  bool layoutIdValid_ = false;
+  uint32_t layoutIdSize_ = 0;
+  uint32_t layoutIdHead_ = 0;
+  uint16_t layoutSpineCount_ = 0;
+  void resolveLayoutInfo(bool mayCompute);
+  bool loadLayoutFile(uint16_t bookSpineCount, uint32_t binSize, uint32_t binHead);
+  bool writeLayoutFile(const SpineIndexList& spines, uint16_t bookSpineCount, uint32_t binSize, uint32_t binHead) const;
+  bool computeLayoutFromOpf(SpineIndexList* spines, uint32_t* spineCount, bool* overflow) const;
 
  public:
   explicit Epub(std::string filepath, const std::string& cacheDir) : filepath(std::move(filepath)) {

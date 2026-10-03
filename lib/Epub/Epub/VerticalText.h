@@ -91,16 +91,24 @@ inline int columnPitchPx(const float emPx, const uint8_t tier, const bool zhuyin
 
 constexpr float CELL_ASCENT_FACTOR = 0.88f;
 
-// 縦中横一組字的【墨水】寬度上限，以 em 為單位。超過就退回①直立逐字。
+// 縦中横一組字【擺好之後的墨水右緣】上限，以 em 為單位（從這一格的左緣量）。超過就退回①直立逐字。
 //
-// 幾何：格心到隔壁欄那一格的近邊 ＝ pitch − em/2，所以不侵入鄰欄的條件是
-//       inkW ≤ 2·pitch − em。最窄的一檔 COLUMN_PITCH_TIGHT = 1.35 → **1.70 em**。
-//       取最窄那檔的值，三檔欄距就都安全（不必把 pitch 一路傳進 planToken）。
-// 實測五套字型 × 四個字級的墨水寬（tools/vertical-oracle）：
-//   兩位數 0.93–1.17 em（全數通過）／三位數 1.46–1.77 em
-//   → IBMPlexSansTC 的三位數（1.73–1.77）會退回直立逐字，其餘四套通過。
-//   clreq「原則上僅應用於二到三位數字」，退回的那一種仍是規範內的①。
-constexpr float TATE_CHU_YOKO_MAX_INK_EM = 1.70f;
+// v352（實機截圖：X4 畫冊「117×162公分」的 117、162 頂到右邊那一欄的「法」「德」；
+//   X3 的 log 同一本的 `VERTTCY "173" … "279" … fits=1` 是同一件事）。
+//   v351 以前的上限是「墨水寬 ≤ 1.70 em」，照「墨水置中、兩邊各溢一半」推的
+//   （格心到隔壁欄那一格的近邊 ＝ pitch − em/2 → inkW ≤ 2·pitch − em）。
+//   **但程式做不到置中**：位移存在 uint16 的 colCross（進 section 快取），
+//   比一格寬時夾成 0（planToken）→ 多出來的【全部往右溢】，往前一欄那邊擠。
+//   所以改成直接看擺好之後的右緣：置中放得下（inkW ≤ em）時右緣 ＝ (em＋inkW)/2 ≤ em，一定過；
+//   放不下時右緣 ＝ inkR。不碰鄰欄：右緣 ≤ 隔壁那一格的近邊 ＝ pitch。
+//   最窄一檔 COLUMN_PITCH_TIGHT＝1.35，留 0.05 em 給眼睛 → **1.30 em**。
+//   取最窄那檔，三檔欄距都安全（不必把 pitch 一路傳進 planToken）。
+// 實測五套字型 × 四個字級的墨水寬（tools/vertical-oracle）：兩位數 0.93–1.17 em（照舊併成一格）；
+//   三位數 1.46–1.77 em（v352 起走①直立逐字，一個數字一格；實機 173／279 的右緣 1.52／1.63 em）。
+//   clreq「原則上僅應用於二到三位數字」，三位數走①仍在規範內；
+//   日文排版的三位數縦中横要用壓窄的數字，點陣字型做不到。
+//   ⚠️ 要讓三位數也能併：先讓位移可以是負的（colCross 改有號＝section 快取格式要動），才能真的置中。
+constexpr float TATE_CHU_YOKO_MAX_RIGHT_EM = 1.30f;
 
 // 段首縮排（clreq §6.2.1.1 Note：「中文出版品上，段首縮排以**兩個漢字**的空間為標準」）。
 // ⚠️ 但書：「每欄字數較少時，視覺上縮排兩字將顯突兀，時有改用縮排一字」——我們一欄 16–17 字，

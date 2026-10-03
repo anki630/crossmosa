@@ -161,23 +161,27 @@ TokenPlan planToken(const GfxRenderer& renderer, const int fontId, const std::st
       const bool haveInk = asciiRunInkExtent(renderer, fontId, style, tok.c_str(), len, &inkL, &inkR);
       const int advPx = renderer.getTextAdvanceX(fontId, tok.c_str(), style);
       const int inkW = haveInk ? (inkR - inkL) : advPx;
-      const bool fits = static_cast<float>(inkW) <= em * vtext::TATE_CHU_YOKO_MAX_INK_EM;
+      // crossOff 最後存進 uint16 的 colCross，所以夾在 0 以上；
+      // 墨水比一格寬時只往右溢（＝退回舊行為），不會迴繞成巨值。
+      int crossPx;
+      if (haveInk) {
+        const int centred = (emPx - inkW) / 2 - inkL;
+        crossPx = centred > 0 ? centred : 0;
+      } else {
+        crossPx = advPx < emPx ? (emPx - advPx) / 2 : 0;
+      }
+      // v352：放不放得下看【擺好之後】的右緣（見 TATE_CHU_YOKO_MAX_RIGHT_EM）——夾成 0 的那一種是整段往右溢。
+      const int rightEdge = crossPx + (haveInk ? inkR : advPx);
+      const bool fits = static_cast<float>(rightEdge) <= em * vtext::TATE_CHU_YOKO_MAX_RIGHT_EM;
       if (ParsedText::vertTcyLogged < 4) {
         ++ParsedText::vertTcyLogged;
-        ParsedText::vertDiag("VERTTCY \"%s\" em=%d adv=%d ink=%d..%d fits=%d", tok.c_str(), emPx, advPx, inkL, inkR,
-                             fits ? 1 : 0);
+        ParsedText::vertDiag("VERTTCY \"%s\" em=%d adv=%d ink=%d..%d r=%d fits=%d", tok.c_str(), emPx, advPx, inkL,
+                             inkR, rightEdge, fits ? 1 : 0);
       }
       if (fits) {
         p.tateChuYoko = true;
         p.advance = em;
-        if (haveInk) {
-          // crossOff 最後存進 uint16 的 colCross，所以夾在 0 以上；
-          // 墨水比一格寬時只往右溢（＝退回舊行為），不會迴繞成巨值。
-          const int centred = (emPx - inkW) / 2 - inkL;
-          p.crossPx = centred > 0 ? centred : 0;
-        } else {
-          p.crossPx = advPx < emPx ? (emPx - advPx) / 2 : 0;
-        }
+        p.crossPx = crossPx;
         return p;
       }
       // 放不下 → 退回 ① 直立逐字（clreq 的另一條規範路徑），不是硬塞。
@@ -539,7 +543,9 @@ void ParsedText::layoutAndExtractColumns(
       const std::string run = parent.substr(b0, blen);
       if (run.empty()) return;
       const auto style = w < wordStyles.size() ? wordStyles[w] : EpdFontFamily::REGULAR;
+      const int64_t plT0 = profNowUs();  // v357 BUILDPROF vpl=
       const TokenPlan plan = planToken(renderer, fontId, run, style, em, inWesternPhrase, rotatedCrossPx);
+      buildProf.vplUs += static_cast<uint64_t>(profNowUs() - plT0);
 
       if (plan.splitPerChar) {
         // ① 直立逐字：每個 ASCII 字母一格，欄內置中。
@@ -974,6 +980,7 @@ void ParsedText::layoutAndExtractColumns(
         size_t n;
       } view{this, colSrcBuf.get(), colSrcN};
       const uint32_t zyOomBefore = zhuyin::swapStats().listOom;
+      const int64_t zyT0 = zyCells ? profNowUs() : 0;  // v357 BUILDPROF vzy=（只在真的換字時量）
       const zhuyin::SwapBatch zb =
           zyCells ? zhuyinLineSwaps(
                         colWords,
@@ -987,6 +994,7 @@ void ParsedText::layoutAndExtractColumns(
                         },
                         &view)
                   : zhuyin::SwapBatch{};
+      if (zyCells) buildProf.vzyUs += static_cast<uint64_t>(profNowUs() - zyT0);
       auto block = std::make_shared<TextBlock>(colWords, colAlong, colStyles, colBoundary, colCross, blockStyle,
                                                std::vector<std::string>{}, zb);
       zhuyinNoteBuilt(zb, zyOomBefore);

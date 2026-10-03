@@ -173,6 +173,7 @@ void gifDrawCallback(GIFDRAW* pDraw) {
 
   DirectPixelWriter pw;
   pw.init(*ctx->renderer);
+  if (ctx->config->cacheOnly) pw.discardAll();  // v354：背景預解只寫快取
 
   for (int dstY = firstDstY; dstY < endDstY; dstY++) {
     if (!ctx->interlaced) ctx->lastDstY = dstY;

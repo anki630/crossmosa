@@ -75,6 +75,15 @@ class HalDisplay {
   void noteGrayPanelDirty() { grayPanelDirty_.store(true, std::memory_order_relaxed); }
 
   void waitRefreshComplete();
+  // v356：非同步刷新還在跑（面板忙）。證人用：收尾做完時面板還忙 ＝ 收尾整段藏在刷新裡。
+  bool refreshBusy();
+  // v356：非同步刷新收完之後，重建控制器的差分基準（上面 displayBufferAsync 契約的第二條）。
+  //   X3 的 UC8279／UC8253、X4 的 UC8179／UC8279 在 displayFinish 就把 OLD 平面同步成剛上面板的畫面，不用做事；
+  //   只有 SSD1677 的非同步路徑跳過刷新後的 RAM 同步 → RED 還是上上一頁，下一次 FAST 會拿錯的基準差分。
+  //   只能在 waitRefreshComplete() 之後呼叫。回 true＝真的寫了。
+  //   frameIsTrusted＝false（framebuffer 已經不是面板上的畫面，或等待逾時）：不寫任何平面（寫了就是把錯的基準塞進去），
+  //   改成要求下一次刷新走清底 —— X4 SSD1677 的清底重寫兩格、不看 RED，是絕對的；X3 的 GC 仍看 DTM1，只能盡力。
+  bool resyncAfterAsyncRefresh(bool frameIsTrusted);
   // True when displayBufferAsync() genuinely overlaps (panel driver defers);
   // false where it falls back to a blocking refresh.
   bool supportsAsyncRefresh() const;
@@ -143,10 +152,25 @@ class HalDisplay {
   // 中間開過選單、別的畫面時序號會變。deepSleep 不計：睡眠畫面本身會推幀，醒來是重開機（RAM 歸零）。
   uint32_t frameSeq() const { return frameSeq_; }
 
+  // v357 bench（/x4diff.on，只有 X4 SSD1677）：清底刷新（HALF）改成「RED 寫成新畫面的反相＋快速刷新」。
+  //   開關住在 src 的 BenchFlags，顯示層看不到 → main 開機時交進來。
+  //   證人走麵包屑：lib 記、閱讀器／主畫面讀走印成 X4DIFF。
+  void setForcedDiffClean(const bool on) { forcedDiffClean_ = on; }
+  // v358：上面那個替換在這台做得到嗎（X4 SSD1677、畫面沒反相）—— 殘影測試（/ghost.on）決定要不要列 B。
+  bool supportsForcedDiffClean() const;
+  static char lastForcedDiff[64];
+
  private:
   EInkDisplay einkDisplay;
   uint32_t frameSeq_ = 0;
   std::atomic<bool> grayPanelDirty_{false};  // v269：見 noteGrayPanelDirty
+  bool forcedDiffClean_ = false;
+  uint32_t forcedDiffCount_ = 0;
+  bool isSsd1677() const;
+  // 回傳：-1＝沒替換；-2＝配不到暫存（照舊清底）；其他＝寫 RED 的毫秒（之後由 publishForcedDiff
+  // 看驅動實際用哪種刷新再記）
+  int32_t substituteForcedDiff(RefreshMode& mode);
+  void publishForcedDiff(int32_t redMs);
 };
 
 extern HalDisplay display;

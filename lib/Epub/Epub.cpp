@@ -6,11 +6,13 @@
 #include <Logging.h>
 #include <Memory.h>
 #include <PngToBmpConverter.h>
+#include <Serialization.h>
 #include <Utf8.h>
 #include <ZipEntryReader.h>
 #include <ZipFile.h>
 #include <esp_heap_caps.h>
 
+#include <algorithm>
 #include <cstring>
 
 #include "Epub/converters/ReadAheadCore.h"
@@ -18,6 +20,179 @@
 #include "Epub/parsers/ContentOpfParser.h"
 #include "Epub/parsers/TocNavParser.h"
 #include "Epub/parsers/TocNcxParser.h"
+
+// ─── v350：固定版面的 spine 清單（<書的快取>/layout.bin）───────────────────────────────
+// 為什麼不放進 book.bin：改 book.bin 的格式＝每本書重建索引，而重建索引會刪掉整個 sections/（全部重排）。
+//   書庫實測 72% 的書有固定版面的項目，這個代價不能讓每本書都付。
+// 格式 v2（對抗式複查之後重做）：
+//   magic "CMFX"｜uint8 版本｜uint16 項數 N｜uint16 spine 數｜uint32 book.bin 大小｜uint32 book.bin 開頭 256 B 的雜湊｜
+//   N 個遞增的 uint16 spine 索引｜uint32 前面全部位元組的 FNV-1a。
+// 身分綁在 book.bin 上：book.bin 不論從哪條路重建過、清單沒跟著重寫 → 對不上 → load() 當場從 OPF 重算。
+// 寫入：先寫 layout.tmp、每一步都確認成功、刪舊檔、改名。斷電留下的是 .tmp 或沒有檔，不會是新舊混合還通過檢查的檔。
+namespace {
+constexpr char kLayoutFile[] = "/layout.bin";
+constexpr char kLayoutTmp[] = "/layout.tmp";
+constexpr char kLayoutMagic[4] = {'C', 'M', 'F', 'X'};
+constexpr uint8_t kLayoutVersion = 2;
+constexpr size_t kLayoutHeaderBytes = 4 + 1 + 2 + 2 + 4 + 4;
+
+uint32_t layoutFnv(const uint8_t* d, const size_t n, uint32_t h = 2166136261u) {
+  for (size_t i = 0; i < n; i++) {
+    h ^= d[i];
+    h *= 16777619u;
+  }
+  return h;
+}
+}  // namespace
+
+bool Epub::writeLayoutFile(const SpineIndexList& spines, const uint16_t bookSpineCount, const uint32_t binSize,
+                           const uint32_t binHead) const {
+  if (spines.size() > bookSpineCount) return false;
+  uint8_t head[kLayoutHeaderBytes];
+  const auto count = static_cast<uint16_t>(spines.size());
+  memcpy(head, kLayoutMagic, 4);
+  head[4] = kLayoutVersion;
+  memcpy(head + 5, &count, 2);
+  memcpy(head + 7, &bookSpineCount, 2);
+  memcpy(head + 9, &binSize, 4);
+  memcpy(head + 13, &binHead, 4);
+  uint32_t crc = layoutFnv(head, sizeof(head));
+
+  const std::string tmp = cachePath + kLayoutTmp;
+  const std::string path = cachePath + kLayoutFile;
+  HalFile f;
+  if (!Storage.openFileForWrite("EBP", tmp, f)) return false;
+  bool ok = f.write(head, sizeof(head)) == sizeof(head);
+  for (size_t i = 0; ok && i < spines.size(); i++) {
+    const uint16_t v = spines[i];
+    ok = f.write(reinterpret_cast<const uint8_t*>(&v), 2) == 2;
+    crc = layoutFnv(reinterpret_cast<const uint8_t*>(&v), 2, crc);
+  }
+  ok = ok && f.write(reinterpret_cast<const uint8_t*>(&crc), 4) == 4;
+  f.close();
+  if (!ok) {
+    Storage.remove(tmp.c_str());
+    return false;
+  }
+  // 刪舊檔到改名之間斷電：留下 .tmp、沒有 layout.bin → 下次開書當作沒有清單、重算並覆寫 .tmp。不會留下錯的清單。
+  Storage.remove(path.c_str());  // 沒有舊檔時回 false，沒關係；改名失敗才算寫失敗
+  if (!Storage.rename(tmp.c_str(), path.c_str())) {
+    Storage.remove(tmp.c_str());
+    return false;
+  }
+  return true;
+}
+
+bool Epub::loadLayoutFile(const uint16_t bookSpineCount, const uint32_t binSize, const uint32_t binHead) {
+  fixedLayoutSpines_.clear();
+  const std::string path = cachePath + kLayoutFile;
+  HalFile f;
+  if (!Storage.openFileForRead("EBP", path, f)) return false;
+  const size_t sz = f.size();
+  uint8_t head[kLayoutHeaderBytes] = {};
+  uint16_t count = 0;
+  uint16_t fileSpineCount = 0;
+  uint32_t fileBinSize = 0;
+  uint32_t fileBinHead = 0;
+  bool ok = sz >= kLayoutHeaderBytes + 4 && f.read(head, sizeof(head)) == static_cast<int>(sizeof(head)) &&
+            memcmp(head, kLayoutMagic, 4) == 0 && head[4] == kLayoutVersion;
+  uint32_t crc = 0;
+  if (ok) {
+    memcpy(&count, head + 5, 2);
+    memcpy(&fileSpineCount, head + 7, 2);
+    memcpy(&fileBinSize, head + 9, 4);
+    memcpy(&fileBinHead, head + 13, 4);
+    ok = sz == kLayoutHeaderBytes + 2u * count + 4u && fileSpineCount == bookSpineCount && count <= bookSpineCount &&
+         fileBinSize == binSize && fileBinHead == binHead;
+    crc = layoutFnv(head, sizeof(head));  // 檔頭完整讀到之後才算
+  }
+  ok = ok && fixedLayoutSpines_.reserve(count);  // nothrow：裝不下就當作不知道
+  for (uint16_t i = 0; ok && i < count; i++) {
+    uint16_t v = 0;
+    ok = f.read(reinterpret_cast<uint8_t*>(&v), 2) == 2 && v < bookSpineCount &&
+         (fixedLayoutSpines_.empty() || v > fixedLayoutSpines_.back());
+    if (ok) {
+      crc = layoutFnv(reinterpret_cast<const uint8_t*>(&v), 2, crc);
+      ok = fixedLayoutSpines_.push(v);  // 已 reserve，不會再配置
+    }
+  }
+  uint32_t fileCrc = 0;
+  ok = ok && f.read(reinterpret_cast<uint8_t*>(&fileCrc), 4) == 4 && fileCrc == crc;
+  f.close();
+  if (!ok) fixedLayoutSpines_.clear();  // 壞了或對不上：由呼叫端決定要不要重算（重算成功會覆寫這個檔）
+  return ok;
+}
+
+// 只為了固定版面清單解一次 OPF（manifest＋spine），不寫 spine、不動 book.bin。*spineCount＝解出來的 spine 項數，
+// 呼叫端拿它跟 book.bin 的 spine 數對照（同一份 OPF → 必定相同；不同＝書換過或解析不完整，當作不知道）。
+bool Epub::computeLayoutFromOpf(SpineIndexList* spines, uint32_t* spineCount, bool* overflow) const {
+  std::string opfPath;
+  if (!findContentOpfFile(&opfPath)) return false;
+  size_t opfSize = 0;
+  if (!getItemSize(opfPath, &opfSize)) return false;
+  const std::string base = opfPath.substr(0, opfPath.find_last_of('/') + 1);  // 與 parseContentOpf 相同的算法
+  ContentOpfParser parser(getCachePath(), base, opfSize, nullptr);
+  parser.layoutOnly = true;
+  if (!parser.setup()) return false;
+  if (!readItemContentsToStream(opfPath, parser, 1024)) return false;
+  *spines = std::move(parser.fixedLayoutSpines);
+  *spineCount = parser.builtSpineCount;
+  *overflow = parser.layoutOverflow;
+  return true;
+}
+
+// load() 的尾端（book.bin 已經載入）：清單讀得到就用；讀不到、壞了、對不上 → 會畫頁的呼叫端要重算（標記，由它借好
+// framebuffer 之後呼叫 computePendingLayout）。在重算之前清單是空的＝一般版面，所以漏呼叫也不會畫錯。
+void Epub::resolveLayoutInfo(const bool mayCompute) {
+  layoutStats_ = LayoutInfoStats{};
+  layoutComputePending_ = false;
+  layoutIdValid_ = bookMetadataCache && bookMetadataCache->identity(&layoutIdSize_, &layoutIdHead_);
+  const int sc = bookMetadataCache ? bookMetadataCache->getSpineCount() : 0;
+  if (!layoutIdValid_ || sc <= 0 || sc > 0xFFFF) {
+    fixedLayoutSpines_.clear();
+    layoutStats_.load = "noid";
+    return;
+  }
+  layoutSpineCount_ = static_cast<uint16_t>(sc);
+  if (loadLayoutFile(layoutSpineCount_, layoutIdSize_, layoutIdHead_)) {
+    layoutStats_.load = "file";
+    return;
+  }
+  layoutComputePending_ = mayCompute;
+  layoutStats_.load = mayCompute ? "pending" : "missing";  // missing：主畫面、最近閱讀、同步 —— 不畫頁，不解 OPF
+}
+
+void Epub::computePendingLayout() {
+  if (!layoutComputePending_) return;
+  layoutComputePending_ = false;
+  const uint32_t t0 = millis();
+  SpineIndexList spines;
+  uint32_t parsed = 0;
+  bool overflow = false;
+  if (computeLayoutFromOpf(&spines, &parsed, &overflow) && !overflow && parsed == layoutSpineCount_) {
+    fixedLayoutSpines_ = std::move(spines);
+    layoutStats_.load =
+        writeLayoutFile(fixedLayoutSpines_, layoutSpineCount_, layoutIdSize_, layoutIdHead_) ? "opf" : "opf-nowrite";
+  } else {
+    // 解析失敗、清單記不完整、或 spine 數跟 book.bin 對不上：這一次照一般版面顯示，不寫檔（下次開書再試）。
+    fixedLayoutSpines_.clear();
+    layoutStats_.load = overflow ? "opf-overflow" : "opf-fail";
+  }
+  layoutStats_.ms = millis() - t0;
+}
+
+void Epub::demoteFixedLayoutSpine(const int spineIndex) {
+  if (spineIndex < 0 || spineIndex > UINT16_MAX) return;
+  if (!fixedLayoutSpines_.remove(static_cast<uint16_t>(spineIndex))) return;  // 只搬移、不重新配置
+  // 用 load() 時記下的身分寫回（這裡在 render task 上，不碰 book.bin 的檔案位置；SD 存取由 HalStorage 的全域鎖排隊）。
+  // 寫不成功：這次開書記得，下次開書再判一次。
+  if (layoutIdValid_) writeLayoutFile(fixedLayoutSpines_, layoutSpineCount_, layoutIdSize_, layoutIdHead_);
+}
+
+bool Epub::isSpineFixedLayout(const int spineIndex) const {
+  if (spineIndex < 0 || spineIndex > UINT16_MAX) return false;
+  return fixedLayoutSpines_.contains(static_cast<uint16_t>(spineIndex));
+}
 
 bool Epub::findContentOpfFile(std::string* contentOpfFile) const {
   const auto containerPath = "META-INF/container.xml";
@@ -87,6 +262,12 @@ bool Epub::parseContentOpf(BookMetadataCache::BookMetadata& bookMetadata, const 
   bookMetadata.language = opfParser.language;
   bookMetadata.coverItemHref = opfParser.coverItemHref;
   bookMetadata.pageProgressionRtl = opfParser.pageProgressionRtl ? 1 : 0;
+  // v350：建索引那一次收下固定版面的項目（只有寫 spine 的那一趟才有意義）；book.bin 建好之後寫進 layout.bin。
+  if (writeSpineEntries) {
+    builtLayoutSpines_ = std::move(opfParser.fixedLayoutSpines);
+    builtLayoutOverflow_ = opfParser.layoutOverflow;
+    builtLayoutSpineCount_ = opfParser.builtSpineCount;
+  }
 
   // Guide-based cover fallback: if no cover found via metadata/properties,
   // try extracting the image reference from the guide's cover page XHTML
@@ -360,9 +541,38 @@ void Epub::parseCssFiles() const {
   cssParser->clear();
 }
 
+namespace {
+// v359：一段的起點＝累計快照＋把「單次最久」的視窗歸零（最久不能相減，只能每段重來）
+HalStorage::IoStats ioMark() {
+  HalStorage::ioResetWindowPeaks();
+  return HalStorage::ioStats();
+}
+
+// v358：兩個累計快照相減＝這一段的 SD 操作（IndexProfile::io）。v359：單次最久取 ioMark() 以來的視窗。
+HalStorage::IoStats ioSince(const HalStorage::IoStats& a) {
+  const HalStorage::IoStats b = HalStorage::ioStats();
+  HalStorage::IoStats d;
+  d.reads = b.reads - a.reads;
+  d.readUs = b.readUs - a.readUs;
+  d.readBytes = b.readBytes - a.readBytes;
+  d.writes = b.writes - a.writes;
+  d.writeUs = b.writeUs - a.writeUs;
+  d.seeks = b.seeks - a.seeks;
+  d.seekUs = b.seekUs - a.seekUs;
+  d.metas = b.metas - a.metas;
+  d.metaUs = b.metaUs - a.metaUs;
+  d.lockUs = b.lockUs - a.lockUs;
+  d.writeSlow = b.writeSlow - a.writeSlow;
+  d.writeMaxUs = b.winWriteMaxUs;
+  d.metaMaxUs = b.winMetaMaxUs;
+  return d;
+}
+}  // namespace
+
 // load in the meta data for the epub file
 bool Epub::load(const bool buildIfMissing, const bool skipLoadingCss) {
   LOG_DBG("EBP", "Loading ePub: %s", filepath.c_str());
+  indexProfile_ = IndexProfile{};  // v357：每次 load() 重來（同一個物件第二次 load 不留上一次的數字）
 
   // Initialize spine/TOC cache
   bookMetadataCache.reset(new BookMetadataCache(cachePath));
@@ -400,6 +610,9 @@ bool Epub::load(const bool buildIfMissing, const bool skipLoadingCss) {
     // resident pins tens of KB for the whole reading session (more on warm resume into
     // an already-cached chapter, where createSectionFile never runs to clear it).
     cssParser->clear();
+    // v350：固定版面的項目。讀不到、壞了、跟這份 book.bin 對不上 → 會畫頁的呼叫端（buildIfMissing）當場從 OPF 重算。
+    //   ⚠️ 必須在任何章節被載入之前決定：清單錯了，章節會用錯的版心排、還會被當成有效的快取留下來（複查）。
+    resolveLayoutInfo(buildIfMissing);
     LOG_DBG("EBP", "Loaded ePub: %s", filepath.c_str());
     return true;
   }
@@ -414,6 +627,22 @@ bool Epub::load(const bool buildIfMissing, const bool skipLoadingCss) {
   setupCacheDir();
 
   const uint32_t indexingStart = millis();
+  indexProfile_.built = true;  // v357：「這次有試著建索引」（成敗看 BOOKIDX 的 ok=；分段計時由閱讀器印成 BOOKIDX）
+  // v358：只算這個 task 的 SD 操作，歸零開始（下面的守衛在每條離開路徑停掉）。別的 task 正在量就不量（ioArmed=0）。
+  indexProfile_.ioArmed = HalStorage::armIoStats(true);
+  // total 在任何離開路徑都結算（失敗時各段只有做完的那幾段有數字，total 仍是到失敗為止的時間；codex）。
+  struct IndexTotalGuard {
+    IndexProfile& p;
+    uint32_t t0;
+    ~IndexTotalGuard() {
+      p.totalMs = millis() - t0;
+      if (p.ioArmed) {
+        // arm 時歸零過 → 累計就是整段；單次最久是 arm 以來的 writeMaxUs／metaMaxUs（不是 win*）
+        p.io[IndexProfile::kIoAll] = HalStorage::ioStats();
+        HalStorage::armIoStats(false);
+      }
+    }
+  } indexTotalGuard{indexProfile_, indexingStart};
 
   // Begin building cache - stream entries to disk immediately
   if (!bookMetadataCache->beginWrite()) {
@@ -423,6 +652,7 @@ bool Epub::load(const bool buildIfMissing, const bool skipLoadingCss) {
 
   // OPF Pass
   const uint32_t opfStart = millis();
+  const HalStorage::IoStats ioOpf0 = ioMark();
   BookMetadataCache::BookMetadata bookMetadata;
   if (!bookMetadataCache->beginContentOpfPass()) {
     LOG_ERR("EBP", "Could not begin writing content.opf pass");
@@ -432,7 +662,12 @@ bool Epub::load(const bool buildIfMissing, const bool skipLoadingCss) {
     LOG_ERR("EBP", "Could not parse content.opf");
     return false;
   }
+  const uint32_t cssFindStart = millis();
+  indexProfile_.opfMs = cssFindStart - opfStart;
+  indexProfile_.io[IndexProfile::kIoOpf] = ioSince(ioOpf0);
   discoverCssFilesFromZip();
+  indexProfile_.cssFindMs = millis() - cssFindStart;
+  indexProfile_.cssFiles = static_cast<uint16_t>(cssFiles.size());
   if (!bookMetadataCache->endContentOpfPass()) {
     LOG_ERR("EBP", "Could not end writing content.opf pass");
     return false;
@@ -441,6 +676,7 @@ bool Epub::load(const bool buildIfMissing, const bool skipLoadingCss) {
 
   // TOC Pass - try EPUB 3 nav first, fall back to NCX
   const uint32_t tocStart = millis();
+  const HalStorage::IoStats ioToc0 = ioMark();
   if (!bookMetadataCache->beginTocPass()) {
     LOG_ERR("EBP", "Could not begin writing toc pass");
     return false;
@@ -470,6 +706,8 @@ bool Epub::load(const bool buildIfMissing, const bool skipLoadingCss) {
     return false;
   }
   LOG_DBG("EBP", "TOC pass completed in %lu ms", millis() - tocStart);
+  indexProfile_.tocMs = millis() - tocStart;
+  indexProfile_.io[IndexProfile::kIoToc] = ioSince(ioToc0);
 
   // Close the cache files
   if (!bookMetadataCache->endWrite()) {
@@ -479,11 +717,14 @@ bool Epub::load(const bool buildIfMissing, const bool skipLoadingCss) {
 
   // Build final book.bin
   const uint32_t buildStart = millis();
+  const HalStorage::IoStats ioBin0 = ioMark();
   if (!bookMetadataCache->buildBookBin(filepath, bookMetadata)) {
     LOG_ERR("EBP", "Could not update mappings and sizes");
     return false;
   }
   LOG_DBG("EBP", "buildBookBin completed in %lu ms", millis() - buildStart);
+  indexProfile_.binMs = millis() - buildStart;
+  indexProfile_.io[IndexProfile::kIoBin] = ioSince(ioBin0);
   LOG_DBG("EBP", "Total indexing completed in %lu ms", millis() - indexingStart);
 
   if (!bookMetadataCache->cleanupTmpFiles()) {
@@ -492,17 +733,55 @@ bool Epub::load(const bool buildIfMissing, const bool skipLoadingCss) {
 
   if (!skipLoadingCss) {
     // Parse CSS before reloading book.bin to leave more heap for CSS rule-table growth.
+    const uint32_t cssStart = millis();
+    const HalStorage::IoStats ioCss0 = ioMark();
     bookMetadataCache.reset();
     parseCssFiles();
+    const uint32_t secRmStart = millis();
+    indexProfile_.cssParseMs = secRmStart - cssStart;
+    indexProfile_.io[IndexProfile::kIoCss] = ioSince(ioCss0);
     Storage.removeDir((cachePath + "/sections").c_str());
+    indexProfile_.sectionsRmMs = millis() - secRmStart;
   }
 
   // Reload the cache from disk so it's in the correct state
+  const uint32_t reloadStart = millis();
   bookMetadataCache.reset(new BookMetadataCache(cachePath));
   if (!bookMetadataCache->load()) {
     LOG_ERR("EBP", "Failed to reload cache after writing");
     return false;
   }
+  indexProfile_.reloadMs = millis() - reloadStart;
+  indexProfile_.spines = static_cast<uint16_t>(bookMetadataCache->getSpineCount());
+  indexProfile_.tocs = static_cast<uint16_t>(bookMetadataCache->getTocCount());
+  const uint32_t layoutStart = millis();
+  const HalStorage::IoStats ioLayout0 = ioMark();
+
+  // v350：這一趟從 OPF 收到的固定版面項目 → layout.bin（一般的書寫一個「沒有」的檔，之後開書不必再解 OPF）。
+  //   只有記得完整、spine 數跟剛建好的 book.bin 相同時才採用；否則這次照一般版面顯示、不寫檔（下次開書重算）。
+  {
+    layoutStats_ = LayoutInfoStats{};
+    layoutIdValid_ = bookMetadataCache->identity(&layoutIdSize_, &layoutIdHead_);
+    const int sc = bookMetadataCache->getSpineCount();
+    bool valid = layoutIdValid_ && !builtLayoutOverflow_ && sc > 0 && sc <= 0xFFFF &&
+                 builtLayoutSpineCount_ == static_cast<uint32_t>(sc);
+    for (size_t k = 0; valid && k < builtLayoutSpines_.size(); k++) {
+      valid = builtLayoutSpines_[k] < sc && (k == 0 || builtLayoutSpines_[k] > builtLayoutSpines_[k - 1]);
+    }
+    if (valid) {
+      layoutSpineCount_ = static_cast<uint16_t>(sc);
+      fixedLayoutSpines_ = std::move(builtLayoutSpines_);  // 搬，不複製（不同時握兩份）
+      layoutStats_.load = writeLayoutFile(fixedLayoutSpines_, layoutSpineCount_, layoutIdSize_, layoutIdHead_)
+                              ? "index"
+                              : "index-nowrite";
+    } else {
+      fixedLayoutSpines_.clear();
+      layoutStats_.load = builtLayoutOverflow_ ? "index-overflow" : "index-fail";
+    }
+    builtLayoutSpines_.clear();  // 還記憶體（SpineIndexList::clear 會釋放）
+  }
+  indexProfile_.layoutMs = millis() - layoutStart;
+  indexProfile_.io[IndexProfile::kIoLayout] = ioSince(ioLayout0);
 
   LOG_DBG("EBP", "Loaded ePub: %s", filepath.c_str());
   return true;

@@ -21,6 +21,10 @@ class HomeActivity final : public Activity {
   // Home can be entered while Back is still held (e.g. leaving Settings with
   // Back): ignore that stale release until a fresh press is seen here.
   bool backPressSeen = false;
+  // v357：同 backPressSeen，給確認鍵。閱讀選單「刪除快取」在確認鍵【按下】時就執行並回主畫面，
+  //   那次按鍵的放開被主畫面接到 → 打開第一本（就是剛刪快取的那本）＝「書自己重開」（開書量測時發現，12 次都在
+  //   主畫面開始畫之後 21–30 ms）。按下要在主畫面看到過，放開才算數。
+  bool confirmPressSeen = false;
   uint8_t* coverBuffer = nullptr;  // HomeActivity's own buffer for cover image
   size_t coverBufferSize = 0;      // Bytes allocated to coverBuffer
   // Logical rect last passed to drawRecentBookCover. The cover snapshot only

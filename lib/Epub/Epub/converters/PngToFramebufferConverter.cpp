@@ -36,6 +36,9 @@ struct PngContext {
   int lastDstY{-1};          // Track last rendered destination Y to avoid duplicates
   uint32_t lastYieldMs{0};   // yieldDuringDecode() 的節流狀態
   bool inputAborted{false};  // v260：回呼因按鍵中止解碼
+  // v350：來源本來就是四階（以下）灰階、而且一比一 → 每個像素已經落在面板的四階上（0／85／170／255 → 0／1／2／3），
+  //   Bayer 只會再灑一層規則的網點（85 有 4/16 變黑、170 有 3/16 變白）。這種圖不抖色。
+  bool nativeLevels{false};
 
   PixelCache cache;
   bool caching{false};
@@ -78,7 +81,8 @@ int32_t pngSeekWithHandle(PNGFILE* pFile, int32_t pos) {
 //   而且是【一整塊】，比內部堆讀幾章後的連續塊天花板（約 53KB，CLAUDE.md 硬限制第 6 條）還大 →
 //   p2 一被切開，每張 PNG 都 png-alloc-decoder 失敗直到重開機（diag244-2；同一張圖 v191 就失敗過）。
 //   scripts/patch_pngdec.py 把 zlib 視窗（PNG_ZLIB_BUF_SIZE，約 40KB）與列緩衝（16,416）搬出物件，
-//   這裡分三塊配。【總量】不變，所以總量門檻沿用舊值 60KB（行為不變；它本來就只比真實總量多約 0.5KB）。
+//   這裡分三塊配（v358 起 zlib 再拆成視窗＋狀態，共四塊）。【總量】不變，所以總量門檻沿用舊值 60KB
+//   （行為不變；它本來就只比真實總量多約 0.5KB）。
 constexpr size_t MIN_FREE_HEAP_FOR_PNG = 60 * 1024;
 
 // PNGdec keeps TWO scanlines in its internal ucPixels buffer (current + previous)
@@ -241,11 +245,12 @@ int pngDrawCallback(PNGDRAW* pDraw) {
   int dstWidth = ctx->dstWidth;
   int outXBase = ctx->config->x;
   int screenWidth = ctx->screenWidth;
-  bool useDithering = ctx->config->useDithering;
+  bool useDithering = ctx->config->useDithering && !ctx->nativeLevels;
 
   // Pre-compute orientation and render-mode state once per callback.
   DirectPixelWriter pw;
   pw.init(*ctx->renderer);
+  if (ctx->config->cacheOnly) pw.discardAll();  // v354：背景預解只寫快取
 
   for (int dstY = firstDstY; dstY < endDstY; dstY++) {
     ctx->lastDstY = dstY;
@@ -358,14 +363,28 @@ bool PngToFramebufferConverter::decodeToFramebuffer(const std::string& imagePath
   }
 
   // v245：解碼器分三塊配，大的先配（先配大塊才不會被小塊切掉最大的洞）。宣告順序＝解構逆序：
-  // cleanup（png->close）→ png → pixelBuf → zlibBuf，close 不碰這兩塊緩衝。
+  // cleanup（png->close）→ png → pixelBuf → zlibBuf → zwinBuf，close 不碰這些緩衝。
   // v251：列緩衝改到 open() 之後、依圖寬配剛好的大小（見下面 requiredInternal）。原本固定 16,416B 先配 ——
   //   268px 寬的章首圖只要約 2KB，而那 16KB 在背景排版的碎片化堆上要另找一塊 ≥17,408 的洞，常常就是配不到的那一塊。
-  auto zlibBuf = makeUniqueNoThrow<uint8_t[]>(PNG_ZLIB_BUF_SIZE);
+  // v358：zlib 那塊（39,896）再拆成 32 KB 視窗＋約 7 KB 狀態（scripts/patch_pngdec.py）—— PNGdec 的 inflate 從不自己
+  //   配置或釋放視窗，只跟著 state->window 走，兩塊不必相鄰。diag-prev357（X3）一幅畫
+  //   `png-alloc-zlib 39896 tr=1 max=38900 free=87064`：總量夠，只是 p2 被幾個長壽小塊切成 32.7 KB＋39.1 KB，
+  //   沒有一段放得下 39,896；拆開之後最大一塊是 32,768，兩段各放一塊。
+  auto zwinBuf = makeUniqueNoThrow<uint8_t[]>(PNG_ZLIB_WINDOW_SIZE);
+  if (!zwinBuf) {
+    LOG_ERR("PNG", "Failed to allocate PNG zlib window (%u bytes)", static_cast<unsigned>(PNG_ZLIB_WINDOW_SIZE));
+    setLastError(true, "png-alloc-zwin %u", static_cast<unsigned>(PNG_ZLIB_WINDOW_SIZE));
+    lastErrorNeedBytes = static_cast<uint32_t>(PNG_ZLIB_WINDOW_SIZE);  // v255
+    return false;
+  }
+  auto zlibBuf = makeUniqueNoThrow<uint8_t[]>(PNG_ZLIB_STATE_SIZE);
   if (!zlibBuf) {
-    LOG_ERR("PNG", "Failed to allocate PNG zlib buffer (%u bytes)", static_cast<unsigned>(PNG_ZLIB_BUF_SIZE));
-    setLastError(true, "png-alloc-zlib %u", static_cast<unsigned>(PNG_ZLIB_BUF_SIZE));
-    lastErrorNeedBytes = static_cast<uint32_t>(PNG_ZLIB_BUF_SIZE);  // v255
+    LOG_ERR("PNG", "Failed to allocate PNG zlib state (%u bytes)", static_cast<unsigned>(PNG_ZLIB_STATE_SIZE));
+    setLastError(true, "png-alloc-zlib %u", static_cast<unsigned>(PNG_ZLIB_STATE_SIZE));
+    // 視窗配到了、狀態配不到 ＝ 除了視窗那一塊，沒有第二個 ≥7 KB 的洞。重試的判斷（ImageBlock，只看最大塊）表達不了
+    //   「32 KB 跟 7 KB 要同時有」，記成 7 KB 會在堆積沒變時就重試、把每張圖的三次額度用光（codex 第二輪）。
+    //   改記成兩塊合起來的量（＝v357 以前的單塊需求）：這個失敗形狀的重試條件跟 v357 一樣，不會更差。
+    lastErrorNeedBytes = static_cast<uint32_t>(PNG_ZLIB_WINDOW_SIZE + PNG_ZLIB_STATE_SIZE);  // v255
     return false;
   }
   std::unique_ptr<uint8_t[]> pixelBuf;
@@ -421,6 +440,9 @@ bool PngToFramebufferConverter::decodeToFramebuffer(const std::string& imagePath
   const int bitsPerSample = png->getBpp();
   LOG_DBG("PNG", "PNG %dx%d -> %dx%d (scale %.2f), type: %d, bpp: %d", ctx.srcWidth, ctx.srcHeight, ctx.dstWidth,
           ctx.dstHeight, ctx.scale, pixelType, bitsPerSample);
+  // v350：見 PngContext::nativeLevels。只有「灰階、每樣本 ≤2 位元、一比一」—— 縮放過的圖會生出中間灰，照舊抖色。
+  ctx.nativeLevels = pixelType == PNG_PIXEL_GRAYSCALE && bitsPerSample <= 2 && ctx.dstWidth == ctx.srcWidth &&
+                     ctx.dstHeight == ctx.srcHeight;
 
   const int requiredInternal = requiredPngInternalBufferBytes(ctx.srcWidth, pixelType, bitsPerSample);
   if (requiredInternal > PNG_MAX_BUFFERED_PIXELS) {
@@ -464,7 +486,7 @@ bool PngToFramebufferConverter::decodeToFramebuffer(const std::string& imagePath
     return false;
   }
   // open() 會把整個內部結構 memset 歸零 —— 緩衝指標必須在它之後、decode() 之前設。
-  png->setBuffers(zlibBuf.get(), pixelBuf.get());
+  png->setBuffers(zlibBuf.get(), zwinBuf.get(), pixelBuf.get());  // v358：狀態、視窗分兩塊
 
   // The converter expands each source row to 8-bit grayscale before dithering,
   // so this scratch buffer is sized by source pixels even when PNGdec reads a
@@ -512,6 +534,7 @@ bool PngToFramebufferConverter::decodeToFramebuffer(const std::string& imagePath
   g_decodeStats.dstW = static_cast<uint16_t>(ctx.dstWidth);
   g_decodeStats.dstH = static_cast<uint16_t>(ctx.dstHeight);
   g_decodeStats.scaleDenom = 1;
+  g_decodeStats.nativeLevels = ctx.nativeLevels ? 1 : 0;
 
   unsigned long decodeStart = millis();
   ctx.lastYieldMs = decodeStart;

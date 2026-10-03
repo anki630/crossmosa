@@ -588,14 +588,16 @@ void SleepActivity::renderDefaultSleepScreen() const {
   const auto pageHeight = renderer.getScreenHeight();
 
   renderer.clearScreen();
-  {
-    // v34/v155 品牌：熊 logo（1-bit 畫法，灰階像素退成黑 —— 待機畫面接受）
-    const int logoX = (pageWidth - LOGO_BEAR_240_SIZE) / 2;
-    const int logoY = (pageHeight - LOGO_BEAR_240_SIZE) / 2;
-    renderer.drawImageGray(LogoBearGray240, logoX, logoY, LOGO_BEAR_240_SIZE, LOGO_BEAR_240_SIZE);
-  }
-  renderer.drawCenteredText(UI_10_FONT_ID, pageHeight / 2 + 70, tr(STR_CROSSPOINT), true, EpdFontFamily::BOLD);
-  renderer.drawCenteredText(UI_10_FONT_ID, pageHeight / 2 + 95, tr(STR_SLEEPING));
+  // v34/v155 品牌：熊 logo（1-bit 畫法，灰階像素退成黑 —— 待機畫面接受）
+  // v349：兩行字接在熊下方 10 px，跟 BootActivity 同一套版面。原本沿用上游的「中線＋70／95」——
+  //   那是給上游 120 px logo 的（下緣在中線＋60）；v155 換成 240 px 的熊之後，兩行字壓進熊裡約 50 px。
+  //   直向 X3 高 792／X4 高 800：熊的下緣 516／520，字從 526／530 開始（橫向 528／480 高也一樣落在熊下面）。
+  const int logoX = (pageWidth - LOGO_BEAR_240_SIZE) / 2;
+  const int logoY = (pageHeight - LOGO_BEAR_240_SIZE) / 2;
+  const int textY = logoY + LOGO_BEAR_240_SIZE + 10;
+  renderer.drawImageGray(LogoBearGray240, logoX, logoY, LOGO_BEAR_240_SIZE, LOGO_BEAR_240_SIZE);
+  renderer.drawCenteredText(UI_10_FONT_ID, textY, tr(STR_CROSSPOINT), true, EpdFontFamily::BOLD);
+  renderer.drawCenteredText(UI_10_FONT_ID, textY + 25, tr(STR_SLEEPING));
 
   // Make sleep screen dark unless light is selected in settings
   if (SETTINGS.sleepScreen != CrossPointSettings::SLEEP_SCREEN_MODE::LIGHT) {

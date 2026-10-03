@@ -1,11 +1,13 @@
 #include "CrossPointWebServer.h"
 
 #include <ArduinoJson.h>
+#include <DataDir.h>
 #include <FsHelpers.h>
 #include <HalGPIO.h>
 #include <HalStorage.h>
 #include <Logging.h>
 #include <WiFi.h>
+#include <strings.h>  // strcasecmp -- handleFileListData
 
 #include <algorithm>
 #include <cctype>
@@ -27,6 +29,7 @@
 #include "util/DiagLog.h"
 #include "util/ProtectedPath.h"
 #include "util/TaskWatchdog.h"
+#include "util/WebPath.h"
 
 namespace {
 // Folders/files to hide from the web interface file browser
@@ -56,22 +59,15 @@ String wsLastCompleteName;
 size_t wsLastCompleteSize = 0;
 unsigned long wsLastCompleteAt = 0;
 
-String normalizeWebPath(const String& inputPath) {
-  if (inputPath.isEmpty() || inputPath == "/") {
-    return "/";
-  }
-  std::string normalized = FsHelpers::normalisePath(inputPath.c_str());
-  String result = normalized.c_str();
-  if (result.isEmpty()) {
-    return "/";
-  }
-  if (!result.startsWith("/")) {
-    result = "/" + result;
-  }
-  if (result.length() > 1 && result.endsWith("/")) {
-    result = result.substring(0, result.length() - 1);
-  }
-  return result;
+// v361（上游 #3353 的想法）：網頁收到的每一條路徑都先過 WebPath::canonicalize()，整理不了的回 400，
+//   不像上游的 normalisePath() 把 ".." 解成上一層（SdFat 本身不認 ".."，見 util/WebPath.h）。
+//   順序固定：先整理、再判斷診斷檔例外與 ProtectedPath —— 守衛看的要是 SdFat 會開的那條路。
+//   成功時 out 是 "/" 或 "/a/b"；失敗時 out 不動。
+bool canonicalWebPath(const String& in, String& out) {
+  std::string canonical;
+  if (!WebPath::canonicalize(std::string_view(in.c_str(), in.length()), canonical)) return false;
+  out = canonical.c_str();
+  return true;
 }
 
 bool isProtectedItemName(const String& name) {
@@ -81,6 +77,18 @@ bool isProtectedItemName(const String& name) {
   // （"/ .crosspoint/x"、"/CROSSM~1./x"、"/XTCache /x" 全都走得過只比字面的守衛）。
   // 四層規則的單一副本在 util/ProtectedPath。
   return ProtectedPath::isProtectedName(name.c_str());
+}
+
+// v361：使用者給的【單一名字】（上傳檔名、WebSocket 上傳檔名、新資料夾名、改名的新名字）四個入口
+//   走同一個順序：去頭尾空白 → 不能是空的 → 只能是一段（WebPath::isSafeComponent）→ 不能是受保護的名字。
+//   name 會被就地 trim，之後組路徑用的就是 trim 過的名字。
+enum class NameCheck { Ok, Empty, Invalid, Protected };
+NameCheck checkUserName(String& name) {
+  name.trim();
+  if (name.isEmpty()) return NameCheck::Empty;
+  if (!WebPath::isSafeComponent(std::string_view(name.c_str(), name.length()))) return NameCheck::Invalid;
+  if (isProtectedItemName(name)) return NameCheck::Protected;
+  return NameCheck::Ok;
 }
 }  // namespace
 
@@ -527,16 +535,21 @@ void CrossPointWebServer::handleFileList() const {
 void CrossPointWebServer::handleFileListData() const {
   // Get current path from query string (default to root)
   String currentPath = "/";
-  if (server->hasArg("path")) {
-    currentPath = server->arg("path");
-    // Ensure path starts with /
-    if (!currentPath.startsWith("/")) {
-      currentPath = "/" + currentPath;
+  if (server->hasArg("path") && !canonicalWebPath(server->arg("path"), currentPath)) {
+    server->send(400, "text/plain", "Invalid path");
+    return;
+  }
+  // v361（codex）：受保護的位置不能列 —— 以前直接給 path=/.crossmosa 就能列出設定、WiFi 這些檔的名字與大小。
+  //   唯一的例外是資料目錄本身，而且只列兩份診斷 log：這台機器沒有序列埠，「開顯示隱藏檔、點進資料目錄、
+  //   下載 log」是唯一拿得到 log 的路（下載端的例外也只放行這兩份，見 handleDownload）。
+  //   用字面比對資料目錄：8.3 別名（CROSSM~1）、大小寫以外的任何變形都落到 403。
+  bool diagnosticsOnly = false;
+  if (isProtectedItemPath(currentPath)) {
+    if (strcasecmp(currentPath.c_str(), DataDir::path()) != 0) {
+      server->send(403, "text/plain", "Cannot access protected items");
+      return;
     }
-    // Remove trailing slash unless it's root
-    if (currentPath.length() > 1 && currentPath.endsWith("/")) {
-      currentPath = currentPath.substring(0, currentPath.length() - 1);
-    }
+    diagnosticsOnly = true;
   }
 
   server->setContentLength(CONTENT_LENGTH_UNKNOWN);
@@ -547,27 +560,29 @@ void CrossPointWebServer::handleFileListData() const {
   bool seenFirst = false;
   JsonDocument doc;
 
-  scanFiles(currentPath.c_str(), [this, &output, &doc, seenFirst](const FileInfo& info) mutable {
-    doc.clear();
-    doc["name"] = info.name;
-    doc["size"] = info.size;
-    doc["isDirectory"] = info.isDirectory;
-    doc["isEpub"] = info.isEpub;
+  scanFiles(currentPath.c_str(),
+            [this, &output, &doc, seenFirst, diagnosticsOnly, &currentPath](const FileInfo& info) mutable {
+              if (diagnosticsOnly && !DiagLog::isDiagnosticPath((currentPath + "/" + info.name).c_str())) return;
+              doc.clear();
+              doc["name"] = info.name;
+              doc["size"] = info.size;
+              doc["isDirectory"] = info.isDirectory;
+              doc["isEpub"] = info.isEpub;
 
-    const size_t written = serializeJson(doc, output, outputSize);
-    if (written >= outputSize) {
-      // JSON output truncated; skip this entry to avoid sending malformed JSON
-      LOG_DBG("WEB", "Skipping file entry with oversized JSON for name: %s", info.name.c_str());
-      return;
-    }
+              const size_t written = serializeJson(doc, output, outputSize);
+              if (written >= outputSize) {
+                // JSON output truncated; skip this entry to avoid sending malformed JSON
+                LOG_DBG("WEB", "Skipping file entry with oversized JSON for name: %s", info.name.c_str());
+                return;
+              }
 
-    if (seenFirst) {
-      server->sendContent(",");
-    } else {
-      seenFirst = true;
-    }
-    server->sendContent(output);
-  });
+              if (seenFirst) {
+                server->sendContent(",");
+              } else {
+                seenFirst = true;
+              }
+              server->sendContent(output);
+            });
   server->sendContent("]");
   // End of streamed response, empty chunk to signal client
   server->sendContent("");
@@ -580,13 +595,10 @@ void CrossPointWebServer::handleDownload() const {
     return;
   }
 
-  String itemPath = server->arg("path");
-  if (itemPath.isEmpty() || itemPath == "/") {
+  String itemPath;
+  if (!canonicalWebPath(server->arg("path"), itemPath) || itemPath == "/") {
     server->send(400, "text/plain", "Invalid path");
     return;
-  }
-  if (!itemPath.startsWith("/")) {
-    itemPath = "/" + itemPath;
   }
 
   // v79：兩份診斷 log 是【唯一】的例外，而且先檢查，所以這個例外只可能是整條路徑的精確相符。
@@ -711,21 +723,26 @@ void CrossPointWebServer::handleUpload(UploadState& state) const {
     writeCount = 0;
     DiagLog::line("WEBUP start %s", upload.filename.c_str());  // v178：上傳當機的麵包屑
 
+    // v361：檔名只能是一段（"sub/x.epub" 不能借上傳寫進別的資料夾）。
+    // 拒絕時不開檔 —— 之後的 WRITE／END／ABORTED 都看 state.file，不會動到任何檔。
+    switch (checkUserName(state.fileName)) {
+      case NameCheck::Ok:
+        break;
+      case NameCheck::Protected:
+        state.error = "Cannot write to protected location";
+        return;
+      default:
+        state.error = "Invalid file name";
+        return;
+    }
+
     // Get upload path from query parameter (defaults to root if not specified)
     // Note: We use query parameter instead of form data because multipart form
     // fields aren't available until after file upload completes
-    if (server->hasArg("path")) {
-      state.path = server->arg("path");
-      // Ensure path starts with /
-      if (!state.path.startsWith("/")) {
-        state.path = "/" + state.path;
-      }
-      // Remove trailing slash unless it's root
-      if (state.path.length() > 1 && state.path.endsWith("/")) {
-        state.path = state.path.substring(0, state.path.length() - 1);
-      }
-    } else {
-      state.path = "/";
+    state.path = "/";
+    if (server->hasArg("path") && !canonicalWebPath(server->arg("path"), state.path)) {
+      state.error = "Invalid path";
+      return;
     }
 
     LOG_DBG("WEB", "[UPLOAD] START: %s to path: %s", state.fileName.c_str(), state.path.c_str());
@@ -734,6 +751,16 @@ void CrossPointWebServer::handleUpload(UploadState& state) const {
     String filePath = state.path;
     if (!filePath.endsWith("/")) filePath += "/";
     filePath += state.fileName;
+
+    // v77：上傳完全沒有守衛 —— 同網段任何人都能往 /.crosspoint/ 寫檔，
+    // 覆蓋 settings.json、wifi.json、或塞一個假的 book.bin。
+    // 逐段檢查【完整目標路徑】（不是只看檔名，也不是只看目錄）。
+    // v361（codex）：放在 exists() 之前 —— 反過來的話，「名稱衝突」與「受保護」兩種回覆可以拿來探測資料目錄裡有哪些檔。
+    if (isProtectedItemPath(filePath)) {
+      state.error = "Cannot write to protected location";
+      LOG_ERR("WEB", "[UPLOAD] refused protected path: %s", filePath.c_str());
+      return;
+    }
 
     // Check if file already exists - SD operations can be slow
     resetTaskWatchdogIfSubscribed();
@@ -745,14 +772,6 @@ void CrossPointWebServer::handleUpload(UploadState& state) const {
 
     // Open file for writing - this can be slow due to FAT cluster allocation
     resetTaskWatchdogIfSubscribed();
-    // v77：上傳完全沒有守衛 —— 同網段任何人都能往 /.crosspoint/ 寫檔，
-    // 覆蓋 settings.json、wifi.json、或塞一個假的 book.bin。
-    // 逐段檢查【完整目標路徑】（不是只看檔名，也不是只看目錄）。
-    if (isProtectedItemPath(filePath)) {
-      state.error = "Cannot write to protected location";
-      LOG_ERR("WEB", "[UPLOAD] refused protected path: %s", filePath.c_str());
-      return;
-    }
 
     if (!Storage.openFileForWrite("WEB", filePath, state.file)) {
       state.error = "Failed to create file on SD card";
@@ -856,35 +875,40 @@ void CrossPointWebServer::handleCreateFolder() const {
     return;
   }
 
-  const String folderName = server->arg("name");
+  String folderName = server->arg("name");
   // v77：不得建立受保護的名字（否則可以造一個 .crosspoint 出來蓋掉真的）
-  if (isProtectedItemName(folderName)) {
-    server->send(403, "text/plain", "Cannot create protected items");
-    return;
-  }
-
-  // Validate folder name
-  if (folderName.isEmpty()) {
-    server->send(400, "text/plain", "Folder name cannot be empty");
-    return;
+  // v361：而且只能是一段（"a/b" 會一次建兩層）。
+  switch (checkUserName(folderName)) {
+    case NameCheck::Ok:
+      break;
+    case NameCheck::Empty:
+      server->send(400, "text/plain", "Folder name cannot be empty");
+      return;
+    case NameCheck::Invalid:
+      server->send(400, "text/plain", "Invalid folder name");
+      return;
+    case NameCheck::Protected:
+      server->send(403, "text/plain", "Cannot create protected items");
+      return;
   }
 
   // Get parent path
   String parentPath = "/";
-  if (server->hasArg("path")) {
-    parentPath = server->arg("path");
-    if (!parentPath.startsWith("/")) {
-      parentPath = "/" + parentPath;
-    }
-    if (parentPath.length() > 1 && parentPath.endsWith("/")) {
-      parentPath = parentPath.substring(0, parentPath.length() - 1);
-    }
+  if (server->hasArg("path") && !canonicalWebPath(server->arg("path"), parentPath)) {
+    server->send(400, "text/plain", "Invalid path");
+    return;
   }
 
   // Build full folder path
   String folderPath = parentPath;
   if (!folderPath.endsWith("/")) folderPath += "/";
   folderPath += folderName;
+  // v361（codex）：名字與上層各自合法，不代表組起來的位置可以寫 —— path=/.crossmosa、name=x 會在資料目錄裡建資料夾。
+  //   跟上傳一樣看【完整目標】，而且在任何 Storage 呼叫之前。
+  if (isProtectedItemPath(folderPath)) {
+    server->send(403, "text/plain", "Cannot create protected items");
+    return;
+  }
 
   LOG_DBG("WEB", "Creating folder: %s", folderPath.c_str());
 
@@ -910,30 +934,29 @@ void CrossPointWebServer::handleRename() const {
     return;
   }
 
-  String itemPath = normalizeWebPath(server->arg("path"));
-  String newName = server->arg("name");
-  // v77：來源路徑與新名稱都要守（改名可以【變成】受保護的名字，也可以從受保護的路徑改出來）
-  if (isProtectedItemPath(itemPath) || isProtectedItemName(newName)) {
-    server->send(403, "text/plain", "Cannot rename protected items");
-    return;
-  }
-  newName.trim();
-
-  if (itemPath.isEmpty() || itemPath == "/") {
+  String itemPath;
+  if (!canonicalWebPath(server->arg("path"), itemPath) || itemPath == "/") {
     server->send(400, "text/plain", "Invalid path");
     return;
   }
-  if (newName.isEmpty()) {
-    server->send(400, "text/plain", "New name cannot be empty");
+  // v77：來源路徑與新名稱都要守（改名可以【變成】受保護的名字，也可以從受保護的路徑改出來）
+  if (isProtectedItemPath(itemPath)) {
+    server->send(403, "text/plain", "Cannot rename protected items");
     return;
   }
-  if (newName.indexOf('/') >= 0 || newName.indexOf('\\') >= 0) {
-    server->send(400, "text/plain", "Invalid file name");
-    return;
-  }
-  if (isProtectedItemName(newName)) {
-    server->send(403, "text/plain", "Cannot rename to protected name");
-    return;
+  String newName = server->arg("name");
+  switch (checkUserName(newName)) {
+    case NameCheck::Ok:
+      break;
+    case NameCheck::Empty:
+      server->send(400, "text/plain", "New name cannot be empty");
+      return;
+    case NameCheck::Invalid:
+      server->send(400, "text/plain", "Invalid file name");
+      return;
+    case NameCheck::Protected:
+      server->send(403, "text/plain", "Cannot rename to protected name");
+      return;
   }
 
   const String itemName = itemPath.substring(itemPath.lastIndexOf('/') + 1);
@@ -997,20 +1020,19 @@ void CrossPointWebServer::handleMove() const {
     return;
   }
 
-  String itemPath = normalizeWebPath(server->arg("path"));
-  String destPath = normalizeWebPath(server->arg("dest"));
-  // v77：來源與目的地都要守 —— 搬進 /.crosspoint 與搬出來一樣危險。
-  if (isProtectedItemPath(itemPath) || isProtectedItemPath(destPath)) {
-    server->send(403, "text/plain", "Cannot move protected items");
-    return;
-  }
-
-  if (itemPath.isEmpty() || itemPath == "/") {
+  String itemPath;
+  if (!canonicalWebPath(server->arg("path"), itemPath) || itemPath == "/") {
     server->send(400, "text/plain", "Invalid path");
     return;
   }
-  if (destPath.isEmpty()) {
+  String destPath;
+  if (!canonicalWebPath(server->arg("dest"), destPath)) {
     server->send(400, "text/plain", "Invalid destination");
+    return;
+  }
+  // v77：來源與目的地都要守 —— 搬進 /.crosspoint 與搬出來一樣危險。
+  if (isProtectedItemPath(itemPath) || isProtectedItemPath(destPath)) {
+    server->send(403, "text/plain", "Cannot move protected items");
     return;
   }
 
@@ -1131,18 +1153,19 @@ void CrossPointWebServer::handleDelete() const {
   String failedItems;
 
   for (const auto& p : paths) {
-    auto itemPath = p.as<String>();
-
-    // Validate path
-    if (itemPath.isEmpty() || itemPath == "/") {
-      failedItems += itemPath + " (cannot delete root); ";
+    const auto requested = p.as<String>();
+    String itemPath;
+    if (!canonicalWebPath(requested, itemPath)) {
+      failedItems += requested + " (invalid path); ";
       allSuccess = false;
       continue;
     }
 
-    // Ensure path starts with /
-    if (!itemPath.startsWith("/")) {
-      itemPath = "/" + itemPath;
+    // Validate path
+    if (itemPath == "/") {
+      failedItems += requested + " (cannot delete root); ";
+      allSuccess = false;
+      continue;
     }
 
     // Security check: prevent deletion of protected items
@@ -1688,6 +1711,18 @@ void CrossPointWebServer::onWebSocketEvent(uint8_t num, WStype_t type, uint8_t* 
 
         if (firstColon > 0 && secondColon > 0) {
           wsUploadFileName = msg.substring(6, firstColon);
+          // v361：跟 HTTP 上傳同一套名字檢查（見 checkUserName）。
+          switch (checkUserName(wsUploadFileName)) {
+            case NameCheck::Ok:
+              break;
+            case NameCheck::Protected:
+              wsServer->sendTXT(num, "ERROR:Cannot write to protected location");
+              return;
+            default:
+              LOG_DBG("WS", "START rejected: invalid filename '%s'", wsUploadFileName.c_str());
+              wsServer->sendTXT(num, "ERROR:Invalid file name");
+              return;
+          }
           String sizeToken = msg.substring(firstColon + 1, secondColon);
           bool sizeValid = sizeToken.length() > 0;
           int digitStart = (sizeValid && sizeToken[0] == '+') ? 1 : 0;
@@ -1701,16 +1736,13 @@ void CrossPointWebServer::onWebSocketEvent(uint8_t num, WStype_t type, uint8_t* 
             return;
           }
           wsUploadSize = sizeToken.toInt();
-          wsUploadPath = msg.substring(secondColon + 1);
+          if (!canonicalWebPath(msg.substring(secondColon + 1), wsUploadPath)) {
+            wsServer->sendTXT(num, "ERROR:Invalid path");
+            return;
+          }
           wsUploadReceived = 0;
           wsLastProgressSent = 0;
           wsUploadStartTime = millis();
-
-          // Ensure path is valid
-          if (!wsUploadPath.startsWith("/")) wsUploadPath = "/" + wsUploadPath;
-          if (wsUploadPath.length() > 1 && wsUploadPath.endsWith("/")) {
-            wsUploadPath = wsUploadPath.substring(0, wsUploadPath.length() - 1);
-          }
 
           String filePath = wsUploadPath;
           if (!filePath.endsWith("/")) filePath += "/";

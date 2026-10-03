@@ -193,7 +193,11 @@ class ParsedText {
     uint64_t procUs = 0;   // 欄／行交給頁面（addColumnToPage／addLineToPage，含換頁序列化）
     uint64_t serUs = 0;    // Section::onPageComplete（頁序列化寫 SD）
     uint64_t imgUs = 0;    // 圖片檔頭探測
-    uint32_t words = 0;    // addWord 次數
+    // v357：lay 裡面再拆（開書量測：改設定重排每頁 56–118 ms，lay 佔 60–73%，要知道是哪一塊）。
+    uint64_t brkUs = 0;  // 橫排：斷行計算（computeLineBreaks 的 O(n²) DP，或斷字／txt 的貪婪版）
+    uint64_t vplUs = 0;  // 直排：逐 token 規劃（planToken）
+    uint64_t vzyUs = 0;  // 直排：每一欄的注音換字（zhuyinLineSwaps）
+    uint32_t words = 0;  // addWord 次數
     uint32_t layCalls = 0;
     uint32_t cdCalls = 0;
   };

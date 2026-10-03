@@ -38674,7 +38674,9 @@ static const EpdGlyph ubuntu_10_regularGlyphs[] = {
     { 20, 20, 333, 0, 16, 50, 455918 }, // U+FFFD
 };
 
-static const EpdUnicodeInterval ubuntu_10_regularIntervals[] = {
+// CrossMosa v348：執行期用的是四個 UI 字面共用的那一份（ubuntu_ui_intervals.h）。
+// 這一份只給下面的 static_assert 在編譯期比對，沒有任何執行期引用，不會進 binary。
+static constexpr EpdUnicodeInterval ubuntu_10_regularIntervals[] = {
     { 0x0, 0x0, 0x0 },
     { 0x8, 0x9, 0x1 },
     { 0xD, 0xD, 0x3 },
@@ -43204,6 +43206,9 @@ static const EpdUnicodeInterval ubuntu_10_regularIntervals[] = {
     { 0xFFE8, 0xFFEE, 0x27AA },
     { 0xFFFD, 0xFFFD, 0x27B1 },
 };
+#include "ubuntu_ui_intervals.h"
+static_assert(ubuntuUiIntervalsEqual(ubuntu_10_regularIntervals, ubuntu_ui_sharedIntervals),
+              "ubuntu_10_regular: 碼位區間表跟共用的那份不一樣 —— 重製 UI 字型後要重跑 scripts/share_ui_intervals.py");
 
 static const EpdKernClassEntry ubuntu_10_regularKernLeftClasses[] = {
     { 0x0022, 1 }, // "
@@ -44395,7 +44400,7 @@ static const EpdLigaturePair ubuntu_10_regularLigaturePairs[] = {
 static const EpdFontData ubuntu_10_regular = {
     ubuntu_10_regularBitmaps,
     ubuntu_10_regularGlyphs,
-    ubuntu_10_regularIntervals,
+    ubuntu_ui_sharedIntervals,  // CrossMosa v348：四個 UI 字面共用（ubuntu_ui_intervals.h）
     4528,
     24,
     20,

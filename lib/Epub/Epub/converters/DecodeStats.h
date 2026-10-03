@@ -37,6 +37,8 @@ struct DecodeStats {
   uint16_t dstH = 0;
   uint8_t scaleDenom = 0;  // JPEG 內建縮小 1/N；PNG／GIF 為 1
   uint8_t progressive = 0;
+  // v351：PNG 一比一、本來就是四階灰 → 不抖色（PngContext::nativeLevels；IMGDEC 的 nat=）
+  uint8_t nativeLevels = 0;
   char fmt = '?';  // 'J' 'P' 'G'
 };
 

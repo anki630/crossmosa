@@ -1842,7 +1842,9 @@
 
 <script>
   // get current path from query parameter
-  const currentPath = decodeURIComponent(new URLSearchParams(window.location.search).get('path') || '/');
+  // v361 (codex): URLSearchParams.get() already percent-decodes. Decoding again broke folders whose
+  // names contain '%' (URIError) and sent a folder named "%2F" somewhere else.
+  const currentPath = new URLSearchParams(window.location.search).get('path') || '/';
 
   if (currentPath !== '/') {
     const leaf = currentPath.split('/').filter(Boolean).pop();
@@ -2050,7 +2052,7 @@
           fileTableContent += `<td><span class="file-icon">📁</span><a href="/files?path=${encodeURIComponent(folderPath)}" class="folder-link">${escapeHtml(file.name)}</a></td>`;
           fileTableContent += '<td><span class="folder-badge">FOLDER</span></td>';
           fileTableContent += '<td>-</td>';
-          fileTableContent += `<td class="actions-col"><div class="action-icon-group"><button class="delete-btn" onclick="openDeleteModal('${file.name.replaceAll("'", "\\'")}', '${folderPath.replaceAll("'", "\\'")}', true)" title="Delete folder">🗑️</button></div></td>`;
+          fileTableContent += `<td class="actions-col"><div class="action-icon-group"><button class="delete-btn" data-action="delete" data-name="${escapeHtml(file.name)}" data-path="${escapeHtml(folderPath)}" data-folder="true" title="Delete folder">🗑️</button></div></td>`;
           fileTableContent += '</tr>';
         } else {
           let filePath = currentPath;
@@ -2071,9 +2073,9 @@
           fileTableContent += file.isEpub ? '<td><span class="epub-badge">EPUB</span></td>' : `<td>${escapeHtml(file.name.split('.').pop().toUpperCase())}</td>`;
           fileTableContent += `<td>${formatFileSize(file.size)}</td>`;
           fileTableContent += `<td class="actions-col"><div class="action-icon-group">`;
-          fileTableContent += `<button class="move-btn" onclick="openMoveModal('${file.name.replaceAll("'", "\\'")}', '${filePath.replaceAll("'", "\\'")}' )" title="Move file">📂</button>`;
-          fileTableContent += `<button class="rename-btn" onclick="openRenameModal('${file.name.replaceAll("'", "\\'")}', '${filePath.replaceAll("'", "\\'")}' )" title="Rename file">✏️</button>`;
-          fileTableContent += `<button class="delete-btn" onclick="openDeleteModal('${file.name.replaceAll("'", "\\'")}', '${filePath.replaceAll("'", "\\'")}', false)" title="Delete file">🗑️</button>`;
+          fileTableContent += `<button class="move-btn" data-action="move" data-name="${escapeHtml(file.name)}" data-path="${escapeHtml(filePath)}" title="Move file">📂</button>`;
+          fileTableContent += `<button class="rename-btn" data-action="rename" data-name="${escapeHtml(file.name)}" data-path="${escapeHtml(filePath)}" title="Rename file">✏️</button>`;
+          fileTableContent += `<button class="delete-btn" data-action="delete" data-name="${escapeHtml(file.name)}" data-path="${escapeHtml(filePath)}" data-folder="false" title="Delete file">🗑️</button>`;
           fileTableContent += `</div></td>`;
           fileTableContent += '</tr>';
         }
@@ -2805,8 +2807,8 @@
         item.title = `${img.width}×${img.height} - Cover image (locked)`;
         item.innerHTML = `
           <span class="image-state-badge cover-badge">🔒</span>
-          <img src="${img.dataUrl}" alt="${img.name}" loading="lazy">
-          <div class="image-name">${img.name}</div>
+          <img src="${img.dataUrl}" alt="${escapeHtml(img.name)}" loading="lazy">
+          <div class="image-name">${escapeHtml(img.name)}</div>
         `;
       } else if (isSeparator) {
         // Separator/ornament - locked, cannot be split
@@ -2814,8 +2816,8 @@
         item.title = `${img.width}×${img.height} - Separator (locked)`;
         item.innerHTML = `
           <span class="image-state-badge separator-badge">✦</span>
-          <img src="${img.dataUrl}" alt="${img.name}" loading="lazy">
-          <div class="image-name">${img.name}</div>
+          <img src="${img.dataUrl}" alt="${escapeHtml(img.name)}" loading="lazy">
+          <div class="image-name">${escapeHtml(img.name)}</div>
         `;
       } else {
         // All other images are selectable - all modes allowed
@@ -2872,8 +2874,8 @@
           <div class="image-preview-overlay">
             ${splitLinesHtml}
           </div>
-          <img src="${previewSrc}" alt="${img.name}" loading="lazy">
-          <div class="image-name">${img.name}</div>
+          <img src="${previewSrc}" alt="${escapeHtml(img.name)}" loading="lazy">
+          <div class="image-name">${escapeHtml(img.name)}</div>
         `;
       }
 
@@ -2969,11 +2971,28 @@
   // Initialize quality settings handlers
   document.addEventListener('DOMContentLoaded', function() {
     // Delegated so it survives file-table re-renders (avoids inline onclick with untrusted names).
+    // v361 (upstream #3353): the row buttons carry names and paths as data-*
+    // attributes, never inside an inline onclick. A file name is attacker-
+    // controlled text (FAT allows "&#39;", which the HTML parser turns back
+    // into a quote inside onclick="...'...'" and breaks out of the JS string).
     document.getElementById('file-table').addEventListener('click', function(e) {
       const link = e.target.closest('.image-preview-link');
-      if (!link) return;
-      e.preventDefault();
-      openImagePreview(link.getAttribute('href'), link.textContent);
+      if (link) {
+        e.preventDefault();
+        openImagePreview(link.getAttribute('href'), link.textContent);
+        return;
+      }
+      const btn = e.target.closest('button[data-action]');
+      if (!btn) return;
+      const name = btn.dataset.name;
+      const path = btn.dataset.path;
+      if (btn.dataset.action === 'move') {
+        openMoveModal(name, path);
+      } else if (btn.dataset.action === 'rename') {
+        openRenameModal(name, path);
+      } else if (btn.dataset.action === 'delete') {
+        openDeleteModal(name, path, btn.dataset.folder === 'true');
+      }
     });
 
     const qualitySlider = document.getElementById('qualitySlider');
@@ -3542,7 +3561,7 @@ function logImage(name, origW, origH, origFormat, origSize, newW, newH, newSize,
     if (partsInfo && partsInfo.length > 0) {
       const baseName = name.replace(/\.[^.]+$/, '');
       partsDetail = partsInfo.map(p =>
-        `${baseName}${p.suffix}.jpg (${p.width}×${p.height}, ${formatBytes(p.size)})`
+        `${escapeHtml(baseName)}${p.suffix}.jpg (${p.width}×${p.height}, ${formatBytes(p.size)})`
       ).join(', ');
     }
     const savedInfo = saved > 0 ? `, <span style="color:#27ae60">-${savedPct}%</span>` : '';
@@ -3564,19 +3583,21 @@ function logImage(name, origW, origH, origFormat, origSize, newW, newH, newSize,
 // Log fix applied
 function logFix(type, detail) {
   conversionStats.fixes++;
-  log(`${type}: <span class="log-detail">${detail}</span>`, 'success', 'FIX');
+  log(`${type}: <span class="log-detail">${escapeHtml(String(detail))}</span>`, 'success', 'FIX');
 }
 
 // Log skipped item
 function logSkip(name, reason) {
   conversionStats.skipped++;
-  log(`${escapeHtml(name)} <span class="log-detail">(${reason})</span>`, '', 'SKIP');
+  log(`${escapeHtml(name)} <span class="log-detail">(${escapeHtml(String(reason))})</span>`, '', 'SKIP');
 }
 
 // Log error
 function logError(message) {
   conversionStats.errors++;
-  log(message, 'error', 'ERROR');
+  // v361 (codex): callers pass plain text that can carry file names, ZIP entry names or server
+  // replies -- log() renders HTML, so escape here once instead of at every call site.
+  log(escapeHtml(String(message)), 'error', 'ERROR');
 }
 
 // Log summary table
@@ -4903,7 +4924,7 @@ async function convertEpubFile(file, progressCallback) {
   // Initialize logging
   clearLog();
   showLog();
-  log(`<strong>${file.name}</strong> <span class="log-detail">(${formatBytes(originalSize)})</span>`, '', 'INFO');
+  log(`<strong>${escapeHtml(file.name)}</strong> <span class="log-detail">(${formatBytes(originalSize)})</span>`, '', 'INFO');
   log(`Quality: ${JPEG_QUALITY}% | Overlap: ${OVERLAP_PERCENT}% | Rotation: ${HANDEDNESS === 'right' ? 'CW' : 'CCW'} | Grayscale: ${ENABLE_GRAYSCALE ? 'ON' : 'OFF'} | Auto-crop: ${ENABLE_AUTO_CROP ? 'ON' : 'OFF'}`, '', 'INFO');
 
   const zip = await JSZip.loadAsync(file);
@@ -4945,7 +4966,7 @@ async function convertEpubFile(file, progressCallback) {
       } catch (imageError) {
         // Log error but continue with original image
         console.error(`Failed to process image ${path}:`, imageError);
-        log(`Warning: Failed to process ${path.split('/').pop()}, using original`, 'warning', 'IMG-ERR');
+        log(`Warning: Failed to process ${escapeHtml(path.split('/').pop())}, using original`, 'warning', 'IMG-ERR');
 
         // Use original image data as fallback
         result = {

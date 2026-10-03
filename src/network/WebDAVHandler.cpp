@@ -4,6 +4,9 @@
 #include <HalStorage.h>
 #include <Logging.h>
 
+#include <cstdlib>
+#include <memory>
+
 #include "util/BookCacheUtils.h"
 #include "util/ProtectedPath.h"
 #include "util/TaskWatchdog.h"
@@ -614,6 +617,17 @@ void WebDAVHandler::handleCopy(WebServer& s) {
     return;
   }
 
+  // v361：複製緩衝原本是 4 KB 的區域陣列，放在主迴圈的堆疊上（總共 8 KB）。SD 批次寫入（USE_SPI_ARRAY_TRANSFER）
+  //   在寫入路徑又多 560 B（SdSpiArduinoDriver::send），兩個疊起來太貼（codex 量 ELF：本函式 4,224 B）。改放堆積，
+  //   而且在刪掉舊的目的檔之前配 —— 配不到就什麼都不動。用 malloc：記憶體見底時 nothrow new 也可能直接 abort。
+  constexpr size_t kCopyBufSize = 4096;
+  std::unique_ptr<uint8_t, void (*)(void*)> buf(static_cast<uint8_t*>(malloc(kCopyBufSize)), free);
+  if (!buf) {
+    srcFile.close();
+    s.send(507, "text/plain", "Not enough memory to copy");
+    return;
+  }
+
   if (dstExists) {
     Storage.remove(dstPath.c_str());
   }
@@ -625,14 +639,18 @@ void WebDAVHandler::handleCopy(WebServer& s) {
     return;
   }
 
-  // Streaming copy with 4KB buffer on stack
-  uint8_t buf[4096];
+  // Streaming copy with the 4KB heap buffer above
   bool copyOk = true;
   while (srcFile.available()) {
     resetTaskWatchdogIfSubscribed();
-    int bytesRead = srcFile.read(buf, sizeof(buf));
-    if (bytesRead <= 0) break;
-    size_t written = dstFile.write(buf, bytesRead);
+    int bytesRead = srcFile.read(buf.get(), kCopyBufSize);
+    // v361（codex 第二輪）：available() 還說有資料卻讀不到 ＝ 讀取錯誤。原本直接 break、copyOk 還是 true，
+    //   截短的檔會被回報成功（204／201）。
+    if (bytesRead <= 0) {
+      copyOk = false;
+      break;
+    }
+    size_t written = dstFile.write(buf.get(), bytesRead);
     if (written != (size_t)bytesRead) {
       copyOk = false;
       break;

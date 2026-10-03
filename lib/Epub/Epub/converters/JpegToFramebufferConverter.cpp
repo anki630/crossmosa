@@ -175,6 +175,7 @@ int jpegDrawCallback(JPEGDRAW* pDraw) {
   // Pre-compute orientation and render-mode state once per callback invocation
   DirectPixelWriter pw;
   pw.init(renderer);
+  if (ctx->config->cacheOnly) pw.discardAll();  // v354：背景預解只寫快取
 
   // The cache streams to disk one MCU-row band at a time. Flushing rows below
   // this block (raster order guarantees they are final) repositions the band;

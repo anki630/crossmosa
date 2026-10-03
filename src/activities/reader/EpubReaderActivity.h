@@ -94,14 +94,36 @@ class EpubReaderActivity final : public Activity {
   // 8=loadPage 失敗、9=中止。pmax= 是最大連續塊 KB：走到 pg=7 判斷點時改記【清快取之後】地板真正
   // 拿來判斷的值（v189），被閘 1–6 擋下時仍是進場值；pret= 是保留中的 mini 容量 KB（只在到達判斷點時
   // 才量，pg=1–6 時為 0＝「沒量」不是「沒保留」）。純診斷，不改行為。
+  // v356：12=下一頁有要預解的圖（刷新期間不預取，留給刷新之後照 v354 的順序）。
   uint8_t diagPfGate = 0;
   uint16_t diagPfMaxKb = 0;
-  uint16_t diagPfRetKb = 0;        // v189：預取當下保留中的 mini bitmap 容量（KB），pg=7 判讀用
+  uint16_t diagPfRetKb = 0;  // v189：預取當下保留中的 mini bitmap 容量（KB），pg=7 判讀用
+  // v356：沒有灰階、沒有圖的文字頁改走非同步刷新 —— render() 在面板刷新的那段時間載下一頁的字（唯讀的 SD 讀取），
+  //   而不是等刷新完才做；存進度與背景預解仍在刷新之後。renderContents 起了刷新就設 asyncRefreshPending_，
+  //   finishAsyncRefresh() 收（等刷新結束＋X4 SSD1677 重寫 BW／RED）；render() 入口與 RAII 保證任何路徑都收過。
+  struct AsyncSeg {
+    uint32_t tBwRender = 0;  // 開始起刷新的時刻（＝SEG 的 bw_render 結束）
+    uint32_t tIssued = 0;    // displayBufferAsync 回來的時刻
+    char mode = 'F';         // F＝FAST、H＝清底（HALF／SCRUB）
+    uint32_t fbHash = 0;     // 起刷新之後 framebuffer 的雜湊（收尾時驗：驅動收尾同步控制器讀的就是它）
+  };
+  bool asyncRefreshPending_ = false;
+  AsyncSeg asyncSeg_;
+  uint32_t asyncDoneMs_ = 0;     // finishAsyncRefresh 收完的時刻（EPLAT 的 lat 以它為終點）
+  bool asyncFbChanged_ = false;  // 最近一次收尾時 framebuffer 跟起刷新時不同（照理不會；見 finishAsyncRefresh）
+  // v356：最近一次 prefetchNextPage 有沒有真的採用下一頁的身分（控制流程用；pg= 只是診斷碼）。
+  bool lastPrefetchPrepared_ = false;
+  // tailMs：刷新期間做的預取毫秒（-1＝沒做）；busyAfterTail：預取做完當下面板還在刷（1／0；-1＝現在量）；
+  // earlyPfGate：那次預取的 pg 出口碼（-1＝沒做）。
+  void finishAsyncRefresh(const char* why, int32_t tailMs, int busyAfterTail, int earlyPfGate);
   uint8_t pendingCacheReset_ = 0;  // v184：清快取詢問的答案（來自 MenuResult）
   uint16_t lastCssLoadSeq = 0;     // v177：每次載入印一行 CSSLOAD（序號變動）
   // v177（使用者提議）：預取的基準頁與目標頁。按鍵把 currentPage 推到目標頁＝順向翻頁 → 不中止，
   // 讓預取跑完，緊接著的 render 就是命中。其他變動（往回、跳頁、連按）才中止。
   int lastRenderedPage_ = -1;  // renderContents 剛畫完的頁碼（render 尾端預取的基準）
+  // v354：render 尾端背景預解要的快照（renderContents 開頭抓；currentSpineIndex 會被主任務改，不能在尾端才讀）。
+  int lastRenderedSpine_ = -1;
+  uint32_t lastRenderInputSeq_ = 0;
   int prefetchBase_ = -1;
   int prefetchTarget_ = -1;
   bool bookmarkRemoved = false;  // true when last toggle removed (controls popup text)
@@ -131,6 +153,18 @@ class EpubReaderActivity final : public Activity {
   // would paginate differently than the partial being extended). 0 = no render yet.
   uint16_t buildViewportWidth = 0;
   uint16_t buildViewportHeight = 0;
+  // v350：EPUB 3 固定版面（rendition:layout-pre-paginated）的 spine 項目用【整個螢幕】當畫布（不加頁邊、沒有狀態列），
+  //   其他項目用文字版心。上面那一組是【目前這一章】的；預排／跨章預取下一章要按下一章是哪一種來選 ——
+  //   這本名畫電子書是一幅畫（固定版面）接一篇文（一般版面）交替，拿錯尺寸＝每次換章都白排、預取也全部落空。
+  uint16_t textViewportWidth_ = 0;
+  uint16_t textViewportHeight_ = 0;
+  uint16_t fxlViewportWidth_ = 0;
+  uint16_t fxlViewportHeight_ = 0;
+  bool curSpineFxl_ = false;         // render() 開頭依 currentSpineIndex 設；renderStatusBar 看它
+  int fxlLoggedSpine_ = -1;          // FXL 證人：同一章只印一次
+  bool imgFailPoolsDumped_ = false;  // v350：記憶體類解碼失敗的池子快照，每次開書最多一次
+  uint16_t viewportWidthFor(int spine) const;
+  uint16_t viewportHeightFor(int spine) const;
   // Set when the lazy extension start failed, so loop() doesn't retry (and log) every
   // tick; the blocking extension in render() remains the fallback past the watermark.
   bool partialRebuildStartFailed = false;
@@ -165,12 +199,40 @@ class EpubReaderActivity final : public Activity {
   // v189：abortOnInput —— 從背景 tick（主任務、持鎖）呼叫時為 true：那裡沒有人在輪詢按鍵，
   // 預取的 ~300ms SD 讀取就是盲區，原始電平一有動靜就中止。render 尾端（render task）不開：
   // 主迴圈照常輪詢，而且順向翻頁時這趟預取正是下一頁要的，中止反而慢。
-  void prefetchNextPage(int fontId, int marginTop, int marginLeft, int basePage, bool abortOnInput = false);
+  // v356：duringRefresh —— 從 render() 的非同步刷新期間呼叫：下一頁有要背景預解的圖就不做（pg=12），留給刷新之後。
+  void prefetchNextPage(int fontId, int marginTop, int marginLeft, int basePage, bool abortOnInput = false,
+                        bool duringRefresh = false);
   static bool prefetchShouldAbort(void* ctx);
   static bool prefetchShouldAbortOrInput(void* ctx);
   WarmIdentity buildWarmIdentity(int pageNumber) const;
   // v257：章末的預取跨到下一章第一頁（下一章已有完整快取時）。回 true＝已處理（diagPfGate 已設）。
-  bool prefetchIntoNextChapter(int fontId, int marginTop, int marginLeft, bool abortOnInput);
+  bool prefetchIntoNextChapter(int fontId, int marginTop, int marginLeft, bool abortOnInput, bool duringRefresh);
+  // v354：render 尾端（字型預取之前）先把「下一頁」的圖解成 .pxc（背景預解；按鍵或新的畫頁請求會中止它）。
+  void predecodeNextImage();
+  // v360 證人：預解在哪一個提早 return 放棄（停在同一章的期間每個原因只記一次；換章就重來，所以來回跨章會重記）
+  enum class NextImgSkip : uint8_t {
+    Disabled,
+    Setting,
+    Popup,
+    Building,
+    Heal,
+    Input,
+    Heap24,
+    Partial,
+    NoPrebuild,
+    NotReady,
+    NextSec,
+    Viewport,
+    NextLoad,
+    NoPage,
+    Early,
+    Count
+  };
+  void noteNextImgSkip(NextImgSkip why, int spine, int page);
+  int nextImgSkipSpine_ = -1;
+  uint16_t nextImgSkipMask_ = 0;
+  // v354：某一章某一頁畫在螢幕上的原點（跟 render() 同一套算法；背景預解要用同一個位置，Bayer 抖色的相位才一樣）。
+  void pageDrawOrigin(int spine, const Page& page, int& x0, int& y0) const;
   void renderContents(std::unique_ptr<Page> page, int pageNo, int orientedMarginTop, int orientedMarginRight,
                       int orientedMarginBottom, int orientedMarginLeft);
   void renderStatusBar() const;
@@ -278,6 +340,8 @@ class EpubReaderActivity final : public Activity {
   int deferredTextOnlySpine_ = -1;
   int deferredTextOnlyPage_ = -1;
   uint32_t deferredTextOnlyFrameSeq_ = 0;
+  // v352：面板上那一版有「圖還沒好」的圖示（文字版那一遍或冷路徑預閃畫的）→ 補圖那一遍擦圖區改用清底刷新。
+  bool deferredTextOnlyIcon_ = false;
   int lastAdvanceSpine_ = -1;  // v193：上次清空 advance 表的章；同章重建（方向／設定）不准清
   // v257：預排下一章。實機（v256）：翻進還沒排的新章按下到畫完 1.9 秒、接下來幾頁 1.9–2.4 秒（新章還在排、不能預取）；
   //   翻進已經排好的章只要 0.66 秒。→ 目前這章排完之後，背景把下一章排好寫進 SD 快取。

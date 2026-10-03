@@ -29,6 +29,7 @@
 char ImageBlock::lastFailPath[112] = {0};
 char ImageBlock::lastDecodeWitness[300] = {0};
 ImageBlock::PxcStats ImageBlock::pxcStats;
+std::atomic<bool> ImageBlock::memFailPending{false};
 
 // v24/v148 低記憶體紓解 hook（見標頭）。
 // 門檻 48KB：抽取的最大單塊是 32,768 的 LZ77 window，解碼器物件另需 20–44KB（先後配置，
@@ -122,6 +123,16 @@ uint32_t rememberedPlaceholderCount_ = 0;
 // 計數只加、身分由呼叫端綁（與 rememberedPlaceholderCount_ 同一手法）。
 bool deferHeavyDecode_ = false;
 uint32_t deferredDecodeCount_ = 0;
+// v352：「圖還沒好」圖示（閱讀器掛的函式指標，見 ImageBlock.h）與畫過的次數（只加，呼叫端取差值）。
+ImageBlock::PendingIconFn pendingIconFn_ = nullptr;
+uint32_t pendingIconCount_ = 0;
+// 圖示只給夠大的圖：小圖（項目符號、行內小圖）解得快，中間放個圖示反而怪 —— 照舊留白。
+constexpr int PENDING_ICON_MIN_SIDE = 96;
+// v354：背景預解的抑制表（這一場預解失敗過的圖，不再預解；留給真正翻到時的 render）。環形 8 格，存圖路徑雜湊。
+//   只記「看起來會一直失敗」的（解碼錯誤、快取沒寫成）；按鍵中止與記憶體類（transient）不記，下一次畫頁再試。
+constexpr size_t MAX_PREDECODE_SUPPRESS = 8;
+uint64_t predecodeSuppressed_[MAX_PREDECODE_SUPPRESS];
+size_t predecodeSuppressedCount_ = 0;
 // v260：解碼因按鍵中止的次數（只加；呼叫端比較前後差值）。
 uint32_t decodeAbortCount_ = 0;
 // v176：0 = 永久失敗（整個 session 不重試）；非 0 = 暫時性（記憶體）失敗當時的最大連續塊，
@@ -252,14 +263,16 @@ void rememberImageFailure(const std::string& path, const uint32_t transientMaxAl
 // smaller than an SD sector, so every sector is touched regardless of the band
 // window. Instead the first pass loads the payload into RAM and later passes
 // render from it. Chunked allocation because a single full-image block (up to
-// 96 KB) rarely fits the fragmented mid-render heap; each chunk is heap-gated
+// 104.5 KB on X3) rarely fits the fragmented mid-render heap; each chunk is heap-gated
 // and any failure falls back to the streaming path unchanged. The reader
 // releases the slot when the page render completes, so nothing stays resident
 // across page turns.
 constexpr size_t PXC_CHUNK_SHIFT = 14;  // 16 KB chunks
 constexpr size_t PXC_CHUNK_SIZE = 1u << PXC_CHUNK_SHIFT;
-constexpr size_t PXC_MAX_CHUNKS = 6;  // 96 KB: a full-screen 2bpp image
-constexpr size_t PXC_HEAP_RESERVE = 24 * 1024;
+static_assert(PXC_CHUNK_SIZE == ImageBlock::kPxcChunkSize, "PXC chunk size must match ImageBlock.h");
+// v352：6→7 塊（112 KB）。「96 KB＝整個螢幕」是 X4 的算法；X3 整個螢幕 528×792 要 104,544 B（見 ImageBlock.h）。
+constexpr size_t PXC_MAX_CHUNKS = ImageBlock::kPxcMaxChunks;
+constexpr size_t PXC_HEAP_RESERVE = ImageBlock::kPxcHeapReserve;
 constexpr size_t PXC_MAX_ALLOC_RESERVE = 8 * 1024;
 // Rows can straddle a chunk boundary; they are reassembled into a stack
 // buffer. (screenWidth + 3) / 4 caps at 200 B for an 800px panel.
@@ -536,6 +549,8 @@ void ImageBlock::clearSessionRenderFailures() {
   failedImageCount = 0;
   rememberedPlaceholderCount_ = 0;  // v190：與失敗表同一 session 起點，否則新 activity 的差值會吃到上一本
   deferredDecodeCount_ = 0;         // v193：同上，避免新 activity 的差值吃到上一本
+  pendingIconCount_ = 0;            // v352：同上
+  predecodeSuppressedCount_ = 0;    // v354：預解抑制表跟 session 走
   decodeAbortCount_ = 0;            // v260：同上
   openFailEntries = 0;              // v191：n= 跟 session 走，進閱讀器時才歸零
   transientRetryEntries = 0;        // v256：重試額度同樣跟 session 走
@@ -564,8 +579,10 @@ uint32_t ImageBlock::rememberedPlaceholderCount() { return rememberedPlaceholder
 void ImageBlock::setDeferHeavyDecode(bool on) { deferHeavyDecode_ = on; }                   // v193
 void ImageBlock::setTransientRetryAllowed(const bool on) { g_transientRetryAllowed = on; }  // v256
 
-uint32_t ImageBlock::deferredDecodeCount() { return deferredDecodeCount_; }  // v193
-uint32_t ImageBlock::decodeAbortCount() { return decodeAbortCount_; }        // v260
+uint32_t ImageBlock::deferredDecodeCount() { return deferredDecodeCount_; }             // v193
+void ImageBlock::setPendingIconDrawer(const PendingIconFn fn) { pendingIconFn_ = fn; }  // v352
+uint32_t ImageBlock::pendingIconCount() { return pendingIconCount_; }                   // v352
+uint32_t ImageBlock::decodeAbortCount() { return decodeAbortCount_; }                   // v260
 
 void ImageBlock::releaseRenderCache() { releasePxcSlot(); }
 
@@ -574,6 +591,105 @@ void ImageBlock::renderPlaceholder(GfxRenderer& renderer, const int x, const int
   if (width > 2 && height > 2) {
     renderer.fillRect(x + 1, y + 1, width - 2, height - 2, false);
   }
+}
+
+namespace {
+// v352：在圖區中間畫「圖還沒好」的圖示。只在黑白那一趟畫 —— 灰階平面裡畫了，面板會把它推成灰色的一塊。
+//   補圖那一遍的「圖區先塗白＋刷新」會把它擦掉再上圖（EpubReaderActivity::renderContents 的雙 FAST），
+//   所以圖示不另外多一次刷新。
+bool drawPendingIcon(GfxRenderer& renderer, const int x, const int y, const int width, const int height) {
+  if (!pendingIconFn_ || renderer.getRenderMode() != GfxRenderer::BW) return false;
+  if (std::min(width, height) < PENDING_ICON_MIN_SIDE) return false;
+  pendingIconFn_(renderer, x, y, width, height);
+  pendingIconCount_++;
+  return true;
+}
+}  // namespace
+
+void ImageBlock::renderPendingPlaceholder(GfxRenderer& renderer, const int x, const int y) const {
+  if (imageFailedThisSession(imagePath)) {
+    renderPlaceholder(renderer, x, y);  // 這張圖這一場解失敗過：方框（有意義，跟真正那一遍 render-remembered 一致）
+    return;
+  }
+  drawPendingIcon(renderer, x, y, width, height);
+}
+
+namespace {
+bool predecodeSuppressed(const std::string& path) {
+  const uint64_t h = imagePathHash(path);
+  const size_t n = std::min(predecodeSuppressedCount_, MAX_PREDECODE_SUPPRESS);
+  for (size_t i = 0; i < n; i++) {
+    if (predecodeSuppressed_[i] == h) return true;
+  }
+  return false;
+}
+void suppressPredecode(const std::string& path) {
+  predecodeSuppressed_[predecodeSuppressedCount_ % MAX_PREDECODE_SUPPRESS] = imagePathHash(path);
+  predecodeSuppressedCount_++;
+}
+// 只有 JPEG／PNG 的解碼回呼能按鍵中止（GIF 的回呼沒有回傳值）→ 預解只接這兩種。
+bool predecodableFormat(ImageToFramebufferDecoder* d) {
+  return d && (strcmp(d->getFormatName(), "JPEG") == 0 || strcmp(d->getFormatName(), "PNG") == 0);
+}
+}  // namespace
+
+bool ImageBlock::predecodeCandidate() const {
+  if (imageFailedThisSession(imagePath) || predecodeSuppressed(imagePath)) return false;
+  if (!predecodableFormat(ImageDecoderFactory::getDecoder(imagePath))) return false;
+  return !hasValidCache();
+}
+
+ImageBlock::PredecodeResult ImageBlock::predecode(GfxRenderer& renderer, const int x, const int y) const {
+  // 呼叫端已經用 predecodeCandidate() 挑過（codex：這裡再驗一次＝同一個快取檔開兩次）。只留便宜的格式檢查。
+  ImageToFramebufferDecoder* decoder = ImageDecoderFactory::getDecoder(imagePath);
+  if (!predecodableFormat(decoder)) return {PredecodeOutcome::Skipped, "fmt"};
+
+  RenderConfig config;
+  config.x = x;
+  config.y = y;
+  config.maxWidth = width;
+  config.maxHeight = height;
+  config.useGrayscale = true;
+  config.useDithering = true;
+  config.performanceMode = false;
+  config.useExactDimensions = true;  // 跟 render 同一組尺寸（快取檔頭驗的就是它）
+  config.cachePath = getCachePath(imagePath);
+  config.cacheOnly = true;
+
+  // 串流請求是全域的：每一條離開路徑都要清掉（codex：不能只靠正常返回之後手動清）。
+  struct StreamRequestGuard {
+    ~StreamRequestGuard() { g_decodeStreamRequest = DecodeStreamRequest{}; }
+  } streamGuard;
+  ImageToFramebufferDecoder::clearLastError();
+  g_decodeStats = DecodeStats{};
+  bool ok;
+  if (Storage.exists(imagePath.c_str())) {
+    // 原圖以前就抽到 SD 了（render 的退路抽過）→ 從 SD 解，一樣可以按鍵中止。
+    ok = decoder->decodeToFramebuffer(imagePath, renderer, config);
+  } else if (!srcPath.empty() && streamOpenFn) {
+    g_zipStreamStats = ZipStreamStats{};
+    g_decodeStreamRequest.open = streamOpenFn;
+    g_decodeStreamRequest.ctx = streamCtx;
+    g_decodeStreamRequest.src = srcPath.c_str();
+    ok = decoder->decodeToFramebuffer(imagePath, renderer, config);
+    if (!ok && g_decodeStats.streamOpenFailed) return {PredecodeOutcome::NoStream, "nostream"};
+  } else {
+    // 只能先抽到 SD 才解得開 → 不做（抽檔不能按鍵中止，斷電會留下半截原圖）。
+    return {PredecodeOutcome::NoStream, "nostream"};
+  }
+  if (!ok) {
+    if (ImageToFramebufferDecoder::lastDecodeAborted) return {PredecodeOutcome::Aborted, "abort"};
+    // 記憶體類失敗（transient）下一次畫頁再試；其餘（壞圖、格式）這一場不再預解，留給真正翻到時的 render。
+    if (!ImageToFramebufferDecoder::lastErrorTransient) suppressPredecode(imagePath);
+    return {PredecodeOutcome::Failed,
+            ImageToFramebufferDecoder::lastError[0] != '\0' ? ImageToFramebufferDecoder::lastError : "fail"};
+  }
+  // 「解碼回報成功」≠「快取寫好」：轉換器在快取寫入失敗時會停掉快取、解碼照樣回成功。重開檔驗過才算。
+  if (!hasValidCache()) {
+    suppressPredecode(imagePath);
+    return {PredecodeOutcome::NoCache, "nocache"};
+  }
+  return {PredecodeOutcome::Done, "done"};
 }
 
 void ImageBlock::render(GfxRenderer& renderer, const int x, const int y) {
@@ -626,6 +742,7 @@ void ImageBlock::render(GfxRenderer& renderer, const int x, const int y) {
   //   解碼後的補圖那一遍才畫圖。畫框是使用者回報的「先出方框」；失敗的圖（render-remembered）仍畫框，那是有意義的。
   if (deferHeavyDecode_) {
     deferredDecodeCount_++;
+    drawPendingIcon(renderer, x, y, width, height);  // v352：圖區中間放圖示（維護者：「先放一個圖示，畫好再換成真的」）
     return;
   }
   // v260：同一遍裡前一張圖已經因為按鍵中止 → 後面的圖不要再開始（開讀取器、紓解字型、讀檔頭都省下）。
@@ -670,9 +787,9 @@ void ImageBlock::render(GfxRenderer& renderer, const int x, const int y) {
     const char* base = slash == std::string::npos ? imagePath.c_str() : imagePath.c_str() + slash + 1;
     char local[sizeof(lastDecodeWitness)];  // v249：本地組好再交接（見 Breadcrumb.h）
     snprintf(local, sizeof(local),
-             "%c %ux%u>%ux%u 1/%u prog=%u file=%uKB rel=%u ext=%u zm=%d zc=%uKB zset=%u zrd=%u zinf=%u zwr=%u "
+             "%c %ux%u>%ux%u 1/%u prog=%u nat=%u file=%uKB rel=%u ext=%u zm=%d zc=%uKB zset=%u zrd=%u zinf=%u zwr=%u "
              "tot=%u conv=%u setup=%u ra=%u dec=%u rd=%u/%u wr=%u/%u yld=%u/%u fin=%u rs=%u ok=%u y=%d src=%s %s",
-             st.fmt, st.srcW, st.srcH, st.dstW, st.dstH, st.scaleDenom, st.progressive,
+             st.fmt, st.srcW, st.srcH, st.dstW, st.dstH, st.scaleDenom, st.progressive, st.nativeLevels,
              static_cast<unsigned>((fileBytes + 512) / 1024), static_cast<unsigned>(reliefMs),
              static_cast<unsigned>(extractMsArg), zs.method == 0xFFFF ? -1 : static_cast<int>(zs.method),
              static_cast<unsigned>((zs.compressed + 512) / 1024), static_cast<unsigned>(zs.setupUs / 1000),
@@ -837,6 +954,7 @@ void ImageBlock::render(GfxRenderer& renderer, const int x, const int y) {
         imagePath,
         ImageToFramebufferDecoder::lastErrorTransient ? std::max(2u, static_cast<unsigned>(ESP.getMaxAllocHeap())) : 0u,
         ImageToFramebufferDecoder::lastErrorTransient ? ImageToFramebufferDecoder::lastErrorNeedBytes : 0u);
+    if (ImageToFramebufferDecoder::lastErrorTransient) memFailPending.store(true, std::memory_order_relaxed);
     renderPlaceholder(renderer, x, y);
     return;
   }

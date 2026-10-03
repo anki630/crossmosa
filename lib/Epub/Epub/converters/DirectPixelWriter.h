@@ -35,6 +35,11 @@ struct DirectPixelWriter {
   // Row-precomputed: the Y-dependent portion of the physical coords
   int rowPhyXBase, rowPhyYBase;
 
+  // v354：只寫快取、不寫 framebuffer（RenderConfig::cacheOnly，背景預解用）。
+  //   證明：writePixel 唯一的寫入在裁切檢查之後，clipRows＝0 時 `(unsigned)sy >= 0` 恆真 → 一定 return；
+  //   bandColRange 也照同一個條件回空範圍。不動 GfxRenderer 的寫入目標（沒有全域狀態要恢復）。
+  void discardAll() { clipRows = 0; }
+
   void init(GfxRenderer& renderer) {
     fb = renderer.getWriteTarget();
     originY = renderer.getWriteOriginY();

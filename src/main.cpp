@@ -57,6 +57,7 @@
 #include "util/BenchFlags.h"
 #include "util/BootRecovery.h"
 #include "util/ButtonNavigator.h"
+#include "util/GhostTest.h"
 #include "util/NvsStore.h"
 #include "util/ScreenshotUtil.h"
 
@@ -159,6 +160,16 @@ static bool deepSleepInProgress = false;
 //    使用者的體感就是「按一下醒來，它又自己睡回去」，而且看到兩次休眠畫面。
 //    （維護者自己就推出了這個因果：「淺睡眠超過自動睡眠的設定，我設定 9 分鐘」。）
 static unsigned long g_lastActivityTime = 0;
+
+// v361 證人：閒置輪詢（見 loop() 結尾）因為手碰到按鍵而提早醒來的次數，SLEEP 行的 idlewake= 印出後歸零。
+// 按住不放時每一圈都算一次，所以它是下限式的證人：停 5 秒以上再輕點 N 次 → 至少 N。
+// 0 只代表這段時間沒有「閒置中按鍵」，不代表程式沒跑。
+static uint32_t g_idleEarlyWakes = 0;
+// 耗電的代價（codex v361）：每一片都讀一次按鍵（兩次 ADC，CPU 這時降到 10 MHz）。idlechk＝讀了幾次、idleus＝總共花幾 µs
+//   → 平均每次多久、佔閒置時間的幾成（每次對應約 10 ms 的閒置）。這是 CPU 佔用的證人，不是電流；電流要外接儀器量。
+//   idleus 用 64 位元：一直看書不睡的話，32 位元的 µs 半天就會繞回去（codex 第二輪）。
+static uint32_t g_idleChecks = 0;
+static uint64_t g_idleCheckUs = 0;
 
 // ─── v310：電源鍵的【唯一真相】 ─────────────────────────────────────────────
 // 委員會鑑識（grok 讀 InputManager，codex 做結構審查，兩者收斂）：
@@ -279,29 +290,53 @@ static void resetPwrPad(const int pinNo) {
           BoardConfig::ACTIVE.input.powerActiveHigh ? INPUT_PULLDOWN : INPUT_PULLUP);  // 與 InputManager::begin 同
 }
 
+// ⭐ v359：重開前讓面板正常斷高壓。v358 殘影測試（X3 兩輪）：雜點只出現在「離開 WiFi 自動重開」開始的那一段
+//   （基準照顆粒 8–9%，真關機開始的那輪 2%；刷 v358 那次也是 WiFi 傳完、重開之後才刷，等重開時雜點累積）。
+//   原本「載入中」提示用快速刷新，turnOff 跟著「日照淡化修正」（預設關）→ ESP.restart() 時高壓還開著，下一次開機
+//   Uc8279Driver::begin() 直接硬體重置控制晶片 —— 沒有走 POF。正常休眠、關機都是先關高壓。
+//   這裡讓提示那一次刷新帶 turnOff：X3（UC8279）刷完就 POF（約 50 ms，畫面不變；POF 不動控制晶片的 RAM）。
+//   X4 的 SSD1677 快速刷新只改記帳（SDK 的序列覆寫路徑），行為跟以前一樣；X4 若是 UltraChip 控制器會真的 POF。
+//   重開之後一切重新初始化，設定不用還原。證人：RESTART 的 ms（X3 約 440＋50）。
+//   借 fadingFix 而不是另開參數：呼叫點都在 activity 的 onExit（ActivityManager 握著 RenderLock，
+//   render task 不會同時刷新），而 loop() 開頭每圈把它設回設定值的那一行，在重開前不會再跑到（codex v359 第一輪）。
+//   還沒證實是唯一原因：另一個嫌疑是 seamless 開機信任控制晶片 RAM 裡的舊畫面（HalDisplay::begin）——
+//   POF 保留 RAM，但硬體重置之後還在不在沒驗證過。這版是單一變數的實驗：雜點消失＝高壓沒關就重置是主因。
+//   沒涵蓋：淺睡眠醒來發現換卡的重開（rebootIfCardChanged）—— 休眠畫面刷完高壓也開著。不改 SDK 也修得到
+//   （display.deepSleep() 關電，但深睡會丟 RAM → 那次重開要改走一般開機、不設 silent magic，動到開機路由），另一版做。
+static void drawRestartPopupPanelOff(const char* to) {
+  renderer.setFadingFix(true);
+  const unsigned long t0 = millis();
+  GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
+  // v361：網頁傳檔那一段是主迴圈堆疊最深的時候，而它結束時走這裡（重開），不會印 SLEEP —— 堆疊證人也印在這一行。
+  DiagLog::line("RESTART to=%s off=1 ms=%lu lstk=%u rstk=%u", to, millis() - t0,
+                static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr)), activityManager.renderStackHighWater());
+}
+
+// v359：magic 在提示畫完、高壓關掉、delay 之後才設，緊接著重開 —— 在那之前當機或看門狗重開，下一次就是一般開機
+//   （清潔刷新），不會被當成成功的靜默重開而去信任控制晶片的 RAM（codex v359 第一、二輪）。
 void silentRestart() {
   if (deepSleepInProgress) return;  // sleeping supersedes the heap-defrag reboot
-  silentRebootTarget = SILENT_REBOOT_TARGET_HOME;
-  silentRebootMagic = SILENT_REBOOT_MAGIC;
   logPwrPad("restart", g_pwrPadPin,
-            snapPwrPad(g_pwrPadPin));  // v324：重啟前的電源鍵腳位狀態（WEB exit 走這裡；magic 已設好，best-effort）
+            snapPwrPad(g_pwrPadPin));  // v324：重啟前的電源鍵腳位狀態（WEB exit 走這裡；best-effort）
   LOG_DBG("MAIN", "Silent restart (target=home)");
   // E-ink retains the previous frame until Home's first paint lands (~2-3s).
   // Without an overlay, users don't see the reboot and fire input through to
   // Home. Select on the default selectorIndex=0 then opens the most-recent
   // book, looking like a trampoline back to the reader they just exited.
-  GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
+  drawRestartPopupPanelOff("home");
   delay(50);
+  silentRebootTarget = SILENT_REBOOT_TARGET_HOME;
+  silentRebootMagic = SILENT_REBOOT_MAGIC;
   ESP.restart();
 }
 
 void silentRestartToReader() {
   if (deepSleepInProgress) return;  // sleeping supersedes the heap-defrag reboot
+  LOG_DBG("MAIN", "Silent restart (target=reader)");
+  drawRestartPopupPanelOff("reader");
+  delay(50);
   silentRebootTarget = SILENT_REBOOT_TARGET_READER;
   silentRebootMagic = SILENT_REBOOT_MAGIC;
-  LOG_DBG("MAIN", "Silent restart (target=reader)");
-  GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
-  delay(50);
   ESP.restart();
 }
 
@@ -1068,9 +1103,19 @@ void enterDeepSleep(bool fromTimeout = false) {
   HalPowerManager::Lock powerLock;  // Ensure we are at normal CPU frequency for sleep preparation
   // v185 證人：分清「睡著醒來回主畫面」與「重置回主畫面」——兩者在 log 上原本都只有一行 BOOT。
   const NvsStore::Stats nvsIn = NvsStore::takeStats();  // v331：上次醒來（或開機）之後的 NVS 影子寫入 —— 翻頁那些
-  DiagLog::line("SLEEP timeout=%d mode=%d nvsw=%lu nvsmax=%lu nvsfail=%lu nvserr=%d", static_cast<int>(fromTimeout),
-                static_cast<int>(WiFi.getMode()), static_cast<unsigned long>(nvsIn.writes),
-                static_cast<unsigned long>(nvsIn.usMax), static_cast<unsigned long>(nvsIn.fails), nvsIn.lastErr);
+  // v361：lstk／rstk ＝ 主迴圈與繪製任務開機以來的堆疊最低餘裕（bytes）—— SD 批次傳輸（USE_SPI_ARRAY_TRANSFER）
+  //   的寫入路徑在堆疊上多一塊 512 B，這兩個數字是它的證人（量的是「到目前為止」，不是保證）。
+  DiagLog::line(
+      "SLEEP timeout=%d mode=%d nvsw=%lu nvsmax=%lu nvsfail=%lu nvserr=%d lstk=%u rstk=%u idlewake=%lu idlechk=%lu "
+      "idleus=%llu",
+      static_cast<int>(fromTimeout), static_cast<int>(WiFi.getMode()), static_cast<unsigned long>(nvsIn.writes),
+      static_cast<unsigned long>(nvsIn.usMax), static_cast<unsigned long>(nvsIn.fails), nvsIn.lastErr,
+      static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr)), activityManager.renderStackHighWater(),
+      static_cast<unsigned long>(g_idleEarlyWakes), static_cast<unsigned long>(g_idleChecks),
+      static_cast<unsigned long long>(g_idleCheckUs));
+  g_idleEarlyWakes = 0;
+  g_idleChecks = 0;
+  g_idleCheckUs = 0;
   APP_STATE.lastSleepFromReader = activityManager.isReaderActivity();
 
   // ⭐ v326（帳本 A9，維護者 2026-09-21 選定）：wake frame
@@ -1495,6 +1540,8 @@ void setup() {
   PersistableStoreBase::diagHook = [](const char* line) { DiagLog::line("%s", line); };
   DiagLog::mem("boot");
   BenchFlags::load();  // v185 bench 哨兵（同樣只在這裡讀一次 SD）
+  // v357：顯示層看不到 src 的 BenchFlags，在這裡交給它。
+  display.setForcedDiffClean(BenchFlags::x4Diff);
 
   // v196：BENCH→RESUME 黑盒補證人（純觀測，不改順序／行為）。
   HalSystem::checkPanic();
@@ -1679,6 +1726,14 @@ void setup() {
   // 刻意不含 Back 鍵——該鍵狀態此時不一定可靠，少判只會落到主畫面，仍會設定 activity。
   // v311：正式版（含救援鍵）在 settle 之後才算；顯示初始化用的是上面的 shouldPreloadReaderFont。
   const bool willResumeToReader = !recoveryFirmwareMode && shouldPreloadReaderFont;
+
+  // v358 bench（/ghost.on）：殘影測試，開機跑一次（哨兵在開始前就刪掉）。救援模式、當機重開不跑。
+  //   跑完要求下一次刷新走清底，下面的開機流程照常 —— 測試期間沒有任何 activity，只有它在畫。
+  //   v360：/ghostw.on ＝桌布殘影測試（兩個都放就兩個都跑，各自刪自己的哨兵）。
+  if (!recoveryFirmwareMode && !HalSystem::isRebootFromPanic()) {
+    if (BenchFlags::ghost) GhostTest::run(renderer);
+    if (BenchFlags::ghostWall) GhostTest::runWallpaper(renderer);
+  }
 
   // v331：v320.1 的 `wallcache.build` 哨兵已拿掉（A5 刻意不做）：桌布第一次被選到時本來就會自己建快取、而且
   //   先上面板才寫（SleepActivity::renderBitmapSleepScreen），原則 36 已滿足；哨兵每次開機還付一次 exists()。
@@ -2069,7 +2124,21 @@ void loop() {
     if (millis() - g_lastActivityTime >= HalPowerManager::IDLE_POWER_SAVING_MS) {
       // If we've been inactive for a while, increase the delay to save power
       powerManager.setPowerSaving(true);  // Lower CPU frequency after extended inactivity
-      delay(50);
+      // v361（上游 #3463 的想法）：原本一次 delay(50)。InputManager 要連續兩筆取樣相同才認列按下，
+      //   所以閒置時比兩個間隔短的輕按會整個漏掉（看完一頁停幾秒、輕點翻頁沒反應）。
+      //   改成 10ms 一片、手一碰到按鍵就醒來回去取樣。用我們既有的 inputActive()（原始電平、去彈跳中、
+      //   已認列按著），不另加上游的 rawInputActive()。
+      for (int slice = 0; slice < 5; slice++) {
+        delay(10);
+        const uint32_t checkT0 = micros();
+        const bool touched = gpio.inputActive();
+        g_idleCheckUs += micros() - checkT0;
+        g_idleChecks++;
+        if (touched) {
+          g_idleEarlyWakes++;
+          break;
+        }
+      }
     } else {
       // Short delay to prevent tight loop while still being responsive
       delay(10);

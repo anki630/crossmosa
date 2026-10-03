@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "Epub.h"
+#include "Epub/SpineList.h"
 #include "expat.h"
 
 class BookMetadataCache;
@@ -22,6 +23,7 @@ class ContentOpfParser final : public Print {
     IN_MANIFEST,
     IN_SPINE,
     IN_GUIDE,
+    IN_RENDITION_LAYOUT,  // v350：<meta property="rendition:layout"> 的文字
   };
 
   const std::string& cachePath;
@@ -78,6 +80,19 @@ class ContentOpfParser final : public Print {
   //      `.hltr` 與 `.vrtl`，而多數書選了橫排 —— 用那個分母算會得到「只做 OPF 漏 38%」
   //      的錯誤結論（本專案的帳本一度就是這樣寫的，2026-09-10 重測更正）。
   bool pageProgressionRtl = false;
+  // v350：EPUB 3 固定版面（fixed layout）。全書預設來自 `<meta property="rendition:layout">pre-paginated</meta>`，
+  //   每個 itemref 可以用 properties 的 `rendition:layout-pre-paginated`／`rendition:layout-reflowable` 覆寫。
+  //   fixedLayoutSpines ＝ 固定版面的 spine 索引（遞增）。索引算的是【真的建出來的】spine 項目 —— idref 找不到而
+  //   被略過的 itemref 不佔位置，才會跟 book.bin 的 spine 對齊。一般的書是空的（不配置）。只在有 cache（建索引）時填。
+  bool globalPrePaginated = false;
+  SpineIndexList fixedLayoutSpines;  // nothrow 陣列（見 SpineList.h）
+  uint32_t builtSpineCount = 0;
+  bool layoutOnly = false;  // 沒有 cache 也走 spine：只收固定版面清單（見 Epub::computeLayoutFromOpf）
+  // 清單記不完整（記憶體不夠擴容、或 spine 超過 uint16）→ 這本書的清單當作「不知道」，不寫 layout.bin。
+  bool layoutOverflow = false;
+  std::string renditionLayoutText;     // IN_RENDITION_LAYOUT 期間收集的文字（最多 64 bytes）
+  std::string renditionLayoutContent;  // 同一個 <meta> 的 content 屬性（非標準寫法的備援）
+  int renditionNestDepth = 0;          // IN_RENDITION_LAYOUT 裡面又開的元素層數（只在同一層的 </meta> 收尾）
 
   explicit ContentOpfParser(const std::string& cachePath, const std::string& baseContentPath, const size_t xmlSize,
                             BookMetadataCache* cache)

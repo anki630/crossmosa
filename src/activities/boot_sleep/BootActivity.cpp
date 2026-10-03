@@ -13,7 +13,7 @@ void BootActivity::onEnter() {
   const auto pageHeight = renderer.getScreenHeight();
   const int logoX = (pageWidth - LOGO_BEAR_240_SIZE) / 2;
   const int logoY = (pageHeight - LOGO_BEAR_240_SIZE) / 2;
-  const int textY = logoY + LOGO_BEAR_240_SIZE + 10;
+  const int textY = logoY + LOGO_BEAR_240_SIZE + 10;  // 待機畫面（SleepActivity）用同一套版面（v349）
 
   // v36: single-pass 1-bit splash (v34/v35's grayscale pipeline added 1-2
   // visible refresh flashes at boot — real-device feedback preferred the

@@ -1184,6 +1184,7 @@ void ParsedText::layoutAndExtractLines(const GfxRenderer& renderer, const int fo
   auto wordWidths = calculateWordWidths(renderer, fontId);
 
   std::vector<size_t> lineBreakIndices;
+  const int64_t brkT0 = profNowUs();  // v357 BUILDPROF brk=
   if (hyphenationEnabled || greedyLineBreaks_) {
     // Use greedy layout that can split words mid-loop when a hyphenated prefix fits.
     // v240：greedyLineBreaks_（txt 專用）也走這裡，但下面的斷字只在 hyphenationEnabled 時才做。
@@ -1192,6 +1193,7 @@ void ParsedText::layoutAndExtractLines(const GfxRenderer& renderer, const int fo
   } else {
     lineBreakIndices = computeLineBreaks(renderer, fontId, pageWidth, wordWidths, wordContinues, wordNoSpaceBefore);
   }
+  buildProf.brkUs += static_cast<uint64_t>(profNowUs() - brkT0);
   size_t lineCount = includeLastLine ? lineBreakIndices.size() : lineBreakIndices.size() - 1;
   // 注音：段落結束 → 全部送出；還沒結束 → 只取出漢字都已經定案的行（其餘留到下一批，codex 修訂 5）
   if (zy_ && zy_->session && !zy_->stopped && zhuyinLive()) {

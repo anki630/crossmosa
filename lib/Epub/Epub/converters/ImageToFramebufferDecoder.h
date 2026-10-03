@@ -21,6 +21,8 @@ struct RenderConfig {
   bool performanceMode = false;
   bool useExactDimensions = false;  // If true, use maxWidth/maxHeight as exact output size (no recalculation)
   std::string cachePath;            // If non-empty, decoder will write pixel cache to this path
+  // v354：只寫 .pxc 快取、不碰 framebuffer（背景預解：畫面上是別的頁）。三個轉換器在 pw.init 之後 discardAll()。
+  bool cacheOnly = false;
 };
 
 class ImageToFramebufferDecoder {
@@ -67,8 +69,14 @@ class ImageToFramebufferDecoder {
     inputAbortArmed_ = on;
   }
   static bool inputAbortRequested() {
-    return inputAbortArmed_ && inputSeq_.load(std::memory_order_relaxed) != armedSeq_;
+    return inputAbortArmed_ &&
+           (inputSeq_.load(std::memory_order_relaxed) != armedSeq_ || (abortPoll_ != nullptr && abortPoll_()));
   }
+  // v354：背景預解另外要看「有沒有新的畫頁請求」（不一定來自按鍵：IMGHEAL、排版收尾的重定位）。
+  //   函式指標（lib 不依賴 app），只在預解期間掛上（RAII），其餘時候 nullptr → 跟 v260 完全一樣。
+  //   每一列呼叫一次，要便宜。
+  using AbortPollFn = bool (*)();
+  static void setAbortPoll(const AbortPollFn fn) { abortPoll_ = fn; }
 
   // 上游 #2959：解碼回呼裡每 250ms 讓一個 tick，幾秒的大圖解碼不會把 idle task 的看門狗餓死。
   // lastYieldMs 由呼叫端持有，初值＝解碼開始時間。（free function 回呼要用 → public）
@@ -104,6 +112,8 @@ class ImageToFramebufferDecoder {
   inline static std::atomic<uint32_t> inputSeq_{0};
   inline static uint32_t armedSeq_ = 0;         // render task 專用（arm 與檢查在同一個 task）
   inline static bool inputAbortArmed_ = false;  // 同上
+  // v354：同上（render task 掛、render task 查）
+  inline static AbortPollFn abortPoll_ = nullptr;
 
  protected:
   void warnUnsupportedFeature(const std::string& feature, const std::string& imagePath);

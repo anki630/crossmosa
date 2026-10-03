@@ -74,7 +74,14 @@ class BookMetadataCache {
   std::deque<SpineHrefIndexEntry> spineHrefIndex;
   bool useSpineHrefIndex = false;
 
-  static constexpr uint16_t LARGE_SPINE_THRESHOLD = 400;
+  // v357：400 → 1（每一本書都走「掃一遍、雜湊比對」的快路徑）。上游只給 400 章以上的書用，小書走逐項查：
+  //   每查一章就從 zip 中央目錄一筆一筆掃（每筆約 13 次幾個位元組的讀取／跳位置），目錄對應也逐條重掃 spine 暫存檔。
+  //   電腦端量（work/epub-host）：110 章的畫冊建索引時 EPUB 被讀 8.3 萬次、跳位置 3.7 萬次（目錄本身只有 12.5 KB），
+  //   實機建索引 4.9–8.6 秒。快路徑的記憶體是每章約 16–20 位元組（110 章約 2 KB；3000 章約 60 KB，但那種書本來就
+  //   走這條路）—— 上游擔心 OOM 的是另一個「整份目錄進 RAM」的做法（見 buildBookBin 的註解）。
+  //   比對只看 FNV-64＋長度（不逐字比）：意外碰撞約 1e-13，刻意做的碰撞只會讓進度百分比或目錄章名錯（codex
+  //   審過，接受）。 改前後書庫 304 本逐本比對 book.bin 等快取檔逐位元組相同。
+  static constexpr uint16_t LARGE_SPINE_THRESHOLD = 1;
 
   // FNV-1a 64-bit hash function
   static uint64_t fnvHash64(const std::string& s) {
@@ -119,4 +126,8 @@ class BookMetadataCache {
   int getSpineCount() const { return spineCount; }
   int getTocCount() const { return tocCount; }
   bool isLoaded() const { return loaded; }
+  // v350：layout.bin（固定版面清單）綁定用的身分 —— book.bin 的大小與開頭 256 bytes 的 FNV-1a。
+  //   book.bin 不論從哪條路重建過，這兩個數字幾乎一定會變 → 清單對不上就重算。只在載入之後呼叫（會移動檔案位置；
+  //   getSpineEntry／getTocEntry 每次都自己 seek，不受影響）。
+  bool identity(uint32_t* size, uint32_t* headHash);
 };

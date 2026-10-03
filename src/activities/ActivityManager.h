@@ -123,6 +123,7 @@ class ActivityManager {
   unsigned flushProgressDurable();       // v332：同上，但走 SD 檢查點
   bool handleForcedRefresh();
   bool skipLoopDelay() const;
+  unsigned renderStackHighWater() const;  // v361：繪製任務開機以來的堆疊最低餘裕（bytes），SLEEP 行的 rstk=
   ScreenshotInfo getScreenshotInfo() const;
 
   // If immediate is true, the update will be triggered immediately.

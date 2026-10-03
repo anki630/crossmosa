@@ -214,7 +214,9 @@ void Page::renderWithImagePlaceholders(GfxRenderer& renderer, const int fontId, 
                                        const int yOffset) const {
   for (const auto& element : elements) {
     if (element->getTag() == TAG_PageImage) {
-      static_cast<const PageImage&>(*element).renderPlaceholder(renderer, xOffset, yOffset);
+      // v352：預閃不再畫方框（使用者回報過「先出方框」），改畫「圖還沒好」的圖示；解失敗過的圖照舊方框。
+      static_cast<const PageImage&>(*element).getImageBlock().renderPendingPlaceholder(
+          renderer, element->xPos + xOffset, element->yPos + yOffset);
     } else {
       element->render(renderer, fontId, xOffset, yOffset);
     }

@@ -120,9 +120,14 @@ bool BookMetadataCache::beginTocPass() {
       idx.spineIndex = static_cast<int16_t>(i);
       spineHrefIndex[i] = idx;
     }
+    // v357：同一個 href 出現在好幾個 spine 項目時要取【第一個】（跟逐項掃的慢路徑一樣）——
+    //   std::sort 不保證等值元素的順序，所以把 spineIndex 當最後的比較鍵；查的 lower_bound 只比
+    //   hash／len，落在等值區間的最前面。
     std::sort(spineHrefIndex.begin(), spineHrefIndex.end(),
               [](const SpineHrefIndexEntry& a, const SpineHrefIndexEntry& b) {
-                return a.hrefHash < b.hrefHash || (a.hrefHash == b.hrefHash && a.hrefLen < b.hrefLen);
+                if (a.hrefHash != b.hrefHash) return a.hrefHash < b.hrefHash;
+                if (a.hrefLen != b.hrefLen) return a.hrefLen < b.hrefLen;
+                return a.spineIndex < b.spineIndex;
               });
     spineFile.seek(0);
     useSpineHrefIndex = true;
@@ -542,6 +547,26 @@ BookMetadataCache::SpineEntry BookMetadataCache::getSpineEntry(const int index) 
   serialization::readPod(bookFile, spineEntryPos);
   bookFile.seek(spineEntryPos);
   return readSpineEntry(bookFile);
+}
+
+bool BookMetadataCache::identity(uint32_t* size, uint32_t* headHash) {
+  if (!loaded) return false;
+  const size_t sz = bookFile.size();
+  const size_t pos = bookFile.position();  // 讀完放回原位（複查：查詢函式不該改掉別人的檔案位置）
+  if (sz == 0 || !bookFile.seek(0)) return false;
+  uint8_t buf[256];
+  const size_t want = sz < sizeof(buf) ? sz : sizeof(buf);
+  const bool ok = bookFile.read(buf, want) == static_cast<int>(want);
+  const bool restored = bookFile.seek(pos);
+  if (!ok || !restored) return false;
+  uint32_t h = 2166136261u;
+  for (size_t i = 0; i < want; i++) {
+    h ^= buf[i];
+    h *= 16777619u;
+  }
+  *size = static_cast<uint32_t>(sz);
+  *headHash = h;
+  return true;
 }
 
 BookMetadataCache::TocEntry BookMetadataCache::getTocEntry(const int index) {

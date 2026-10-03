@@ -409,6 +409,12 @@ void SdCardFont::resetStyleMiniData(PerStyle& s, const bool heapTight) {
 }
 
 void SdCardFont::freeStyleKernLigatureData(PerStyle& s) {
+  // v361（上游 #3581）：stubData 與 miniData 都借用常駐的連字表（loadStyleKernLigatureData、
+  // applyKernLigaturePointers）。表釋放了，借用的指標要一起清，不然到下次 memset 之前都是懸空的。
+  s.stubData.ligaturePairs = nullptr;
+  s.stubData.ligaturePairCount = 0;
+  s.miniData.ligaturePairs = nullptr;
+  s.miniData.ligaturePairCount = 0;
   delete[] s.kernLeftClasses;
   s.kernLeftClasses = nullptr;
   delete[] s.kernRightClasses;

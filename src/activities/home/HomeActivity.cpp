@@ -211,6 +211,8 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
 
 void HomeActivity::onEnter() {
   Activity::onEnter();
+  backPressSeen = false;  // v357：兩個防護都從進場重新算（不假設物件是新建的）
+  confirmPressSeen = false;
 
   hasOpdsServers = OPDS_STORE.hasServers();
 
@@ -268,8 +270,11 @@ void HomeActivity::freeCoverBuffer() {
 }
 
 void HomeActivity::loop() {
+  // v357：確認鍵的「按下」要在任何提早返回之前收（同一輪有觸控時也不漏掉；codex）。
+  if (mappedInput.wasPressed(MappedInputManager::Button::Confirm)) confirmPressSeen = true;
   // v194：封面抖動／檔柄配置失敗的證人（閱讀器不在場時也要收）。
   DiagLog::crumb("ALLOCFAIL", HalStorage::lastAllocFail, sizeof(HalStorage::lastAllocFail));
+  DiagLog::crumb("X4DIFF", HalDisplay::lastForcedDiff, sizeof(HalDisplay::lastForcedDiff));  // v357 bench
   DiagLog::crumb("ALLOCFAIL", ditherLastAllocFail, sizeof(ditherLastAllocFail));
   const int menuCount = getMenuItemCount();
   const auto& metrics = UITheme::getInstance().getMetrics();
@@ -380,7 +385,7 @@ void HomeActivity::loop() {
     return;
   }
 
-  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm) && confirmPressSeen) {
     activateSelection();
   }
 }

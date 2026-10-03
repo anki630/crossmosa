@@ -67,6 +67,32 @@ class HalStorage {
   static char lastAllocFail[96];
   static void noteAllocFail(const char* where, size_t bytes);
 
+  // v358：「花在 SD 介面（這一層）裡的時間」與次數（開書量測：建索引各段有多少時間在等 SD）。只算 arm 的那個 task ——
+  //   別的 task 的讀寫不算進來，但等它放鎖的時間算（計時包住拿鎖，等鎖的部分另外累計在 lockUs）。
+  //   ⚠️ 這是牆上時間：含 SdFat 自己的 CPU（FAT 走訪、memcpy）與等鎖；段的時間扣掉它，剩下的是解析／inflate 等 CPU
+  //   【加上】這個 task 被別的 task 搶走的時間，不是純 CPU。
+  //   沒 arm 時每個操作只多讀一個 atomic；arm 著的時候每個操作多兩三次讀時鐘（約 1–2 µs），所以只在建索引那一段開。
+  //   readBytes＝實際讀到的位元組（下限：readFileToStream 不知道讀了多少，記 0）。
+  //   沒計時的：available／position／getName（不碰卡）—— 它們整段的時間（等鎖與函式本身）都落在「剩下的」那一邊。
+  struct IoStats {
+    uint32_t reads = 0, readUs = 0, readBytes = 0;
+    uint32_t writes = 0, writeUs = 0;  // 含 flush
+    uint32_t seeks = 0, seekUs = 0;
+    uint32_t metas = 0, metaUs = 0;  // 開檔、關檔、exists、mkdir、remove、rename、列目錄等
+    uint32_t lockUs = 0;             // 上面各類裡「等 StorageLock」的部分（已含在各類的 Us 裡）
+    // v359：寫入是一次卡很久還是每次都慢（v358 X3：畫冊三段各約 1 秒，bin 那段只寫 3 次）。
+    //   writeSlow 可以相減；最久的單次不行 ——
+    //   writeMaxUs／metaMaxUs 是 arm 以來，win* 是上一次 ioResetWindowPeaks() 以來。
+    uint32_t writeSlow = 0;  // 單次 ≥ kIoSlowUs 的寫
+    uint32_t writeMaxUs = 0, metaMaxUs = 0;
+    uint32_t winWriteMaxUs = 0, winMetaMaxUs = 0;
+  };
+  static constexpr uint32_t kIoSlowUs = 50 * 1000;
+  // on：歸零並只算呼叫這個的 task —— 已經有別的 task 在量就回 false（不動它的數字）；off：只有 owner 關得掉。
+  static bool armIoStats(bool on);
+  static IoStats ioStats();          // 目前累計；只有 arm 的那個 task 讀得到，別的 task 拿到全 0
+  static void ioResetWindowPeaks();  // win* 歸零（分段的起點）；只有 owner 做得到
+
   class StorageLock;  // private class, used internally
 
  private:

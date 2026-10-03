@@ -11,6 +11,9 @@
 //   /scrub.on           閱讀器週期清殘影改走 Mid scrub（v55 的 HALF_REFRESH_SCRUB，不做 GC 閃黑）
 //   /wall4.on           待機壁紙改走 XTH4 絕對四階波形（不先畫 B/W 底）
 //   /aadark.on          文字 AA 的淺灰像素降為深灰（字不隨淺灰變淡）
+//   /x4diff.on          （v357，只有 X4 SSD1677）清底刷新（HALF，1.8 秒）改成「RED 寫成新畫面的反相＋快速刷新」
+//                       （約 0.6 秒）：每個像素都被推一次。清得乾不乾淨要照片比對（效能拆解 C）
+//   /ghost.on           （v358）開機時跑一次殘影測試（GhostTest.cpp），跑之前就把這個檔刪掉 —— 一次性的
 //
 // 開機會記一行 `BENCH gray=… scrub=… wall4=… aadark=…` 進 diag.log，log 才分得出哪個
 // 候選在場。候選定案後這個檔整個拔掉（bench 完就不該留旋鈕）。
@@ -19,6 +22,9 @@ extern uint8_t grayVariant;
 extern bool scrub;
 extern bool wall4;
 extern bool aaDark;
+extern bool x4Diff;
+extern bool ghost;
+extern bool ghostWall;  // v360 /ghostw.on：桌布殘影測試（GhostTest::runWallpaper），一次性
 
 // Storage.begin() 成功、DiagLog::begin() 之後呼叫一次。
 void load();

@@ -294,6 +294,10 @@ void ActivityManager::popActivity() {
 
 bool ActivityManager::preventAutoSleep() const { return currentActivity && currentActivity->preventAutoSleep(); }
 
+unsigned ActivityManager::renderStackHighWater() const {
+  return renderTaskHandle ? static_cast<unsigned>(uxTaskGetStackHighWaterMark(renderTaskHandle)) : 0;
+}
+
 // v327：全域淺睡眠的黑名單制 —— 看的是【目前】的 activity（推在上面的那個）；閱讀器上疊選單時選單說可以，
 //   閱讀器仍活在下面。沒有 activity（開機早期）就不睡。
 bool ActivityManager::supportsLightSleep() const {

@@ -12,6 +12,9 @@ uint8_t grayVariant = 0;
 bool scrub = false;
 bool wall4 = false;
 bool aaDark = false;
+bool x4Diff = false;
+bool ghost = false;
+bool ghostWall = false;
 
 void load() {
   if (!Storage.ready()) return;
@@ -32,10 +35,18 @@ void load() {
       wall4 = true;
     } else if (strcasecmp(name, "aadark.on") == 0) {
       aaDark = true;
+    } else if (strcasecmp(name, "x4diff.on") == 0) {
+      x4Diff = true;
+    } else if (strcasecmp(name, "ghost.on") == 0) {
+      ghost = true;
+    } else if (strcasecmp(name, "ghostw.on") == 0) {
+      ghostWall = true;
     }
   }
   dir.close();
-  DiagLog::line("BENCH gray=%u scrub=%d wall4=%d aadark=%d", static_cast<unsigned>(grayVariant),
-                static_cast<int>(scrub), static_cast<int>(wall4), static_cast<int>(aaDark));
+  DiagLog::line("BENCH gray=%u scrub=%d wall4=%d aadark=%d x4diff=%d ghost=%d ghostw=%d",
+                static_cast<unsigned>(grayVariant), static_cast<int>(scrub), static_cast<int>(wall4),
+                static_cast<int>(aaDark), static_cast<int>(x4Diff), static_cast<int>(ghost),
+                static_cast<int>(ghostWall));
 }
 }  // namespace BenchFlags

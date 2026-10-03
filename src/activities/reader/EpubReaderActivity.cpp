@@ -42,6 +42,7 @@
 #include "SdCardFontSystem.h"
 #include "activities/settings/TextSettingsActivity.h"
 #include "components/UITheme.h"
+#include "components/icons/image24.h"
 #include "fontIds.h"
 #include "util/BenchFlags.h"
 #include "util/BookmarkUtil.h"
@@ -201,6 +202,9 @@ void EpubReaderActivity::onEnter() {
   }
 
   ImageBlock::clearSessionRenderFailures();
+  // v350：上一本書沒讀走的「記憶體類解碼失敗」旗標不能帶進這一本（複查：快照會歸錯書）。
+  ImageBlock::memFailPending.store(false, std::memory_order_relaxed);
+  imgFailPoolsDumped_ = false;
   // v31/v41 → v187：粗體閱讀在排版階段烤進去（ParsedText::addWord），並參與 section 檔頭比對。
   ParsedText::setBoldBodyText(SETTINGS.boldBodyText != 0);
   // Lazy image extraction: section builds only header-probe images, so the first
@@ -211,6 +215,16 @@ void EpubReaderActivity::onEnter() {
   // v248：JPEG／PNG 第一次打開時直接從書裡解碼（不先抽到 SD）；失敗 ImageBlock 自己退回上面的抽圖。
   ImageBlock::setStreamSource(epub.get(), [](void* ctx, const char* src, ZipEntryReader& reader, size_t bufSize) {
     return static_cast<Epub*>(ctx)->openItemReader(src, reader, bufSize);
+  });
+  // v352：圖還沒解好時，圖區中間畫 UI 的圖片圖示（檔案清單裡那一顆；維護者：「使用系統裡面的符號就好」）。
+  //   依圖的短邊放大：≥480 px（整頁圖、畫冊的畫）3 倍＝72 px，≥200 px 2 倍，其餘原尺寸 24 px。
+  //   ImageBlock 只在黑白那一趟、短邊 ≥ 96 px 時才叫它；補圖那一遍的「圖區先塗白＋刷新」會把它擦掉再上圖。
+  ImageBlock::setPendingIconDrawer([](GfxRenderer& r, const int x, const int y, const int w, const int h) {
+    constexpr int kIconSize = 24;  // Image24Icon
+    const int side = std::min(w, h);
+    const int scale = side >= 480 ? 3 : (side >= 200 ? 2 : 1);
+    const int px = kIconSize * scale;
+    r.drawIconScaled(Image24Icon, x + (w - px) / 2, y + (h - px) / 2, kIconSize, scale);
   });
 
   // v190：圖片紓解只放可重建的 mini bitmap 快取（住在 p2，SEG pret= 常態 24–40KB）。
@@ -400,6 +414,7 @@ void EpubReaderActivity::onExit() {
   // the activity (and the shared_ptr) goes away.
   ImageBlock::setExtractor(nullptr, nullptr);
   ImageBlock::setStreamSource(nullptr, nullptr);
+  ImageBlock::setPendingIconDrawer(nullptr);  // v352
   ImageBlock::setMemoryReliefHooks(nullptr, nullptr, nullptr);
   ParsedText::setRefusalHook(nullptr, nullptr);
   SdCardFont::setBuildProbeHook(nullptr);  // v191：活動死了還掛著會打進已拆的探針狀態
@@ -515,6 +530,23 @@ constexpr uint32_t PREBUILD_INFLIGHT_MAGIC = 0x4E584254u;  // "NXBT"
 bool g_prebuildFuseChecked = false;
 bool g_prebuildDisabledThisBoot = false;
 uint8_t g_prebuildInFlightDepth = 0;
+// v354：背景預解的保險絲（同上面預排的做法，分開一組：預解出事只停用預解，預排照常）。
+volatile RTC_NOINIT_ATTR uint32_t g_predecodeInFlightMagic;
+volatile RTC_NOINIT_ATTR uint32_t g_predecodeInFlightInv;
+constexpr uint32_t PREDECODE_INFLIGHT_MAGIC = 0x50524443u;  // "PRDC"
+bool g_predecodeDisabledThisBoot = false;
+struct PredecodeInFlight {
+  PredecodeInFlight() {
+    g_predecodeInFlightMagic = PREDECODE_INFLIGHT_MAGIC;
+    g_predecodeInFlightInv = ~PREDECODE_INFLIGHT_MAGIC;
+  }
+  ~PredecodeInFlight() {
+    g_predecodeInFlightMagic = 0;
+    g_predecodeInFlightInv = 0;
+  }
+  PredecodeInFlight(const PredecodeInFlight&) = delete;
+  PredecodeInFlight& operator=(const PredecodeInFlight&) = delete;
+};
 struct PrebuildInFlight {
   PrebuildInFlight() {
     if (g_prebuildInFlightDepth++ == 0) {
@@ -540,6 +572,12 @@ void checkPrebuildFuse() {
   }
   g_prebuildInFlightMagic = 0;
   g_prebuildInFlightInv = 0;
+  if (g_predecodeInFlightMagic == PREDECODE_INFLIGHT_MAGIC && g_predecodeInFlightInv == ~PREDECODE_INFLIGHT_MAGIC) {
+    g_predecodeDisabledThisBoot = true;  // v354
+    DiagLog::line("NEXTIMG disabled why=reset-during-predecode");
+  }
+  g_predecodeInFlightMagic = 0;
+  g_predecodeInFlightInv = 0;
 }
 }  // namespace
 
@@ -606,7 +644,7 @@ void EpubReaderActivity::emitBuildEnd(const char* why) {
     DiagLog::line(
         "BUILDPROF spine=%d pages=%u step=%lu rd=%lu xml=%lu cd=%lu el=%lu lay=%lu layCd=%lu adv=%lu proc=%lu "
         "ser=%lu img=%lu asdms=%lu words=%lu lays=%lu cds=%lu in=%lu cjkhit=%lu fetchn=%lu fetchms=%lu scanms=%lu "
-        "xchk=%lu xbad=%lu scandefer=%lu",
+        "xchk=%lu xbad=%lu scandefer=%lu brk=%lu vpl=%lu vzy=%lu",
         diagBuildSpine, pages, ms(Section::buildStepTotalUs), ms(bp.rdUs), ms(bp.xmlUs), ms(bp.cdUs), ms(bp.elUs),
         ms(bp.layUs), ms(bp.layCdUs), ms(bp.advUs), ms(bp.procUs), ms(bp.serUs), ms(bp.imgUs),
         ms(SdCardFont::advanceSdReadUs_), static_cast<unsigned long>(bp.words), static_cast<unsigned long>(bp.layCalls),
@@ -618,7 +656,8 @@ void EpubReaderActivity::emitBuildEnd(const char* why) {
         // xchk／xbad：頁面預載時核對快路徑的字數／不符（開機以來累計；xbad>0 會停用快路徑）
         static_cast<unsigned long>(SdCardFont::advanceCjkCrossChecks_),
         static_cast<unsigned long>(SdCardFont::advanceCjkCrossMismatch_),
-        static_cast<unsigned long>(SdCardFont::advanceScanDeferred_));  // v255：該掃但不在允許時機的次數
+        static_cast<unsigned long>(SdCardFont::advanceScanDeferred_),  // v255：該掃但不在允許時機的次數
+        ms(bp.brkUs), ms(bp.vplUs), ms(bp.vzyUs));                     // v357：lay 裡的斷行／直排規劃／直排注音換字
   }
 
   // v190：只在 done/full 時重繪——其餘 why 不保證記憶體已釋放。
@@ -663,6 +702,33 @@ void EpubReaderActivity::emitBuildEnd(const char* why) {
   }
 }
 
+// v351：固定版面頁上下置中（EPUB 固定版面的慣例：整頁縮到放得下、放在螢幕中間）的位移。
+//   排版從頂端往下排，圖左右本來就置中（ChapterHtmlSlimParser 的 xPos）；比例跟螢幕不同的圖
+//   （多數書的封面）下面會多一條白。只動畫的起點，版面快取不變；剛好等於螢幕大小的圖（名畫電子書的畫頁）位移是 0。
+//   用圖的上下緣算，不假設圖從 y=0 開始（前面可能有空段落）。元素不全是圖 → 0。
+//   v354：抽成函式 —— render() 與背景預解（predecodeNextImage）共用，抖色的相位才會一樣。
+static int fxlCenterDy(const Page& p, const int viewportHeight) {
+  if (p.elements.empty()) return 0;
+  int top = viewportHeight;
+  int bottom = 0;
+  for (const auto& el : p.elements) {
+    if (!el || el->getTag() != TAG_PageImage) return 0;
+    top = std::min(top, static_cast<int>(el->yPos));
+    bottom = std::max(bottom, el->yPos + static_cast<const PageImage&>(*el).getImageBlock().getHeight());
+  }
+  if (top >= 0 && bottom > top && bottom <= viewportHeight) return (viewportHeight - (bottom - top)) / 2 - top;
+  return 0;
+}
+
+// v350：某一章要用的版心。固定版面＝整個螢幕，一般版面＝文字版心（兩者都在最近一次 render() 算好）。
+//   ⚠️ 只給「下一章」用；目前這一章一律用 buildViewportWidth／Height（partial 延伸要跟已排的頁逐欄相同）。
+uint16_t EpubReaderActivity::viewportWidthFor(const int spine) const {
+  return epub && epub->isSpineFixedLayout(spine) ? fxlViewportWidth_ : textViewportWidth_;
+}
+uint16_t EpubReaderActivity::viewportHeightFor(const int spine) const {
+  return epub && epub->isSpineFixedLayout(spine) ? fxlViewportHeight_ : textViewportHeight_;
+}
+
 // ---------------------------------------------------------------------------------------------
 // v257：預排下一章（見 EpubReaderActivity.h 的 nextSection_ 註解）。三個函式都只在主任務 loop() 或持 RenderLock 的
 // render／onExit 呼叫；nextSection_ 的建立、建置、釋放一律在 RenderLock 內，與 render 的 !section 分支互斥。
@@ -670,6 +736,9 @@ void EpubReaderActivity::maybeStartNextChapterPrebuild() {
   if (g_prebuildDisabledThisBoot) return;
   if (!epub || !section || section->isBuilding() || section->isPartial() || nextSection_ || diagBuildActive) return;
   if (buildViewportWidth == 0 || footnoteDepth > 0) return;  // 註腳裡：「下一章」不是讀者要去的地方
+  if (textViewportWidth_ == 0 || textViewportHeight_ == 0 || fxlViewportWidth_ == 0 || fxlViewportHeight_ == 0) {
+    return;  // v350：下一章的版心要等第一次 render 算好
+  }
   const int nextSpine = currentSpineIndex + 1;
   if (nextSpine >= epub->getSpineItemsCount() || nextPrebuildSpine_ == nextSpine) return;
   const unsigned long now = millis();
@@ -699,7 +768,8 @@ void EpubReaderActivity::maybeStartNextChapterPrebuild() {
   nextPrebuildWaiting_ = false;
   nextPrebuildSpine_ = nextSpine;  // 從這裡起不論結果都算已嘗試，不重試
   const PrebuildInFlight inFlight;
-  const ReaderRenderSpec spec = SETTINGS.readerRenderSpec(buildViewportWidth, buildViewportHeight);
+  // v350：下一章用它自己的版心（固定版面＝整個螢幕），接手比對的 nextBuildSpec_ 才會跟那一章的 render 相同。
+  const ReaderRenderSpec spec = SETTINGS.readerRenderSpec(viewportWidthFor(nextSpine), viewportHeightFor(nextSpine));
   std::unique_ptr<Section> s(new (std::nothrow) Section(epub, nextSpine, renderer));
   if (!s) {
     DiagLog::line("NEXTBUILD skip spine=%d why=alloc", nextSpine);
@@ -939,6 +1009,12 @@ void EpubReaderActivity::loop() {
   // ⚠️ lib/Epub 不能反向依賴 src/util/DiagLog，所以是 lib 記、src 讀（分層規則）。
   // v249：讀寫都走 Breadcrumb.h 的跨 task 交接（lib 多在 render task 寫，這裡是 main loop）。
   DiagLog::crumb("IMGFAIL", ImageBlock::lastFailPath, sizeof(ImageBlock::lastFailPath));
+  // v350：記憶體類的解碼失敗 → 拍一次池子（每次開書最多一次；dumpPools 要走兩趟 heap walk，不能每次都拍）。
+  //   要回答的是「誰卡在 p2 中間」：v348 那一次缺的只有約 400 B，而那塊約 37KB 的東西沒有名字。
+  if (ImageBlock::memFailPending.exchange(false, std::memory_order_relaxed) && !imgFailPoolsDumped_) {
+    imgFailPoolsDumped_ = true;
+    DiagLog::dumpPools(1024, "imgfail");
+  }
   // v246 儀器：第一次解碼一張圖的時間分解（lib 記、這裡讀；同上的分層與先到先得）。
   DiagLog::crumb("IMGDEC", ImageBlock::lastDecodeWitness, sizeof(ImageBlock::lastDecodeWitness));
   // v151：ParsedText 守衛的拒絕紀錄 —— v150 的「索引失敗」零證據就是因為只寫 LOG_ERR。
@@ -948,6 +1024,7 @@ void EpubReaderActivity::loop() {
   // v194：nothrow 失敗出口的證人。沒有序列埠＝寫進 diag.log 否則就是丟掉。
   DiagLog::crumb("ALLOCFAIL", Page::lastAllocFail, sizeof(Page::lastAllocFail));
   DiagLog::crumb("ALLOCFAIL", HalStorage::lastAllocFail, sizeof(HalStorage::lastAllocFail));
+  DiagLog::crumb("X4DIFF", HalDisplay::lastForcedDiff, sizeof(HalDisplay::lastForcedDiff));  // v357 bench
   DiagLog::crumb("ALLOCFAIL", ditherLastAllocFail, sizeof(ditherLastAllocFail));
   if (Section::lastPoisonAvoidedSpine >= 0) {
     DiagLog::line("SECTPOISON avoided spine=%d", Section::lastPoisonAvoidedSpine);
@@ -1819,6 +1896,25 @@ void EpubReaderActivity::pageTurn(bool isForwardTurn) {
   requestUpdate();
 }
 
+namespace {
+uint32_t framebufferHash(const GfxRenderer& r);  // v354 的 fb=same 證人（定義在 predecodeNextImage 前面）
+
+// v356：收尾重疊的保險絲。起刷新時的 framebuffer 雜湊在收尾時對不上 → 這次開機不再重疊（照舊阻塞刷新）。
+bool g_asyncOverlapFused = false;
+
+// v356：這一頁上有沒有背景預解會去解的圖（同 predecodeNextImage
+// 挑候選的條件：沒快取、沒失敗過、不在抑制表、JPEG／PNG）。
+bool pageHasPredecodeCandidate(const Page& page) {
+  for (const auto& el : page.elements) {
+    if (el && el->getTag() == TAG_PageImage &&
+        static_cast<const PageImage&>(*el).getImageBlock().predecodeCandidate()) {
+      return true;
+    }
+  }
+  return false;
+}
+}  // namespace
+
 // TODO: Failure handling
 void EpubReaderActivity::render(RenderLock&& lock) {
   // v279（複查第一輪）：「第一頁畫完」**要在 render() 真的結束時才發佈**，而且用 RAII —— 這個函式
@@ -1830,6 +1926,15 @@ void EpubReaderActivity::render(RenderLock&& lock) {
     std::atomic<bool>& flag;
     ~FirstRenderPublisher() { flag.store(true, std::memory_order_relaxed); }
   } firstRenderPublisher{firstRenderDone_};
+  // v356：renderContents 可能留著一個非同步刷新（asyncRefreshPending_）。不論 render() 從哪裡離開都先收掉 ——
+  //   離開之後主任務就拿得到 RenderLock 去畫（彈窗等），而刷新收完之前 framebuffer 不能動。
+  //   正常路徑在收尾做完就收了（why=tail）；這裡收到的（why=exit）＝有一條路漏了，證人會露出來。
+  //   宣告在 FirstRenderPublisher 之後 → 先解構：先收刷新，才發佈「第一頁畫完」。
+  struct AsyncRefreshGuard {
+    EpubReaderActivity& self;
+    ~AsyncRefreshGuard() { self.finishAsyncRefresh("exit", -1, -1, -1); }
+  } asyncRefreshGuard{*this};
+  finishAsyncRefresh("stale", -1, -1, -1);  // codex：入口也先收（照理不會有；有的話 why=stale 會露出來）
 
   const uint32_t renderStartMs = millis();  // v243 EPLAT：在最前面取，才量得到排隊等鎖的時間
   zyStatsAtRender_ = zhuyin::swapStats();   // 注音（P2 I6）：ZYPAGE 的載入掉清單數從這裡起算
@@ -1915,18 +2020,43 @@ void EpubReaderActivity::render(RenderLock&& lock) {
   int orientedMarginTop, orientedMarginRight, orientedMarginBottom, orientedMarginLeft;
   renderer.getOrientedViewableTRBL(&orientedMarginTop, &orientedMarginRight, &orientedMarginBottom,
                                    &orientedMarginLeft);
-  orientedMarginTop += SETTINGS.screenMargin;
-  orientedMarginLeft += SETTINGS.screenMargin;
-  orientedMarginRight += SETTINGS.screenMargin;
+  // v351：固定版面的畫布＝整個螢幕，不加使用者的頁邊、不留狀態列。
+  //   v350 扣了那圈 viewable 邊（直向上 9、其餘 3）→ X3 的 528×792 畫頁被縮成 520×780：不是一比一，
+  //   nativeLevels 不成立、灰色照樣抖色（diag350 的 IMGDEC `P 528x792>520x780`）。那圈邊是【文字】的安全距離，
+  //   不是面板看不到的像素：待機桌布（SleepActivity）與原廠的 XTC 頁都畫在 (0,0)、整個螢幕。
+  fxlViewportWidth_ = static_cast<uint16_t>(renderer.getScreenWidth());
+  fxlViewportHeight_ = static_cast<uint16_t>(renderer.getScreenHeight());
+  curSpineFxl_ = epub->isSpineFixedLayout(currentSpineIndex);
 
   const uint8_t statusBarHeight = UITheme::getInstance().getStatusBarHeight();
-
+  // 文字版心（一般版面）：永遠算出來 —— 預排下一章要用（下一章可能是一般版面，而這一章是固定版面）。
+  //   算式跟 v349 以前逐項相同（扣 viewable 邊、再扣頁邊與狀態列）：改了＝每一本書的每一章都重排。
+  const int viewableWidth = renderer.getScreenWidth() - orientedMarginLeft - orientedMarginRight;
+  const int viewableHeight = renderer.getScreenHeight() - orientedMarginTop - orientedMarginBottom;
+  textViewportWidth_ = static_cast<uint16_t>(viewableWidth - 2 * SETTINGS.screenMargin);
   // v288：這裡原本還有一條分支，在「沒有狀態列／只有進度條」且自動翻頁開著時，
   //   多留一條狀態列的高度給那個指示器。自動翻頁移除之後那條分支永遠不成立，一併拿掉。
-  orientedMarginBottom += std::max(SETTINGS.screenMargin, statusBarHeight);
+  textViewportHeight_ =
+      static_cast<uint16_t>(viewableHeight - SETTINGS.screenMargin - std::max(SETTINGS.screenMargin, statusBarHeight));
+  if (curSpineFxl_) {
+    orientedMarginTop = 0;
+    orientedMarginRight = 0;
+    orientedMarginBottom = 0;
+    orientedMarginLeft = 0;
+  } else {
+    orientedMarginTop += SETTINGS.screenMargin;
+    orientedMarginLeft += SETTINGS.screenMargin;
+    orientedMarginRight += SETTINGS.screenMargin;
+    orientedMarginBottom += std::max(SETTINGS.screenMargin, statusBarHeight);
+  }
 
-  const uint16_t viewportWidth = renderer.getScreenWidth() - orientedMarginLeft - orientedMarginRight;
-  const uint16_t viewportHeight = renderer.getScreenHeight() - orientedMarginTop - orientedMarginBottom;
+  const uint16_t viewportWidth = curSpineFxl_ ? fxlViewportWidth_ : textViewportWidth_;
+  const uint16_t viewportHeight = curSpineFxl_ ? fxlViewportHeight_ : textViewportHeight_;
+  if (curSpineFxl_ && fxlLoggedSpine_ != currentSpineIndex) {
+    fxlLoggedSpine_ = currentSpineIndex;  // 證人：進到固定版面的章（同一章只印一次）
+    DiagLog::line("FXL spine=%d vp=%ux%u", currentSpineIndex, static_cast<unsigned>(viewportWidth),
+                  static_cast<unsigned>(viewportHeight));
+  }
   // Capture for loop()'s lazy partial-extension start (must match this render's layout params).
   buildViewportWidth = viewportWidth;
   buildViewportHeight = viewportHeight;
@@ -2419,6 +2549,11 @@ void EpubReaderActivity::render(RenderLock&& lock) {
 
   updateBookmarkFlag();
 
+  // v356：刷新是非同步起的（asyncRefreshPending_）→ 下面 renderContents 之後，趁刷新在跑先載下一頁的字；
+  //   做成了就不必在最後再做一次（連同背景預解：那一頁沒有要預解的圖才會做成，見 prefetchNextPage 的 duringRefresh）。
+  bool nextPagePreparedEarly = false;
+  uint32_t overlapDoneMs = 0;  // 非同步刷新收完的時刻（EPLAT lat 的終點；0＝這一頁不是非同步刷新）
+
   {
     // Unified page read: the in-progress build's in-RAM table if it has reached the page,
     // otherwise the on-disk file (finalized section, or a partial from a previous session).
@@ -2466,6 +2601,30 @@ void EpubReaderActivity::render(RenderLock&& lock) {
     }
     pageLoadRetryCount = 0;  // Reset the retry counter once a page loads cleanly
 
+    // v350：固定版面只給「整頁只有圖」的頁（複查：EPUB 的固定版面本來是一套座標系統，這一版只做整頁圖這一種）。
+    //   這一章排完（不在建置、不是 partial）卻不止一頁、或這一頁有圖以外的東西（掃描書的文字層、純文字的固定頁）→
+    //   退回一般版面：從清單拿掉並寫回 layout.bin（之後開書不必再試）、丟掉這份版面、下一輪用文字版心重排。
+    //   只在排完之後判：半途的 partial 看不出全貌；固定版面的 XHTML 很小，實測第一步就排完（BUILD end why=sync）。
+    if (curSpineFxl_ && !section->isBuilding() && !section->isPartial()) {
+      const bool imageOnly =
+          section->pageCount == 1 && !p->elements.empty() &&
+          std::all_of(p->elements.begin(), p->elements.end(),
+                      [](const std::shared_ptr<PageElement>& el) { return el && el->getTag() == TAG_PageImage; });
+      if (!imageOnly) {
+        DiagLog::line("FXL demote spine=%d pages=%u els=%u", currentSpineIndex,
+                      static_cast<unsigned>(section->pageCount), static_cast<unsigned>(p->elements.size()));
+        epub->demoteFixedLayoutSpine(currentSpineIndex);
+        curSpineFxl_ = false;
+        nextPageNumber = 0;  // 重排之後頁數不同，舊頁碼沒有意義；這一章從頭顯示
+        section.reset();
+        requestUpdate();
+        showPendingSyncSaveError();
+        return;
+      }
+    }
+    // v351：固定版面頁上下置中（見 fxlCenterDy）。固定版面的四個頁邊在上面已經設成 0。
+    if (curSpineFxl_) orientedMarginTop = fxlCenterDy(*p, fxlViewportHeight_);
+
     // Cache this page's content offset (read alongside the page, no extra file open) so
     // saveProgress and addBookmark can use it without reopening section.bin.
     currentPageVisibleOffset = p->visibleTextOffset;
@@ -2508,21 +2667,44 @@ void EpubReaderActivity::render(RenderLock&& lock) {
                     static_cast<unsigned long>(now.renderSkipped - zyBeforeDraw.renderSkipped),
                     static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr)));
     }
+    // 這一頁自己的字型統計，在收尾的預取（它會累加進同一組統計）之前取。
+    const SdCardFont* pageFont = sdFontSystem.currentReaderFont();
+    const unsigned pageAllocFails = pageFont ? static_cast<unsigned>(pageFont->getStats().bitmapAllocFailures) : 0u;
+    const unsigned pageRescues = pageFont ? static_cast<unsigned>(pageFont->getStats().bitmapExactRescues) : 0u;
+    // v356：刷新是非同步起的（見 renderContents 的 tailOverlap）→ 趁面板在刷新，先載下一頁的字，做完才等刷新結束。
+    //   刷新期間只做唯讀的事（SD 讀取）：存進度（NVS／progress.bin）和背景預解（寫 .pxc）留到刷新之後 ——
+    //   進度要在這一頁真的上完面板之後才算數，寫入也不跟面板的高壓波形疊在一起（codex 複查）。
+    //   framebuffer 在刷新收完時才被驅動讀去同步控制器，這段期間一個位元組都不能動：預取的掃描本來就不畫
+    //   （isScanning 守門），再加一層丟棄模式（DiscardScope：所有像素寫入都落空）當結構性保證；
+    //   起刷新時記下的雜湊在 finishAsyncRefresh 裡驗（codex 第二輪：驗證要屬於收尾本身，每一條收的路都驗）。
+    if (asyncRefreshPending_) {
+      const uint32_t tTail0 = millis();
+      {
+        const GfxRenderer::DiscardScope discard(renderer);
+        prefetchNextPage(SETTINGS.getReaderFontId(), orientedMarginTop, orientedMarginLeft, lastRenderedPage_,
+                         /*abortOnInput=*/false, /*duringRefresh=*/true);
+      }
+      const int busyAfterTail = renderer.refreshBusy() ? 1 : 0;  // 預取做完的當下，面板還在不在刷
+      nextPagePreparedEarly = lastPrefetchPrepared_;
+      finishAsyncRefresh("tail", static_cast<int32_t>(millis() - tTail0), busyAfterTail, diagPfGate);
+      if (asyncFbChanged_) nextPagePreparedEarly = false;  // 保守：刷新後照舊預解＋預取
+      overlapDoneMs = asyncDoneMs_;
+    }
     // v243：放在 renderContents【之後】而不是它裡面的 SEG 行 —— renderContents 有好幾條繪製分支
     // （tiled／tiled-async／fallback），各印各的 SEG；裝進其中一條就是賭那條會跑（CLAUDE.md B-22）。
     // 這裡是所有分支的共同出口。lat 含灰階那幾趟（抗鋸齒關著時就是黑白上面板的時刻）。
+    // v356：非同步刷新的頁，lat 的終點是刷新收完（asyncDoneMs_）：跟以前一樣是「按鍵 → 面板刷完、控制器基準也同步好」
+    //   （X3 含刷新後同步 DTM1、X4 含重寫 BW＋RED；以前阻塞的 display() 也含這些）。預取比刷新長（TAILOVL
+    //   busy=0）時是上限。
     if (pressMs != 0 && static_cast<uint32_t>(renderStartMs - pressMs) < 10000) {  // 無號減法跨得過繞回
-      const uint32_t doneMs = millis();
-      const SdCardFont* font = sdFontSystem.currentReaderFont();
+      const uint32_t doneMs = overlapDoneMs != 0 ? overlapDoneMs : millis();
       // v261：sec／ext／mid／load 見上；ptail＝【上一次】render 在 renderContents 之後的尾段（存進度＋預取等），
-      //   它會算進這一次的 wait（按鍵排在它後面）。
+      //   它會算進這一次的 wait（按鍵排在它後面）。v356 起非同步刷新的頁，預取在刷新期間做完，ptail 只剩存進度等。
       DiagLog::line(
           "EPLAT wait=%u lat=%u render=%u afail=%u rescue=%u sec=%u ext=%u steps=%u pages=%d mid=%u load=%u ptail=%d "
           "dlog=%u nvs=%d",
           static_cast<unsigned>(renderStartMs - pressMs), static_cast<unsigned>(doneMs - pressMs),
-          static_cast<unsigned>(doneMs - start),
-          font ? static_cast<unsigned>(font->getStats().bitmapAllocFailures) : 0u,
-          font ? static_cast<unsigned>(font->getStats().bitmapExactRescues) : 0u,
+          static_cast<unsigned>(doneMs - start), pageAllocFails, pageRescues,
           static_cast<unsigned>(tPhaseSection - renderStartMs), static_cast<unsigned>(tPhaseExt - tPhaseSection),
           static_cast<unsigned>(Section::buildStepCount - stepsBeforeExt),
           static_cast<int>(section ? section->pageCount : 0) - pagesBeforeExt,
@@ -2590,10 +2772,65 @@ void EpubReaderActivity::render(RenderLock&& lock) {
   // 使用者正在讀 —— 把下一頁的字先讀進來，花的是 dwell 時間不是翻頁時間。
   // 仍持 RenderLock：loop() 的背景重排與自動翻頁都用 RenderLock::peek() 讓路；
   // 按鍵處理不碰鎖，中止訊號（isRenderPending）進得來（本樹 FCM 的中止粒度是字重桶之間）。
-  prefetchNextPage(SETTINGS.getReaderFontId(), orientedMarginTop, orientedMarginLeft, lastRenderedPage_);
+  // v354：先把下一頁的圖解好（字型預取之前：這一頁的保留字型快取本來就要被預取換掉，解圖時要放掉它不多付代價）。
+  //   被按鍵或新的畫頁請求中止時，字型預取照舊跑（翻到下一頁時字是熱的，跟 v353 以前一樣）。
+  // v356：刷新期間已經預取成功 ＝ 下一頁沒有要預解的圖，兩件事都不必再做。
+  if (nextPagePreparedEarly) {
+    noteNextImgSkip(NextImgSkip::Early, lastRenderedSpine_, lastRenderedPage_);  // v360：刷新期間已預取完（見上）
+  } else {
+    predecodeNextImage();
+    prefetchNextPage(SETTINGS.getReaderFontId(), orientedMarginTop, orientedMarginLeft, lastRenderedPage_);
+  }
   if (renderTailStarted)
     lastRenderTailMs_ = static_cast<int32_t>(millis() - renderTailStartMs);  // v261：下一次 EPLAT 的 ptail=
   lastRenderDlogMs_ = DiagLog::writeMsTotal() - dlogStart;                   // v329：下一次 EPLAT 的 dlog=
+}
+
+// v356：收掉 renderContents 起的非同步刷新：先驗 framebuffer 還是起刷新時那一張，再等面板刷新結束
+//   （X3／X4 UltraChip 的 displayFinish 在這裡把 OLD 平面同步成 framebuffer），X4 SSD1677 再重寫 BW＋RED；然後印證人。
+//   沒有待收的刷新就什麼都不做（入口與 RAII 那兩次通常走這條）。
+//   framebuffer 變了（照理不可能：丟棄模式＋掃描守門）或等待逾時 ＝ 控制器的基準不可信 → 不補寫平面、要求下一次刷新
+//   走清底（X4 SSD1677 的清底重寫兩格、是絕對的；X3 沒有不看 OLD 平面的絕對刷新，只能盡力 —— codex 第二、三輪），
+//   這次開機停用重疊（之後照舊阻塞刷新）。
+//   ⚠️ X3／X4 UltraChip 的 displayFinish（SDK）一定會把 OLD 平面同步成 framebuffer，CHANGED 時也是（codex 第四輪）。
+//   刻意不繞過：不同步的話 OLD 平面留著上一頁（整頁都不對），同步進去的是「只有被動到的那一小塊不對」的畫面 ——
+//   沒有正確答案時，這是比較不壞的一個。等待逾時後下一次刷新可能撞上還在忙的控制器，是 SDK 阻塞刷新本來就有的行為，
+//   這一版不改 SDK。
+//   證人 TAILOVL：why＝誰收的（tail 正常；exit／stale＝有一條路漏了）；mode＝要求的刷新（F 快速／H 清底），
+//   bank＝驅動實際用的（1 清底 GC／HALF、2 快速、3 scrub）；issue＝起刷新花的毫秒（X3 送 DTM2、X4 送 BW RAM）；
+//   tail＝刷新期間的預取；epg＝那次預取的出口（pg 碼，0＝做成、12＝下一頁有要預解的圖，留給刷新之後）；
+//   busy＝預取做完的當下面板還在刷（1＝整段藏在刷新裡；0＝預取比刷新長，refresh= 與 EPLAT 的 lat= 都是上限）；
+//   fin＝剩下要等的（含 X3 刷新後同步 DTM1；接近 30000＝等待逾時）；refresh＝開始起刷新 → 收完；
+//   resync＝X4 SSD1677 重寫 BW＋RED 的毫秒（-＝不用或不可信而沒寫）。X3 的 refresh 含 DTM1 同步、X4 的不含 resync ——
+//   兩台不能直接比，跟以前 SEG 的 display= 比的話 X4 要加 resync。fb＝same／CHANGED；tmo＝等待逾時；fuse＝重疊已停用。
+void EpubReaderActivity::finishAsyncRefresh(const char* why, const int32_t tailMs, const int busyAfterTail,
+                                            const int earlyPfGate) {
+  if (!asyncRefreshPending_) return;
+  asyncRefreshPending_ = false;
+  const bool busy = busyAfterTail >= 0 ? busyAfterTail != 0 : renderer.refreshBusy();
+  asyncFbChanged_ = framebufferHash(renderer) != asyncSeg_.fbHash;  // 還在刷新期間算（驅動收尾才讀 framebuffer）
+  const uint32_t tWait0 = millis();
+  renderer.waitRefreshComplete();
+  const uint32_t tWaited = millis();
+  // SDK 的等待逾時是 30 秒、而且不回報（codex）：等了這麼久＝控制器可能還在忙 —— 不能照常補寫平面。
+  const bool timedOut = tWaited - tWait0 >= 29000;
+  if (asyncFbChanged_ || timedOut) {
+    g_asyncOverlapFused = true;
+    pagesUntilFullRefresh = 1;
+  }
+  // 基準不可信（畫面記憶體變了、或逾時）→ 不寫任何平面，改要求下一次刷新（不論哪個畫面）走清底。
+  const bool resynced = renderer.resyncAfterAsyncRefresh(!asyncFbChanged_ && !timedOut);
+  asyncDoneMs_ = millis();
+  char resyncBuf[12] = "-";
+  if (resynced) snprintf(resyncBuf, sizeof(resyncBuf), "%lu", static_cast<unsigned long>(asyncDoneMs_ - tWaited));
+  DiagLog::line(
+      "TAILOVL why=%s mode=%c bank=%u issue=%lu tail=%ld epg=%d busy=%u fin=%lu refresh=%lu resync=%s fb=%s tmo=%u "
+      "fuse=%u",
+      why, asyncSeg_.mode, static_cast<unsigned>(renderer.lastRefreshBank()),
+      static_cast<unsigned long>(asyncSeg_.tIssued - asyncSeg_.tBwRender), static_cast<long>(tailMs), earlyPfGate,
+      busy ? 1u : 0u, static_cast<unsigned long>(tWaited - tWait0),
+      static_cast<unsigned long>(tWaited - asyncSeg_.tBwRender), resyncBuf, asyncFbChanged_ ? "CHANGED" : "same",
+      timedOut ? 1u : 0u, g_asyncOverlapFused ? 1u : 0u);
 }
 
 // v110/v164：預取下一頁的字型 mini 資料到【同一塊】快取，不新增任何常駐記憶體。
@@ -2601,7 +2838,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
 // renderContents 內完成，狀態列與彈窗走 UI 字型。中止＝乾淨放棄：快取清空＋身分失效
 // ⇒ 下一次 render 走冷路徑（＝無預取行為）。
 void EpubReaderActivity::prefetchNextPage(const int fontId, const int marginTop, const int marginLeft,
-                                          const int basePage, const bool abortOnInput) {
+                                          const int basePage, const bool abortOnInput, const bool duringRefresh) {
   // 先歸零：pf= 的語意是「即將顯示的這一頁，預取花了多久」。任何一道閘門擋下來都算
   // 「沒有預取」，留著上一次的數字會讓 warm=0 旁邊掛著漂亮的 pf=280。
   // 直排：繪製端的旗標必須與這一頁【被排版時】的軸向一致，否則轉置編碼會被當成
@@ -2609,6 +2846,7 @@ void EpubReaderActivity::prefetchNextPage(const int fontId, const int marginTop,
   // 兩者同源於 SETTINGS.documentIsVertical() —— 這是 readerRenderSpec() 用的同一個函式，
   // 而檔頭比對保證用別的軸向排過的快取會被丟掉重排，所以不會不同步。
   const GfxRenderer::VerticalScope verticalScope(renderer, SETTINGS.documentIsVertical());
+  lastPrefetchPrepared_ = false;  // v356：只有真的採用了下一頁的身分才設 true（控制流程用它，不用診斷碼 pg=）
   diagPrefetchMs = 0;
   diagPfMaxKb = static_cast<uint16_t>(heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT) / 1024);
   diagPfRetKb = 0;
@@ -2650,7 +2888,7 @@ void EpubReaderActivity::prefetchNextPage(const int fontId, const int marginTop,
   // 章末：下一頁在另一個 section，換章一律 section.reset() → 冷路徑。
   // v257：下一章已經預排好（完整快取）時，把它的第一頁的字先讀進來 —— 換章的 render 以 (spine+1, 第 0 頁) 的身分命中。
   if (next >= static_cast<int>(section->pageCount)) {
-    if (prefetchIntoNextChapter(fontId, marginTop, marginLeft, abortOnInput)) return;
+    if (prefetchIntoNextChapter(fontId, marginTop, marginLeft, abortOnInput, duringRefresh)) return;
     diagPfGate = 2;
     return;
   }
@@ -2721,6 +2959,12 @@ void EpubReaderActivity::prefetchNextPage(const int fontId, const int marginTop,
       diagPfGate = 8;
       return;
     }
+    // v356：刷新期間（見 render()）只做唯讀的事。下一頁有要背景預解的圖 → 這裡不預取，留給刷新之後照 v354 的順序
+    //   （先解圖、再預取）：預解會放掉保留中的字型快取，先預取就白做一趟、下一頁還是冷的。
+    if (duringRefresh && pageHasPredecodeCandidate(*page)) {
+      diagPfGate = 12;
+      return;
+    }
     scope.setRetainCacheOnExit(true);
     // scan 模式：drawText 只 recordText，framebuffer 一個位元組都不會動。
     page->render(renderer, fontId, marginLeft, marginTop);
@@ -2733,6 +2977,7 @@ void EpubReaderActivity::prefetchNextPage(const int fontId, const int marginTop,
   if (completed) {
     // 用進場時的快照，不重讀 currentPage 也不重讀 SETTINGS。
     fcm->adoptWarmIdentity(target);
+    lastPrefetchPrepared_ = true;
     diagPrefetchMs = static_cast<unsigned>(millis() - t0);
     // v313 證人（採用時）：q=採用序號 base/tgt=預取的基準與目標頁 cur=此刻的 currentPage
     //   id=採用的身分 mut=快取異動 epoch adv=em 探針 cp:路徑:12.4 原始值:px。
@@ -2753,10 +2998,11 @@ void EpubReaderActivity::prefetchNextPage(const int fontId, const int marginTop,
 }
 
 bool EpubReaderActivity::prefetchIntoNextChapter(const int fontId, const int marginTop, const int marginLeft,
-                                                 const bool abortOnInput) {
+                                                 const bool abortOnInput, const bool duringRefresh) {
   const int nextSpine = currentSpineIndex + 1;
   if (g_prebuildDisabledThisBoot || !epub || nextSpine >= epub->getSpineItemsCount() ||
-      nextPrebuiltReadySpine_ != nextSpine || nextSection_ || buildViewportWidth == 0 || footnoteDepth > 0) {
+      nextPrebuiltReadySpine_ != nextSpine || nextSection_ || buildViewportWidth == 0 || footnoteDepth > 0 ||
+      textViewportWidth_ == 0 || textViewportHeight_ == 0 || fxlViewportWidth_ == 0 || fxlViewportHeight_ == 0) {
     return false;
   }
   auto* fcm = renderer.getFontCacheManager();
@@ -2766,6 +3012,9 @@ bool EpubReaderActivity::prefetchIntoNextChapter(const int fontId, const int mar
   // 身分：跟換章那次 render 的 buildWarmIdentity(0) 同一組欄位，只是 spine 換成下一章。
   WarmIdentity target = buildWarmIdentity(0);
   target.spineIndex = nextSpine;
+  // v350：那一次 render 的版心是下一章自己的（固定版面／一般版面可能跟這一章不同）。
+  target.viewportWidth = viewportWidthFor(nextSpine);
+  target.viewportHeight = viewportHeightFor(nextSpine);
   bool completed = false;
   {
     auto scope = fcm->createPrewarmScope();  // ctor 清掉剛畫完那一頁的快取（同一般預取）
@@ -2780,7 +3029,8 @@ bool EpubReaderActivity::prefetchIntoNextChapter(const int fontId, const int mar
     // 暫時的 Section 只用來讀快取裡的第 0 頁（header＋LUT＋一頁），不建置。
     const PrebuildInFlight inFlight;  // 同一個保險絲：這條也是「沒人叫它就自己跑」的新路徑
     std::unique_ptr<Section> next(new (std::nothrow) Section(epub, nextSpine, renderer));
-    if (!next || !next->loadSectionFile(SETTINGS.readerRenderSpec(buildViewportWidth, buildViewportHeight)) ||
+    if (!next ||
+        !next->loadSectionFile(SETTINGS.readerRenderSpec(viewportWidthFor(nextSpine), viewportHeightFor(nextSpine))) ||
         next->isPartial()) {
       diagPfGate = 11;
       nextPrebuiltReadySpine_ = -1;  // 快取不在或不再相符（例如設定剛改）：不再嘗試
@@ -2789,6 +3039,10 @@ bool EpubReaderActivity::prefetchIntoNextChapter(const int fontId, const int mar
     auto page = next->loadPage(0);
     if (!page) {
       diagPfGate = 8;
+      return true;
+    }
+    if (duringRefresh && pageHasPredecodeCandidate(*page)) {  // v356：同 prefetchNextPage
+      diagPfGate = 12;
       return true;
     }
     scope.setRetainCacheOnExit(true);
@@ -2800,6 +3054,7 @@ bool EpubReaderActivity::prefetchIntoNextChapter(const int fontId, const int mar
   diagPfGate = completed ? 0 : 9;
   if (completed) {
     fcm->adoptWarmIdentity(target);
+    lastPrefetchPrepared_ = true;
     diagPrefetchMs = static_cast<unsigned>(millis() - t0);
   } else {
     fcm->clearCache();
@@ -2808,6 +3063,210 @@ bool EpubReaderActivity::prefetchIntoNextChapter(const int fontId, const int mar
                 static_cast<unsigned long>(millis() - t0), static_cast<unsigned>(fcm->warmAdoptSeq()),
                 static_cast<unsigned>(fcm->warmMutEpoch()));  // v313 證人：跨章預取的採用序號
   return true;
+}
+
+void EpubReaderActivity::pageDrawOrigin(const int spine, const Page& page, int& x0, int& y0) const {
+  if (epub && epub->isSpineFixedLayout(spine)) {
+    x0 = 0;  // 固定版面：畫布＝整個螢幕（v351），上下置中
+    y0 = fxlCenterDy(page, fxlViewportHeight_);
+    return;
+  }
+  int top, right, bottom, left;
+  renderer.getOrientedViewableTRBL(&top, &right, &bottom, &left);
+  x0 = left + SETTINGS.screenMargin;  // 一般版面：viewable 邊＋頁邊（同 render()）
+  y0 = top + SETTINGS.screenMargin;
+}
+
+namespace {
+// v354 證人：背景預解前後 framebuffer 有沒有被動到（cacheOnly 的實機證明，不靠推理）。FNV-1a，52 KB 約 1–2 ms。
+uint32_t framebufferHash(const GfxRenderer& r) {
+  const uint8_t* fb = r.getFrameBuffer();
+  if (!fb) return 0;
+  const size_t n = static_cast<size_t>(r.getDisplayWidthBytes()) * static_cast<size_t>(r.getDisplayHeight());
+  uint32_t h = 2166136261u;
+  for (size_t i = 0; i < n; i++) {
+    h ^= fb[i];
+    h *= 16777619u;
+  }
+  return h;
+}
+// 中止當下記下原因（codex：解碼結束後再讀 isRenderPending 會有時序誤差，旗標可能已被 render task 清掉）。
+bool g_predecodeAbortByRender = false;
+bool predecodeRenderPending() {
+  if (!activityManager.isRenderPending()) return false;
+  g_predecodeAbortByRender = true;
+  return true;
+}
+}  // namespace
+
+// v354：背景預解（設計與兩輪 codex 設計審查：工作區 work/v354-predecode/DESIGN.md）。
+//   畫完這一頁、送上面板之後，使用者在讀 —— 把「往下翻一頁會看到的那一頁」上第一張還沒解的圖解成 .pxc，
+//   翻到時就走快取命中（不出文字版、不出圖示、不解碼）。
+//   跑在 render task（握著 RenderLock，跟「翻到才解」同一條路、同一把鎖）。
+//   中止：v260 的按鍵序號（主任務照常輪詢），加上「有新的畫頁請求」（isRenderPending，不一定來自按鍵）。
+//   只寫快取、不動 framebuffer（ImageBlock::predecode → RenderConfig::cacheOnly），證人 fb=same。
+// v360：預解沒走到記憶體閘門的原因。v359 X3 一整段畫冊 0 行 NEXTIMG —— 前面十幾個 return 都不記，分不出卡在哪一個
+//   （教訓 22：儀器要先證明會被執行）。同一章、同一個原因只記一次；「下一頁沒有圖」（文字頁的常態）不記。
+void EpubReaderActivity::noteNextImgSkip(const NextImgSkip why, const int spine, const int page) {
+  static constexpr const char* kNames[] = {"disabled", "setting",  "popup",    "building",   "heal",
+                                           "input",    "heap24",   "partial",  "noprebuild", "notready",
+                                           "nextsec",  "viewport", "nextload", "nopage",     "early"};
+  static_assert(sizeof(kNames) / sizeof(kNames[0]) == static_cast<size_t>(NextImgSkip::Count), "NEXTIMG names");
+  if (spine != nextImgSkipSpine_) {
+    nextImgSkipSpine_ = spine;
+    nextImgSkipMask_ = 0;
+  }
+  const uint16_t bit = static_cast<uint16_t>(1u << static_cast<unsigned>(why));
+  if (nextImgSkipMask_ & bit) return;
+  nextImgSkipMask_ |= bit;
+  DiagLog::line("NEXTIMG skip why=%s spine=%d page=%d", kNames[static_cast<unsigned>(why)], spine, page);
+}
+
+void EpubReaderActivity::predecodeNextImage() {
+  const int spine = lastRenderedSpine_;  // renderContents 開頭的快照（教訓 24）
+  const int page = lastRenderedPage_;
+  const uint32_t seq = lastRenderInputSeq_;
+  if (!epub || !section || spine < 0 || page < 0) return;
+  if (g_predecodeDisabledThisBoot) return noteNextImgSkip(NextImgSkip::Disabled, spine, page);
+  if (SETTINGS.imageRendering != CrossPointSettings::IMAGES_DISPLAY || footnoteDepth > 0) {
+    return noteNextImgSkip(NextImgSkip::Setting, spine, page);
+  }
+  // 彈窗還在畫面上：關閉時重畫的是【同一頁】，字型預取為此刻意不動保留的快取 —— 預解也不能去放掉它（codex）。
+  if (showBookmarkMessage || showDictionaryMessage) return noteNextImgSkip(NextImgSkip::Popup, spine, page);
+  // 背景排版的爆發期、下一章預排中：記憶體壓力最大的視窗，不多做（硬限制 6）。
+  //   預排的條件跟字型預取（prefetchNextPage）逐字相同：讀者翻頁之後預排暫停 2 秒，那段期間可以做。
+  if (buildBurstActive() || (nextSection_ && nextSection_->isBuilding() && !nextBuildTurnSinceTick_)) {
+    return noteNextImgSkip(NextImgSkip::Building, spine, page);
+  }
+  // 目前這一頁自己還有圖要補（延後解碼的補圖、失敗圖的癒合）→ 那個優先，不搶。
+  if (deferredDecodePage_ >= 0 || imageHealPage_ >= 0) return noteNextImgSkip(NextImgSkip::Heal, spine, page);
+  // 使用者在這一頁畫的時候就按了鍵，或已經有下一次畫頁在排隊 → 不做。
+  if (ImageToFramebufferDecoder::inputSeqChangedSince(seq) || activityManager.isRenderPending()) {
+    return noteNextImgSkip(NextImgSkip::Input, spine, page);
+  }
+  // 第一道記憶體地板：在建任何東西（Page、跨章的暫時 Section）之前。
+  if (ESP.getMaxAllocHeap() < 24 * 1024) return noteNextImgSkip(NextImgSkip::Heap24, spine, page);
+
+  const PredecodeInFlight inFlight;  // 保險絲：這段期間重開 → 下次進閱讀器停用預解
+  const unsigned long t0 = millis();
+  std::unique_ptr<Section> nextChapter;  // 跨章時暫時載入的下一章（只讀快取，不建置）
+  std::unique_ptr<Page> target;
+  int targetSpine = spine;
+  int targetPage = page + 1;
+  if (targetPage < static_cast<int>(section->pageCount)) {
+    // 同一章的下一頁：要已經排好（partial 的章只到 builtPageCount）。
+    if (section->isPartial() && targetPage >= static_cast<int>(section->builtPageCount())) {
+      return noteNextImgSkip(NextImgSkip::Partial, spine, page);
+    }
+    target = section->loadPage(targetPage);
+  } else {
+    // 這一章最後一頁 → 下一章第 0 頁：跟跨章字型預取（prefetchIntoNextChapter）同一套閘門。
+    const int nextSpine = spine + 1;
+    if (nextSpine >= epub->getSpineItemsCount()) return;  // 最後一章
+    if (g_prebuildDisabledThisBoot) return noteNextImgSkip(NextImgSkip::NoPrebuild, spine, page);
+    if (nextPrebuiltReadySpine_ != nextSpine) return noteNextImgSkip(NextImgSkip::NotReady, spine, page);
+    if (nextSection_) return noteNextImgSkip(NextImgSkip::NextSec, spine, page);
+    if (buildViewportWidth == 0 || textViewportWidth_ == 0 || textViewportHeight_ == 0 || fxlViewportWidth_ == 0 ||
+        fxlViewportHeight_ == 0) {
+      return noteNextImgSkip(NextImgSkip::Viewport, spine, page);
+    }
+    nextChapter.reset(new (std::nothrow) Section(epub, nextSpine, renderer));
+    if (!nextChapter ||
+        !nextChapter->loadSectionFile(
+            SETTINGS.readerRenderSpec(viewportWidthFor(nextSpine), viewportHeightFor(nextSpine))) ||
+        nextChapter->isPartial()) {
+      return noteNextImgSkip(NextImgSkip::NextLoad, spine, page);
+    }
+    target = nextChapter->loadPage(0);
+    targetSpine = nextSpine;
+    targetPage = 0;
+  }
+  if (!target) return noteNextImgSkip(NextImgSkip::NoPage, spine, page);
+
+  // 頁上第一張「值得預解」的圖（沒快取、沒失敗過、不在抑制表、JPEG／PNG；GIF 跳過繼續找）。
+  const PageImage* candidate = nullptr;
+  for (const auto& el : target->elements) {
+    if (!el || el->getTag() != TAG_PageImage) continue;
+    const auto& img = static_cast<const PageImage&>(*el);
+    if (img.getImageBlock().predecodeCandidate()) {
+      candidate = &img;
+      break;
+    }
+  }
+  if (!candidate) return;  // 下一頁沒有要解的圖（一般文字頁都走這裡，零成本）
+
+  // 位置跟翻到時的 render 一樣（抖色相位看螢幕座標）。
+  int x0 = 0, y0 = 0;
+  pageDrawOrigin(targetSpine, *target, x0, y0);
+  const ImageBlock& block = candidate->getImageBlock();
+  const int x = x0 + candidate->xPos;
+  const int y = y0 + candidate->yPos;
+  if (x < 0 || y < 0 || x + block.getWidth() > renderer.getScreenWidth() ||
+      y + block.getHeight() > renderer.getScreenHeight()) {
+    return;
+  }
+
+  // 第二道記憶體閘門：照解碼器【真正需要】的量 —— PNG 自己檢查 free ≥ 60 KB（MIN_FREE_HEAP_FOR_PNG）、
+  //   最大的一塊是 zlib 視窗 32,768 B（v358 起跟約 7 KB 的狀態分開配；之前兩者合成一塊 39,896）；JPEG 物件約 20 KB；
+  //   抽圖的 zip 視窗同樣 32 KB。解碼器的每個配置都有檢查、失敗就乾淨放棄（transient，不 abort），所以這道閘只是
+  //   「別白試」：最大一塊要放得下視窗（視窗是解碼器第一個大配置，之前只有路徑字串之類的小配置）。
+  //   不夠就放掉這一頁的保留字型快取 —— 它本來就要被接下來的字型預取換掉（預取的 scope 一開始就清）—— 再量一次；
+  //   還不夠就放棄。
+  //   v355：v354 用的是 render 解碼「要不要先紓解」的門檻（76／48 KB），不是解碼器的需求 —— diag354（X3）唯一一次
+  //   預解就卡在 `free=86876 max=47092`（差 2 KB），而同一張圖翻到時照樣解得開。
+  //   v359：getMaxAllocHeap() 回報的就是「現在配得到的最大請求」—— IDF 把最大那塊往下取到 TLSF 的級距
+  //   （這台的池都 ≤ 256 KB → 每段 16 格：32–64 KB 一格 2 KB、64–128 KB 一格 4 KB），再扣 heap poisoning 的
+  //   12 bytes（CONFIG_HEAP_POISONING_LIGHT）。實機的值因此都是 2048k−12（32,756、34,804、36,852、38,900）。
+  //   所以門檻就是視窗本身：回報 ≥ 32,768 ⇔ 配得到 32 KB 視窗（32,756 那一級配不到）。不用再加取整邊際 ——
+  //   v358 寫 36 KB（「32 KB＋4 KB 邊際」）＝ 要回報 38,900 → X3 實機 36,852 四次全擋（差的 12 bytes 就是 poisoning）。
+  //   查證：framework-espidf 的 heap/multi_heap.c（tlsf_fit_size）、multi_heap_poisoning.c、
+  //   tlsf/tlsf.c（control_construct）。
+  //   ⚠️ 從 EPUB 裡壓縮的條目串流時，zip 還要另一個視窗（依條目大小 4–32 KB，大於 16 KB 的圖就是 32 KB）：
+  //   最大一塊只保證第一個，第二個配不到會回 nostream（暫時性，不記負快取，下一次畫頁再試；失敗前只掃了 zip 目錄，
+  //   還沒讀圖、沒寫快取）—— 看 log 的 NEXTIMG why=nostream 有多常出現，再決定要不要另設門檻。
+  constexpr size_t kMinFree = 64 * 1024;
+  constexpr size_t kMinMax = 32 * 1024;
+  unsigned released = 0;
+  if (ESP.getFreeHeap() < kMinFree || ESP.getMaxAllocHeap() < kMinMax) {
+    if (auto* fcm = renderer.getFontCacheManager()) released = static_cast<unsigned>(fcm->releaseRetainedCache());
+    if (ESP.getFreeHeap() < kMinFree || ESP.getMaxAllocHeap() < kMinMax) {
+      DiagLog::line("NEXTIMG spine=%d page=%d ok=0 why=heap free=%u max=%u rel=%u", targetSpine, targetPage,
+                    static_cast<unsigned>(ESP.getFreeHeap()), static_cast<unsigned>(ESP.getMaxAllocHeap()), released);
+      return;
+    }
+  }
+  const unsigned freeAt = ESP.getFreeHeap();
+  const unsigned maxAt = ESP.getMaxAllocHeap();
+
+  // 按鍵中止（序號）＋新的畫頁請求。RAII：每一條離開路徑都解除。
+  struct PredecodeArm {
+    explicit PredecodeArm(const uint32_t s) {
+      ImageToFramebufferDecoder::armInputAbort(true, s);
+      ImageToFramebufferDecoder::setAbortPoll(&predecodeRenderPending);
+    }
+    ~PredecodeArm() {
+      ImageToFramebufferDecoder::setAbortPoll(nullptr);
+      ImageToFramebufferDecoder::armInputAbort(false, 0);
+    }
+  };
+  // 證人要量解碼器真正的寫入目標（DirectPixelWriter 寫 getWriteTarget()）：render 尾端沒有灰階帶在用，兩者應該相同；
+  //   不同就印 fb=strip（這個前提本身錯了，比 same／CHANGED 都要緊）。
+  const bool targetIsFb = renderer.getWriteTarget() == renderer.getFrameBuffer();
+  const uint32_t fbBefore = framebufferHash(renderer);
+  ImageBlock::PredecodeResult result{ImageBlock::PredecodeOutcome::Skipped, "none"};
+  g_predecodeAbortByRender = false;
+  {
+    const PredecodeArm arm(seq);
+    result = block.predecode(renderer, x, y);
+  }
+  const bool fbSame = framebufferHash(renderer) == fbBefore;
+  const bool byRender = result.outcome == ImageBlock::PredecodeOutcome::Aborted && g_predecodeAbortByRender &&
+                        !ImageToFramebufferDecoder::inputSeqChangedSince(seq);
+  DiagLog::line("NEXTIMG spine=%d page=%d x=%d y=%d w=%d h=%d ms=%lu ok=%u why=%s free=%u max=%u rel=%u fb=%s",
+                targetSpine, targetPage, x, y, block.getWidth(), block.getHeight(),
+                static_cast<unsigned long>(millis() - t0),
+                result.outcome == ImageBlock::PredecodeOutcome::Done ? 1u : 0u, byRender ? "render" : result.why,
+                freeAt, maxAt, released, !targetIsFb ? "strip" : (fbSame ? "same" : "CHANGED"));
 }
 
 // 跑在 FontCacheManager 字重桶之間的輪詢（本樹的中止粒度）。只讀一個旗標，不做 I/O。
@@ -3069,16 +3528,19 @@ struct GrayStripPlan {
 //   因為規劃選了 264、當下最大塊只配得下 176。配不到的那一階不會留下任何東西（閘門先擋，或 buf 立刻還回去）。
 static GrayStripPlan planAndAllocGrayStrip(std::unique_ptr<uint8_t[]>& out, const uint32_t pxcBytes, const int gh,
                                            const int gwBytes) {
-  constexpr uint32_t CHUNK = 16 * 1024;         // ImageBlock 的 PXC_CHUNK_SIZE
-  constexpr uint32_t SLOT_RESERVE = 24 * 1024;  // ImageBlock 的 PXC_HEAP_RESERVE
+  constexpr uint32_t CHUNK = ImageBlock::kPxcChunkSize;
+  constexpr uint32_t SLOT_RESERVE = ImageBlock::kPxcHeapReserve;
   GrayStripPlan plan;
   if (pxcBytes == 0) return plan;
   const uint32_t freeNow = ESP.getFreeHeap();
+  // v352：載入器在「要超過 kPxcMaxChunks 塊」時整張放棄（一塊都不載）。v351 以前 X3 整個螢幕的圖（104,544 B＝7 塊）
+  //   就是這樣：模擬以為能載、實際整張串流。上限改成 7 塊之後兩邊一致；這一行讓模擬照同一條規則走。
+  const bool slotRefuses = (pxcBytes + CHUNK - 1) / CHUNK > ImageBlock::kPxcMaxChunks;
   // 忠實照 loadPxcSlot 的迴圈算：每次要的是 min(剩下的, 16KB)，閘門是「free ≥ 這次要的＋24KB」，
   //   載完 free 就少那麼多。**最後一塊通常不滿 16KB**，用整塊去算會低估載入量、把尾段算大（codex：
   //   估錯的方向就是會誤判成「值得拉高」，然後自己把尾段製造出來）。
   const auto simulateLoad = [&](const uint32_t reserved) -> uint32_t {
-    if (freeNow < reserved) return 0;
+    if (slotRefuses || freeNow < reserved) return 0;
     uint32_t avail = freeNow - reserved;
     uint32_t loaded = 0;
     while (loaded < pxcBytes) {
@@ -3182,6 +3644,8 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int pa
   // 這裡只讀一次，兩個 guard 都吃這份快照——否則解構時讀到的可能已經是【下一章】，
   // 補圖／癒合的待辦就會綁到別頁去。
   const int renderSpine = currentSpineIndex;
+  lastRenderedSpine_ = renderSpine;  // v354：render 尾端背景預解的快照（同一份快照，不在尾端重讀易變成員）
+  lastRenderInputSeq_ = renderInputSeq;
   const bool firstDraw = lastDeferredKey_.spine != renderSpine || lastDeferredKey_.page != pageNo;
   if (firstDraw) {
     lastDeferredKey_.spine = renderSpine;
@@ -3192,11 +3656,16 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int pa
     int spine;
     int page;
     uint32_t startCount;
+    uint32_t startIcons;  // v352：這一遍畫了幾個「圖還沒好」的圖示（證人 icon=）
     // v245：這一遍當文字頁畫了、但沒有任何一張圖真的被延後（例如圖超出邊界）→ 仍要補一次重繪，
     // 讓那一頁走完整圖片流程（與 v244 以前的結果相同），不准停在「只有字」（codex 複查）。
     bool forceRedraw = false;
     DeferHeavyGuard(EpubReaderActivity* s, bool defer, int sp, int pg)
-        : self(s), spine(sp), page(pg), startCount(ImageBlock::deferredDecodeCount()) {
+        : self(s),
+          spine(sp),
+          page(pg),
+          startCount(ImageBlock::deferredDecodeCount()),
+          startIcons(ImageBlock::pendingIconCount()) {
       ImageBlock::setDeferHeavyDecode(defer);
     }
     ~DeferHeavyGuard() {
@@ -3205,7 +3674,8 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int pa
       if (seen > startCount || forceRedraw) {
         self->deferredDecodeSpine_ = spine;
         self->deferredDecodePage_ = page;
-        DiagLog::line("IMGDEFER page=%d spine=%d", page, spine);
+        DiagLog::line("IMGDEFER page=%d spine=%d icon=%u", page, spine,
+                      static_cast<unsigned>(ImageBlock::pendingIconCount() - startIcons));
       } else {
         // v195：diag194 有 14 次 IMGDEFER page= 只配對到 8 次 redraw，而「放棄」的證人幾乎不可能觸發
         // ——因為翻頁時新的一次 render 會走到這裡把待辦【靜默清掉】。少了這一行就分不出
@@ -3350,6 +3820,10 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int pa
   const bool deferredBaseStale = deferredKeyMatches && !followsDeferredDraw;
   deferredTextOnlySpine_ = -1;  // 讀完即清：只給緊接著的那一次用
   deferredTextOnlyPage_ = -1;
+  // v352（codex 複查）：面板上的文字版畫了圖示 → 補圖那一遍擦圖區要用清底刷新：FAST 的黑→白會留殘影，
+  //   而圖示正好在畫的正中間。讀完即清，同上。
+  const bool iconOnPanel = followsDeferredDraw && deferredTextOnlyIcon_;
+  deferredTextOnlyIcon_ = false;
   const bool imagePipeline = pageHasImages && !deferredTextOnlyDraw;
   if (deferredTextOnlyDraw) DiagLog::line("IMGDEFER textonly spine=%d page=%d", renderSpine, pageNo);
   const bool manualRefreshPending = forcedRefreshPending;
@@ -3378,9 +3852,20 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int pa
   // below (no async refresh is ever started), so they'd spend the buffers with
   // nothing in flight to overlap.
   const bool overlapRefresh = tiledGrayscale && renderer.supportsAsyncRefresh() && !imagePipeline;
+  // v356：收尾搬進刷新期間（效能拆解 A1，工作區 docs/specs/2026-09-30-performance-first-principles.md）。
+  //   沒有灰階、沒有圖的文字頁：刷新改非同步，render() 趁面板在變的這段時間載下一頁的字（約 0.3 秒的 SD 讀取），
+  //   做完才等刷新收尾（finishAsyncRefresh）。以前是刷新完才開始 → 快翻時按鍵排在它後面（v353 最多等 475 ms）。
+  //   灰階／圖片頁照舊：刷新之後還要用這一頁的字與 framebuffer。
+  //   刷新期間 framebuffer 不能動（X3 刷新完拿它同步 DTM1、X4 SSD1677 拿它補 BW／RED），收尾裡會畫東西的
+  //   （截圖、書籤／字典提示、存檔失敗提示）都排在收完之後 —— 有這些待辦的頁乾脆走舊路。
+  const bool tailOverlap = !g_asyncOverlapFused && !pageHasImages && !needsAnyGrayscale &&
+                           renderer.supportsAsyncRefresh() && !pendingScreenshot && !showBookmarkMessage &&
+                           !showDictionaryMessage && !pendingSyncSaveError;
   // v267：**灰階的帶狀暫存在這裡就先配**（BW 那一趟之前）—— 見 planGrayStrip／allocGrayStripRows 的註解：
-  //   晚到就只剩像素快取切剩的 11–14KB 碎片。只對「有圖、而且這次不用解碼」的頁預配：
-  //   第一次解碼的頁要把堆留給解碼器與 inflate，而且那些頁的快取本來就整張進得了 RAM（實機 sd=0KB）。
+  //   晚到就只剩像素快取切剩的 11–14KB 碎片。這裡只給「這次不用解碼」的頁：要解碼的頁得把堆留給解碼器與 inflate。
+  //   v353：要解碼的頁改在【解完之後、第一趟從快取畫之前】配（見下面 IMGPAGE 那裡）。v267 說「那些頁的快取本來就整張
+  //   進得了 RAM」—— v351 起 X3 整個螢幕的圖 104,544 B 進不了（堆積零碎，實機只載 3 塊）→ 沒預配就退到 80 列、
+  //   尾段 55 KB 重讀 16 趟（diag352：第一次看 6.0 秒，比 v351 還慢；再看一次有預配 264 列只要 2.8 秒）。
   //   預配之後若發現尾段其實很小（小圖頁），下面會當場放掉、走回 80 列。
   std::unique_ptr<uint8_t[]> grayScratch;
   int grayScratchRows = 0;
@@ -3390,9 +3875,10 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int pa
   // [0]＝BW 之前的預配，[1]＝BW 之後的補救，[2]＝MSB 之前的重試（0＝那一次沒試）
   unsigned grayStripFree[3] = {0, 0, 0};
   unsigned grayStripMax[3] = {0, 0, 0};
-  if (tiledGrayscale && !overlapRefresh && imagePipeline && !pageHasImagesNeedingDecode && page->imageCount() == 1) {
-    // ⚠️ **只對單圖頁預配**（codex）：多圖頁只有第一張能進 slot，用外框估會高估它的快取大小 →
-    //   可能核准了預配、反而把尾段製造出來。多圖頁走 BW 之後的補救路徑（那時尾段是真的）。
+  // ⚠️ **只對單圖頁預配**（codex）：多圖頁只有第一張能進 slot，用外框估會高估它的快取大小 →
+  //   可能核准了預配、反而把尾段製造出來。多圖頁走 BW 之後的補救路徑（那時尾段是真的）。
+  const bool grayStripPreallocEligible = tiledGrayscale && !overlapRefresh && imagePipeline && page->imageCount() == 1;
+  const auto preallocGrayStrip = [&]() {
     int16_t bx = 0, by = 0, bw = 0, bh = 0;
     uint32_t pxcBytes = 0;
     if (page->getImageBoundingBox(bx, by, bw, bh) && bw > 0 && bh > 0) {
@@ -3405,7 +3891,8 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int pa
     grayStripTailEst = plan.tailWithout;
     grayScratchRows = plan.rows;
     grayStripDisplacedEst = plan.displaced;
-  }
+  };
+  if (grayStripPreallocEligible && !pageHasImagesNeedingDecode) preallocGrayStrip();
   auto renderGrayscalePass = [&]() {
     if (needsTextGrayscale) {
       page->render(renderer, fontId, orientedMarginLeft, orientedMarginTop);
@@ -3417,6 +3904,7 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int pa
   // v260：補圖那一遍被按鍵中止 → 整遍放棄。面板與記憶體裡的畫面要一致（codex：之後的書籤彈窗、截圖是畫在
   //   framebuffer 上的），所以把面板上那一版（文字版或佔位框版）重畫回 framebuffer 再離開，不上面板、不跑灰階。
   //   placeholderShown：這一遍已經把佔位框版送上面板了。
+  uint32_t preflashIcons = 0;  // v352：冷路徑預閃畫了幾個圖示（面板上就有圖示 → 擦圖區用清底刷新）
   const auto abortImagePass = [&](const bool placeholderShown, const uint32_t decodeMs) {
     imagePassAborted_ = true;            // render() 尾端：這一次不截圖
     deferHeavyGuard.forceRedraw = true;  // 待補圖留著：翻走了 loop 會 drop；沒翻走（手放開後）loop 再補
@@ -3426,6 +3914,7 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int pa
       deferredTextOnlySpine_ = renderSpine;
       deferredTextOnlyPage_ = pageNo;
       deferredTextOnlyFrameSeq_ = renderer.displayFrameSeq();
+      deferredTextOnlyIcon_ = placeholderShown ? preflashIcons > 0 : iconOnPanel;  // v352：面板上那一版有沒有圖示
     }
     // 字型快取若在解碼期間被紓解作廢，重建一次（否則下面整頁走 miss ring）。
     if (fcm && !fcm->warmIdentity().matches(current)) {
@@ -3458,9 +3947,14 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int pa
       // v245：面板上已經是這一頁的文字版（圖區留白），再閃一次佔位框頁只會多出一個方框。
       DiagLog::line("IMGDEFER nopreflash spine=%d page=%d", renderSpine, pageNo);
     } else {
+      const uint32_t iconsBefore = ImageBlock::pendingIconCount();
       page->renderWithImagePlaceholders(renderer, fontId, orientedMarginLeft, orientedMarginTop);
       renderStatusBar();
       renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+      preflashIcons = ImageBlock::pendingIconCount() - iconsBefore;
+      // v352 證人：預閃（面板上不是這一頁的文字版時）改畫圖示，不再是方框。
+      DiagLog::line("IMGDEFER preflash spine=%d page=%d icon=%u", renderSpine, pageNo,
+                    static_cast<unsigned>(preflashIcons));
     }
     renderer.clearScreen();
 
@@ -3508,6 +4002,9 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int pa
     // v246 儀器：補圖那一遍的 bw＝這兩段＋整頁從快取畫一次。IMGDEC（loop 印）拆的是 imgs 裡的單張。
     DiagLog::line("IMGPAGE imgs=%u rescan=%u spine=%d page=%d", static_cast<unsigned>(tImgDecEnd - tImgDecStart),
                   static_cast<unsigned>(millis() - tImgDecEnd), renderSpine, pageNo);
+    // v353：解碼器與 inflate 已經放掉、第一趟從快取畫（會把圖載進 RAM 槽）還沒開始 —— 這時候的堆跟「再看一次」
+    //   的頁在 BW 之前一樣，用同一支規劃決定要不要先配高的灰階帶（證人：SEG tiled 的 spre=／est=／dspl=）。
+    if (grayStripPreallocEligible) preallocGrayStrip();
   }
 
   page->render(renderer, fontId, orientedMarginLeft, orientedMarginTop);
@@ -3541,7 +4038,10 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int pa
       //      粒子狀態與原本的雙 FAST 相同（最後一步同樣是 FAST），灰階的微調才推得動。
       //      ⚠️ 這是波形層的推論，程式證不了 —— 靠實機目視（殘影／灰階變差就退版）。
       renderer.fillRect(imgX + orientedMarginLeft, imgY + orientedMarginTop, imgW, imgH, false);
-      if (cleanImageBasePending) {
+      // v352（codex 複查）：面板上有「圖還沒好」的圖示 → 這一次擦圖區走清底（HALF），不用 FAST 擦黑色的圖示。
+      const bool iconErase = iconOnPanel || preflashIcons > 0;
+      if (iconErase) DiagLog::line("IMGDEFER iconclean spine=%d page=%d", renderSpine, pageNo);
+      if (cleanImageBasePending || iconErase) {
         // 圖片頁刻意留在 HALF（=GC 清底，v130 同）；scrub bench 時記下來，免得這次閃黑被算到 scrub 頭上。
         renderer.displayBuffer(HalDisplay::HALF_REFRESH);
         if (ReaderUtils::scrubCleanActive(renderer))
@@ -3570,7 +4070,16 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int pa
   } else {
     // Async form: start the waveform and return so the grayscale plane rendering
     // below overlaps the panel's refresh time instead of following it.
-    ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh, overlapRefresh);
+    // v356：tailOverlap 的頁也走非同步 —— 疊在刷新底下的是 render() 的收尾，不是灰階。
+    const char refreshKind = pagesUntilFullRefresh <= 1 ? 'H' : 'F';  // 同 displayWithRefreshCycle 的判準
+    ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh, overlapRefresh || tailOverlap);
+    if (tailOverlap) {
+      asyncRefreshPending_ = true;
+      asyncSeg_.mode = refreshKind;
+      asyncSeg_.tBwRender = tBwRender;
+      asyncSeg_.tIssued = millis();
+      asyncSeg_.fbHash = framebufferHash(renderer);  // 刷新已經起了（約 1–2 ms，藏在波形裡）；收尾時驗
+    }
   }
   const auto tDisplay = millis();
 
@@ -3890,12 +4399,16 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int pa
               tBwRender - tPrewarm, tDisplay - tBwRender, tEnd - t0);
       // v153：這幾行計時一直存在，但 LOG_DBG 在 gh_release（LOG_LEVEL=1）展開為空 ——
       // 使用者回報「翻頁很慢」時我們手上沒有任何逐頁毫秒數。鏡射進 diag.log。
+      // v356：ovl=1 ＝ 這一頁的刷新交給 render() 在刷新期間預取之後才收（收尾重疊），display= 只是「起刷新」花的時間；
+      //   真正刷完在後面的 TAILOVL（refresh=），按鍵到刷完仍看 EPLAT 的
+      //   lat=。位置不動，下一頁的預取證人（WIDA）照舊排在它後面。
       DiagLog::line(
           "SEG prewarm=%lums bw_render=%lums display=%lums total=%lums warm=%u pf=%u wcum=%lu/%lu pg=%u pmax=%u "
-          "pret=%u",
+          "pret=%u ovl=%u",
           tPrewarm - t0, tBwRender - tPrewarm, tDisplay - tBwRender, tEnd - t0, static_cast<unsigned>(diagWarmHit),
           diagPrefetchMs, static_cast<unsigned long>(diagWarmCumHits), static_cast<unsigned long>(diagWarmCumTotal),
-          static_cast<unsigned>(diagPfGate), static_cast<unsigned>(diagPfMaxKb), static_cast<unsigned>(diagPfRetKb));
+          static_cast<unsigned>(diagPfGate), static_cast<unsigned>(diagPfMaxKb), static_cast<unsigned>(diagPfRetKb),
+          asyncRefreshPending_ ? 1u : 0u);
     }
   }
 
@@ -3905,6 +4418,7 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int pa
     deferredTextOnlySpine_ = renderSpine;
     deferredTextOnlyPage_ = pageNo;
     deferredTextOnlyFrameSeq_ = renderer.displayFrameSeq();
+    deferredTextOnlyIcon_ = ImageBlock::pendingIconCount() != deferHeavyGuard.startIcons;  // v352
   }
 
   // v167（crash_report166 定案）：走到這裡 = 這一頁畫完了。若這輪渲染把堆積打到了
@@ -3916,6 +4430,9 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int pa
 }
 
 void EpubReaderActivity::renderStatusBar() const {
+  // v350：固定版面的頁是整個螢幕的畫布（EPUB 3 的 pre-paginated），閱讀器不在上面疊任何東西。
+  //   render() 開頭依這一頁的章設好 curSpineFxl_；所有畫狀態列的站點都經過這裡，一處擋全部。
+  if (curSpineFxl_) return;
   // Calculate progress in book. Use the estimated total while a giant spine is still building so
   // "page X of Y" and the progress bar don't read off the small build watermark.
   const int currentPage = section->currentPage + 1;

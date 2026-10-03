@@ -13,6 +13,7 @@
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "network/FirmwareFlasher.h"
+#include "util/DiagLog.h"
 
 void SdFirmwareUpdateActivity::onEnter() {
   Activity::onEnter();
@@ -183,8 +184,14 @@ void SdFirmwareUpdateActivity::performUpdate() {
   {
     RenderLock lock(*this);
     state = State::SUCCESS;
+    // v359：「更新完成」這張畫面帶 turnOff，重開前面板先斷高壓（同 main.cpp 的 drawRestartPopupPanelOff）。
+    //   X3 與 UltraChip 的 X4 會 POF；X4 SSD1677 的快速刷新只改記帳（行為不變）。
+    //   在鎖裡設：render task 下一次讀到它時一定看得到；主 task 不會再回到 loop() 把它設回去。重開之後重新初始化。
+    renderer.setFadingFix(true);
   }
+  const unsigned long t0 = millis();
   requestUpdateAndWait();
+  DiagLog::line("RESTART to=flash off=1 ms=%lu", millis() - t0);
   delay(1500);
   ESP.restart();
 }

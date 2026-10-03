@@ -13,6 +13,7 @@
 
 #include "../Epub/Epub/VerticalText.h"  // 直排西文的座標映射（與桌面測試共用同一份）
 #include "FontCacheManager.h"
+#include "TruncateText.h"
 
 namespace {
 
@@ -1523,6 +1524,24 @@ void GfxRenderer::drawIcon(const uint8_t bitmap[], const int x, const int y, con
   }
 }
 
+void GfxRenderer::drawIconScaled(const uint8_t bitmap[], const int x, const int y, const int size,
+                                 const int scale) const {
+  if (scale <= 1) {
+    drawIcon(bitmap, x, y, size);
+    return;
+  }
+  // 對映照抄 drawIcon：位元 (row, col) → 邏輯 (size-1-row, col)，只是每一點畫成 scale×scale。
+  const int rowBytes = (size + 7) / 8;
+  for (int row = 0; row < size; row++) {
+    for (int col = 0; col < size; col++) {
+      const uint8_t byte = bitmap[row * rowBytes + (col >> 3)];
+      if (((byte >> (7 - (col & 7))) & 1) == 0) {
+        fillRect(x + (size - 1 - row) * scale, y + col * scale, scale, scale, true);
+      }
+    }
+  }
+}
+
 // ⚠️ v320：這支（含 drawBitmap1Bit 與 Bitmap 的抖色）的輸出被【桌布平面快取】存在 SD 卡上。
 //    改了任何會影響像素的邏輯，要把 SleepActivity.cpp 的 WALLCACHE_PIXEL_VERSION +1，否則舊快取照舊算法顯示。
 void GfxRenderer::drawBitmap(const Bitmap& bitmap, const int x, const int y, const int maxWidth, const int maxHeight,
@@ -1801,10 +1820,22 @@ void GfxRenderer::endStripTarget() const {
   _stripRows = 0;
 }
 
+void GfxRenderer::beginDiscardTarget() const {
+  // 見 .h。帶在面板外（y0＝panelHeight）而且 0 列：drawPixel 的 `phyY < _stripY0` 恆真 → 返回；
+  //   fillRectImpl 夾到 [panelHeight, panelHeight−1] → 空；clearScreen memset 0 位元組；DirectPixelWriter 的
+  //   clipRows＝0。 _stripBuf 給一個有效位址（clearScreen 會把它交給 memset，長度 0）。
+  static uint8_t discardSink = 0xFF;
+  _stripBuf = &discardSink;
+  _stripY0 = static_cast<int>(panelHeight);
+  _stripRows = 0;
+  _stripActive = true;
+}
+
 bool GfxRenderer::glyphIntersectsStrip(int x0, int y0, int x1, int y1) const {
   if (!_stripActive) {
     return true;
   }
+  if (_stripRows <= 0) return false;  // v356 丟棄模式：什麼都不畫，連跨過面板邊界的字框也不用解碼（codex）
   // Rotate the two opposite bbox corners to physical coords. For 90-degree
   // orientations the physical bbox stays axis-aligned, so min/max of the two
   // rotated corners' Y bounds the glyph's physical y-extent.
@@ -1841,6 +1872,12 @@ void GfxRenderer::displayBufferAsync(const HalDisplay::RefreshMode refreshMode) 
 void GfxRenderer::noteGrayPanelDirty() const { display.noteGrayPanelDirty(); }
 
 void GfxRenderer::waitRefreshComplete() const { display.waitRefreshComplete(); }
+
+bool GfxRenderer::refreshBusy() const { return display.refreshBusy(); }
+
+bool GfxRenderer::resyncAfterAsyncRefresh(const bool frameIsTrusted) const {
+  return display.resyncAfterAsyncRefresh(frameIsTrusted);
+}
 
 bool GfxRenderer::supportsAsyncRefresh() const { return !fadingFix && display.supportsAsyncRefresh(); }
 
@@ -1881,20 +1918,11 @@ std::string GfxRenderer::truncatedText(const int fontId, const char* text, const
                                        const EpdFontFamily::Style style) const {
   if (!text || maxWidth <= 0) return "";
 
-  std::string item = text;
   // U+2026 HORIZONTAL ELLIPSIS (UTF-8: 0xE2 0x80 0xA6)
   const char* ellipsis = "\xe2\x80\xa6";
-  int textWidth = getTextWidth(fontId, item.c_str(), style);
-  if (textWidth <= maxWidth) {
-    // Text fits, return as is
-    return item;
-  }
-
-  while (!item.empty() && getTextWidth(fontId, (item + ellipsis).c_str(), style) >= maxWidth) {
-    utf8RemoveLastChar(item);
-  }
-
-  return item.empty() ? ellipsis : item + ellipsis;
+  // v361：二分搜尋，邊界語意不變（見 TruncateText.h）。
+  return TruncateText::fit(text, maxWidth, ellipsis,
+                           [&](const std::string& s) { return getTextWidth(fontId, s.c_str(), style); });
 }
 
 namespace {

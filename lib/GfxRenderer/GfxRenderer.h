@@ -257,6 +257,9 @@ class GfxRenderer {
   // v269：面板上留著抗鋸齒灰 —— 下一次整頁刷新要走清潔路徑（狀態住在 HalDisplay，見那裡的註解）。
   void noteGrayPanelDirty() const;
   void waitRefreshComplete() const;
+  // v356：見 HalDisplay 的同名函式。
+  bool refreshBusy() const;
+  bool resyncAfterAsyncRefresh(bool frameIsTrusted) const;
   // True when displayBufferAsync() genuinely overlaps: panel defers and
   // fadingFix isn't forcing the blocking path. Callers can skip overlap
   // scaffolding (e.g. whole-plane grayscale buffers) when false.
@@ -275,6 +278,33 @@ class GfxRenderer {
   // grayscale planes band-by-band without a full second buffer.
   void beginStripTarget(uint8_t* scratch, int stripY0, int stripRows) const;
   void endStripTarget() const;
+  // v356：丟棄模式 —— 一條 0 列、落在面板外的帶。所有經過帶狀目標的寫入（drawPixel、fillRectImpl、clearScreen、
+  //   DirectPixelWriter 的 getWriteTarget／getWriteRows）都被裁掉，framebuffer 一個位元組都不會動；字也在解碼前被剔除。
+  //   非同步刷新期間（刷新收完時驅動才讀 framebuffer 同步控制器）做事的人用它當結構性保證。用 DiscardScope。
+  void beginDiscardTarget() const;
+  //   DiscardScope 會保存原本的帶狀狀態、結束時原樣還原（codex：可巢狀，不假設進場時沒有帶）。
+  class DiscardScope {
+   public:
+    explicit DiscardScope(const GfxRenderer& r)
+        : r_(r), active_(r._stripActive), buf_(r._stripBuf), y0_(r._stripY0), rows_(r._stripRows) {
+      r.beginDiscardTarget();
+    }
+    ~DiscardScope() {
+      r_._stripActive = active_;
+      r_._stripBuf = buf_;
+      r_._stripY0 = y0_;
+      r_._stripRows = rows_;
+    }
+    DiscardScope(const DiscardScope&) = delete;
+    DiscardScope& operator=(const DiscardScope&) = delete;
+
+   private:
+    const GfxRenderer& r_;
+    bool active_;
+    uint8_t* buf_;
+    int y0_;
+    int rows_;
+  };
 
   // Band culling for tiled grayscale. Takes a glyph bounding box in logical
   // screen coords and returns false only when a strip is active AND the box's
@@ -323,6 +353,9 @@ class GfxRenderer {
   void drawImageGray(const uint8_t data[], int x, int y, int width, int height) const;
 
   void drawIcon(const uint8_t bitmap[], int x, int y, int size) const;
+  // v352：同一顆 UI 圖示放大 scale 倍（每個墨點畫成 scale×scale 的方塊）。
+  //   對映跟 drawIcon 逐點相同；scale＝1 直接交給 drawIcon。
+  void drawIconScaled(const uint8_t bitmap[], int x, int y, int size, int scale) const;
   void drawBitmap(const Bitmap& bitmap, int x, int y, int maxWidth, int maxHeight, float cropX = 0,
                   float cropY = 0) const;
   void drawBitmap1Bit(const Bitmap& bitmap, int x, int y, int maxWidth, int maxHeight) const;

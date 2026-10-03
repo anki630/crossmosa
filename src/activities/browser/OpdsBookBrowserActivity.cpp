@@ -1,15 +1,19 @@
 #include "OpdsBookBrowserActivity.h"
 
 #include <Arduino.h>
+#include <DataDir.h>
 #include <GfxRenderer.h>
 #include <HalStorage.h>
 #include <I18n.h>
 #include <Logging.h>
 #include <OpdsStream.h>
 #include <WiFi.h>
+#include <esp_random.h>
+#include <esp_rom_crc.h>
 
 #include <algorithm>
 #include <cassert>
+#include <cstdlib>
 
 #include "CrossPointSettings.h"
 #include "MappedInputManager.h"
@@ -35,6 +39,78 @@ constexpr int SEARCH_ICON_MARGIN = 14;
 constexpr int SEARCH_ICON_Y = 15;
 constexpr int DOWNLOAD_PROGRESS_STEP_PERCENT = 5;
 constexpr unsigned long DOWNLOAD_PROGRESS_MIN_UPDATE_MS = 5000;
+// v346：長按「退出」回主畫面的門檻，與檔案瀏覽（回最上層）、閱讀器（回書架）的長按同一個值。
+constexpr unsigned long BACK_HOLD_HOME_MS = 1000;
+// v346：換書庫頁要翻頁鍵本身按滿這麼久（與 ButtonNavigator 的長按門檻同值，但用這顆鍵自己的計時）。
+constexpr unsigned long NAV_HOLD_MS = 500;
+// v346：history 上限（v13 原有，換基底時漏搬）。長按翻頁讓人容易一口氣翻過很多頁，
+// 每翻一頁都會進一層 history；超過就丟最舊的，不讓它無限長大。
+constexpr size_t MAX_HISTORY_DEPTH = 32;
+
+// v347：SD 頁快取的檔案格式（每次進書庫整個資料夾清掉重來，所以不用跨版本相容，只要能認出壞檔）。
+//   u32 magic 'OPC2' | u8 版本 | u8 旗標（bit0 清單頭是「上一頁」列、bit1 清單尾是「下一頁」列） | u16 筆數
+//   | u32 這次瀏覽的 nonce | u32 快取編號
+//   每筆：u8 類型 | title | author | href | id（每個字串 u16 長度＋位元組）
+//   | u32 CRC32（前面全部）
+// 讀回時檔頭、每個長度、CRC、檔尾都要對（codex 複查）：寫到一半、SD 靜默損壞、
+// 卡片回報成功其實沒寫（讀到舊內容 → nonce 或編號對不上）都會被擋下，改成重新連線。
+constexpr uint32_t FEED_CACHE_MAGIC = 0x3243504F;  // "OPC2"
+constexpr uint8_t FEED_CACHE_VERSION = 1;
+constexpr uint8_t FEED_CACHE_FLAG_PREV = 1;
+constexpr uint8_t FEED_CACHE_FLAG_NEXT = 2;
+// 上限跟 OpdsParser 一致（最多 62 筆＋2 列翻頁；字串上限是位元組）：超過就不是我們寫的檔。
+constexpr uint16_t FEED_CACHE_MAX_ENTRIES = 64;
+constexpr size_t FEED_CACHE_MAX_TITLE = 160;
+constexpr size_t FEED_CACHE_MAX_AUTHOR = 120;
+constexpr size_t FEED_CACHE_MAX_HREF = 768;
+constexpr size_t FEED_CACHE_MAX_ID = 128;
+constexpr size_t FEED_CACHE_HEAP_MARGIN = 8 * 1024;  // 讀回之前，記憶體至少要多留這麼多
+
+void feedCacheDir(char* buf, const size_t n) { snprintf(buf, n, "%s/opdscache", DataDir::path()); }
+
+void feedCachePath(char* buf, const size_t n, const uint32_t id) {
+  snprintf(buf, n, "%s/opdscache/%lu.bin", DataDir::path(), static_cast<unsigned long>(id));
+}
+
+// 寫與讀都邊做邊算 CRC；兩邊的呼叫順序與大小完全一樣，所以算出來的值可以直接比。
+struct FeedCacheWriter {
+  HalFile& f;
+  uint32_t crc = 0;
+  bool ok = true;
+  void put(const void* p, const size_t n) {
+    if (!ok || n == 0) return;
+    ok = f.write(p, n) == n;
+    crc = esp_rom_crc32_le(crc, static_cast<const uint8_t*>(p), n);
+  }
+  void str(const std::string& s, const size_t maxLen) {
+    if (s.size() > maxLen) ok = false;
+    const uint16_t len = static_cast<uint16_t>(s.size());
+    put(&len, sizeof(len));
+    put(s.data(), len);
+  }
+};
+
+// 讀失敗一律當壞檔，不信任半截的長度（教訓 A-6：readPod 讀失敗不會改寫目標）。
+struct FeedCacheReader {
+  HalFile& f;
+  uint32_t crc = 0;
+  bool ok = true;
+  void get(void* p, const size_t n) {
+    if (!ok || n == 0) return;
+    ok = f.read(p, n) == static_cast<int>(n);
+    if (ok) crc = esp_rom_crc32_le(crc, static_cast<const uint8_t*>(p), n);
+  }
+  void str(std::string& s, const size_t maxLen) {
+    uint16_t len = 0;
+    get(&len, sizeof(len));
+    if (!ok || len > maxLen) {
+      ok = false;
+      return;
+    }
+    s.resize(len);
+    get(&s[0], len);
+  }
+};
 
 Rect searchIconRect(const GfxRenderer& renderer) {
   return Rect{renderer.getScreenWidth() - SEARCH_ICON_SIZE - SEARCH_ICON_MARGIN, SEARCH_ICON_Y, SEARCH_ICON_SIZE + 8,
@@ -60,11 +136,18 @@ void OpdsBookBrowserActivity::onEnter() {
     entries.clear();
   }
   navigationHistory.clear();
+  clearFeedCache();                    // v347：上次沒清到的（當機、斷電、從別的路徑離開）一起清掉；這次的快取從空的開始
+  feedCacheNonce = esp_random() | 1u;  // 這次瀏覽的身分：讀到別次留下的檔（卡片說寫了其實沒寫）就認得出來
   searchTemplate = "";
   currentPath = "";
   selectorIndex = 0;
   consumeConfirm = false;
   consumeBack = false;
+  hasPrevPageItem = hasNextPageItem = false;
+  historyTruncated = false;
+  backPressStartMs = 0;
+  backHoldFired = false;
+  nextHoldAtEdge = nextHoldDone = prevHoldAtEdge = prevHoldDone = false;
   setError({});
   setStatus(tr(STR_CHECKING_WIFI));
   requestUpdate();
@@ -91,6 +174,8 @@ void OpdsBookBrowserActivity::onExit() {
   // 對比 onEnter：管理器在呼叫它之前明確 lock.unlock()（ActivityManager.cpp:150），所以那裡要加。
   entries.clear();
   navigationHistory.clear();
+  // v347：SD 頁快取不在這裡清 —— onExit 持有 RenderLock，遞迴刪檔不該放在鎖裡（codex 複查）。
+  // 兩個「回主畫面」的出口（根層按退出、長按退出）離開前自己清；其他路徑（睡眠、當機）留到下次 onEnter。
 
   // state 說明離開時人在哪（ERROR／BROWSING／WIFI_SELECTION／DOWNLOADING）；深睡拆除路徑
   // 不會 silentRestart（main.cpp deepSleepInProgress），所以不記「restart=」以免誤導。
@@ -111,6 +196,11 @@ void OpdsBookBrowserActivity::onExit() {
 }
 
 void OpdsBookBrowserActivity::loop() {
+  // v346：翻頁鍵的長按旗標只在放開邊緣清，而且放在所有提早 return 之前 —— 換頁失敗進 ERROR、
+  // 或清單是空的時候放開，也要清得掉（codex 複查）。
+  if (mappedInput.wasReleased(MappedInputManager::Button::NavNext)) nextHoldAtEdge = nextHoldDone = false;
+  if (mappedInput.wasReleased(MappedInputManager::Button::NavPrevious)) prevHoldAtEdge = prevHoldDone = false;
+
   if (state == BrowserState::WIFI_SELECTION || state == BrowserState::SEARCH_INPUT) {
     return;
   }
@@ -125,6 +215,7 @@ void OpdsBookBrowserActivity::loop() {
   }
 
   if (state == BrowserState::ERROR) {
+    if (handleBackHold()) return;  // v346：連不上、讀不到的畫面一樣能長按「退出」直接回主畫面
     int tx = 0;
     int ty = 0;
     if (mappedInput.wasReleased(MappedInputManager::Button::Confirm) || mappedInput.wasScreenTapped(tx, ty)) {
@@ -138,7 +229,7 @@ void OpdsBookBrowserActivity::loop() {
         launchWifiSelection();
       }
     } else if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
-      navigateBack();
+      if (!consumeBackHoldRelease()) navigateBack();
     }
     return;
   }
@@ -155,17 +246,29 @@ void OpdsBookBrowserActivity::loop() {
   if (state == BrowserState::DOWNLOADING) return;
 
   if (state == BrowserState::BROWSING) {
+    if (handleBackHold()) return;  // v346：長按「退出」→ 主畫面，不必一層一層退、一層一層重新連線
+
     auto activateSelected = [this] {
-      if (!entries.empty()) {
+      if (selectorIndex < 0 || selectorIndex >= static_cast<int>(entries.size())) return;
+      // v347：頭尾的翻頁列走 openPageItem（跟上一層配得起來就退回去讀 SD 快取，不重新連線）
+      if (hasNextPageItem && selectorIndex == static_cast<int>(entries.size()) - 1) {
+        openPageItem(true);
+      } else if (hasPrevPageItem && selectorIndex == 0) {
+        openPageItem(false);
+      } else {
         const auto& entry = entries[selectorIndex];
         entry.type == OpdsEntryType::BOOK ? downloadBook(entry) : navigateToEntry(entry);
       }
     };
 
+    // v346：開項目、下載、退一層都是同步的，回來時 entries 已經換成別頁 —— 這一輪到此為止，
+    // 不讓同一輪的其他按鍵作用在新的清單上（codex 複查）。
     if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
       activateSelected();
+      return;
     } else if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
-      navigateBack();
+      if (!consumeBackHoldRelease()) navigateBack();
+      return;
     } else if (mappedInput.wasReleased(MappedInputManager::Button::Left)) {
       if (!searchTemplate.empty() && selectorIndex == 0) launchSearch();
     }
@@ -207,6 +310,18 @@ void OpdsBookBrowserActivity::loop() {
         return;
       }
 
+      // v346（v13④／v15 搬回）：按下翻頁鍵的那一刻，記下游標是不是正停在頭尾的翻頁列（見標頭註解）。
+      if (mappedInput.wasPressed(MappedInputManager::Button::NavNext)) {
+        nextHoldAtEdge = hasNextPageItem && selectorIndex == static_cast<int>(entries.size()) - 1;
+        nextHoldDone = false;
+        nextPressStartMs = millis();
+      }
+      if (mappedInput.wasPressed(MappedInputManager::Button::NavPrevious)) {
+        prevHoldAtEdge = hasPrevPageItem && selectorIndex == 0;
+        prevHoldDone = false;
+        prevPressStartMs = millis();
+      }
+
       buttonNavigator.onNextRelease([this] {
         selectorIndex = ButtonNavigator::nextIndex(selectorIndex, entries.size());
         requestUpdate();
@@ -215,16 +330,86 @@ void OpdsBookBrowserActivity::loop() {
         selectorIndex = ButtonNavigator::previousIndex(selectorIndex, entries.size());
         requestUpdate();
       });
+      // 長按：一次翻一整頁、到底（頂）停住（v31/v156）。按下時就停在「下一頁」（「上一頁」）那一列的話，
+      // 改成載入書庫的下一頁（上一頁）——＝在那一列按確認——而且這次按住只做這一次。
+      // 旗標放成員、不另外捕捉區域變數：這個工具鏈（RV32 libstdc++）的 std::function 內建空間是 8 bytes，
+      // this＋pageItems 剛好放得下；多捕捉一個參照就會每一輪 loop 都在堆上配置一次，而 OPDS 正是最缺記憶體的地方。
+      pagedThisLoop = false;
       buttonNavigator.onNextContinuous([this, pageItems] {
+        if (nextHoldDone) return;
+        if (nextHoldAtEdge && hasNextPageItem && !entries.empty()) {
+          if (millis() - nextPressStartMs < NAV_HOLD_MS) return;  // 翻頁鍵本身還沒按滿（見標頭）
+          nextHoldDone = true;
+          pagedThisLoop = true;
+          DiagLog::line("OPDS page: hold next depth=%u", static_cast<unsigned>(navigationHistory.size()));
+          openPageItem(true);  // v347：跟上一層配得起來就是退回去（讀 SD 快取）
+          return;
+        }
         selectorIndex = ButtonNavigator::nextPageIndexClamped(selectorIndex, entries.size(), pageItems);
         requestUpdate();
       });
+      if (pagedThisLoop) return;  // entries 已經換成新的一頁，後面的按鍵處理不能再碰
       buttonNavigator.onPreviousContinuous([this, pageItems] {
+        if (prevHoldDone) return;
+        if (prevHoldAtEdge && hasPrevPageItem && !entries.empty()) {
+          if (millis() - prevPressStartMs < NAV_HOLD_MS) return;
+          prevHoldDone = true;
+          pagedThisLoop = true;
+          DiagLog::line("OPDS page: hold prev depth=%u", static_cast<unsigned>(navigationHistory.size()));
+          openPageItem(false);
+          return;
+        }
         selectorIndex = ButtonNavigator::previousPageIndexClamped(selectorIndex, entries.size(), pageItems);
         requestUpdate();
       });
+      if (pagedThisLoop) return;
     }
   }
+}
+
+// v346（v13③ 搬回）：長按「退出」→ 直接回主畫面。按住滿 BACK_HOLD_HOME_MS 就觸發，不用等放開
+// （跟檔案瀏覽、閱讀器的長按一樣）。onGoHome 只是排入切換，實際換頁在這一輪 loop 結束後，呼叫端要直接 return。
+bool OpdsBookBrowserActivity::handleBackHold() {
+  if (mappedInput.wasPressed(MappedInputManager::Button::Back)) {
+    backPressStartMs = millis();
+    backHoldFired = false;
+  }
+  if (backHoldFired || backPressStartMs == 0 || !mappedInput.isPressed(MappedInputManager::Button::Back) ||
+      millis() - backPressStartMs < BACK_HOLD_HOME_MS) {
+    return false;
+  }
+  backHoldFired = true;
+  DiagLog::line("OPDS home: back hold depth=%u state=%d", static_cast<unsigned>(navigationHistory.size()),
+                static_cast<int>(state));
+  clearFeedCache();  // v347：同 navigateBack 的根層
+  onGoHome();
+  return true;
+}
+
+bool OpdsBookBrowserActivity::consumeBackHoldRelease() {
+  const bool wasHold = backHoldFired;
+  backPressStartMs = 0;
+  backHoldFired = false;
+  return wasHold;
+}
+
+// v361（上游 #3547）：原本永遠回 true —— 停在書單畫面、WiFi 開著，機器永遠不睡。
+// 只有「正在等網路」的狀態擋休眠；書單與錯誤畫面照設定的時間睡（WiFi 開著所以走真關機，醒來回主畫面）。
+// WiFi 選擇與搜尋鍵盤是推在上面的子畫面，休眠看的是它們自己（ActivityManager::preventAutoSleep 只問最上層），
+// 跟上游不同：我們不替它們擋，那兩個畫面停著不動照樣會睡。
+bool OpdsBookBrowserActivity::preventAutoSleep() {
+  switch (state) {
+    case BrowserState::CHECK_WIFI:
+    case BrowserState::WIFI_SELECTION:
+    case BrowserState::LOADING:
+    case BrowserState::DOWNLOADING:
+    case BrowserState::SEARCH_INPUT:
+      return true;
+    case BrowserState::BROWSING:
+    case BrowserState::ERROR:
+      return false;
+  }
+  return false;
 }
 
 void OpdsBookBrowserActivity::render(RenderLock&&) {
@@ -382,29 +567,12 @@ void OpdsBookBrowserActivity::fetchFeed(const std::string& path) {
     if (!nextUrl.empty()) {
       entries.push_back(OpdsEntry{OpdsEntryType::NAVIGATION, tr(STR_NEXT_PAGE), "", nextUrl, ""});
     }
+    hasPrevPageItem = !prevUrl.empty();  // v346：長按翻頁用這兩個旗標認頭尾的翻頁列
+    hasNextPageItem = !nextUrl.empty();
     if (feedTruncated) {
       LOG_INF("OPDS", "Feed truncated to fit memory");
     }
-
-    // v13/v156/v159：返回中的游標還原。必須在偽項目（上一頁/下一頁列）插入【之後】才套——
-    // 儲存時的 selectorIndex 是顯示座標（含偽項目）。夾限到實際筆數（feed 可能變了）；只消費一次。
-    // ⚠️ v156 把這段放在中段，被這裡原本的「selectorIndex = 0」無條件蓋掉——還原從未生效過。
-    selectorIndex = 0;
-    if (pendingRestoreIndex >= 0) {
-      if (!entries.empty()) {
-        selectorIndex = std::min(pendingRestoreIndex, static_cast<int>(entries.size()) - 1);
-        if (!pendingRestoreHref.empty()) {
-          for (size_t i = 0; i < entries.size(); i++) {
-            if (entries[i].href == pendingRestoreHref) {
-              selectorIndex = static_cast<int>(i);
-              break;
-            }
-          }
-        }
-      }
-      pendingRestoreIndex = -1;
-      pendingRestoreHref.clear();
-    }
+    applyPendingRestoreLocked();
   }  // v200：RenderLock 作用域結束
   state = BrowserState::BROWSING;  // 空 feed 也是 BROWSING：render 畫空狀態版面（空分類≠錯誤）
   requestUpdate();
@@ -428,40 +596,276 @@ void OpdsBookBrowserActivity::releaseEntries() {
   // 三個呼叫點（navigateToEntry／navigateBack／performSearch）都由 loop() 觸發、未持鎖。
   RenderLock lock;
   std::vector<OpdsEntry>().swap(entries);
+  hasPrevPageItem = hasNextPageItem = false;  // v346：清單清空，頭尾的翻頁列也不在了
 }
 
-void OpdsBookBrowserActivity::navigateToEntry(const OpdsEntry& entry) {
-  navigationHistory.push_back({currentPath, selectorIndex, entry.href});
+void OpdsBookBrowserActivity::navigateToEntry(const OpdsEntry& entry, const HistoryLevel::Via via) {
+  // 先把「載入中」畫出來再存檔：LOADING 畫面不讀 entries（render 只在 BROWSING 讀清單），
+  // 存檔的 SD 寫入就落在面板刷新的空檔裡，按下去立刻有反應（codex 複查）。
+  state = BrowserState::LOADING;
+  setStatus(tr(STR_LOADING));
+  requestUpdate(true);
+
+  if (navigationHistory.size() >= MAX_HISTORY_DEPTH) {
+    removeFeedCache(navigationHistory.front().cacheId);  // v347：丟掉的那一層，它的快取檔也不要了
+    navigationHistory.erase(navigationHistory.begin());  // v346：丟最舊的一層（見 MAX_HISTORY_DEPTH）
+    historyTruncated = true;
+  }
+  // v347：要離開的這一頁寫到 SD（entries 還在 RAM、還沒釋放；saveFeedCache 只讀不改 entries，
+  // 所以 entry 這個參照之後照樣有效）。存不了就是 0，回來時照舊重新連線。
+  const uint32_t cacheId = saveFeedCache();
+  navigationHistory.push_back({currentPath, selectorIndex, entry.href, cacheId, via});
   // Resolve to a full URL so sub-sub-navigation retains parent path context
   const std::string feedUrl = UrlUtils::buildUrl(server.url, currentPath);
   currentPath = UrlUtils::buildUrl(feedUrl, entry.href);
 
-  state = BrowserState::LOADING;
-  setStatus(tr(STR_LOADING));
   releaseEntries();
   selectorIndex = 0;
   pendingRestoreIndex = -1;  // 前進到新層：不還原任何舊游標
   pendingRestoreHref.clear();
-  requestUpdate(true);
   fetchFeed(currentPath);
 }
 
 void OpdsBookBrowserActivity::navigateBack() {
-  if (navigationHistory.empty()) {
-    DiagLog::line("OPDS home: back at root state=%d", static_cast<int>(state));
-    onGoHome();
-  } else {
-    currentPath = navigationHistory.back().path;
-    pendingRestoreIndex = navigationHistory.back().selectorIndex;  // v13/v156：feed 載入後還原
-    pendingRestoreHref = navigationHistory.back().href;
-    navigationHistory.pop_back();
+  if (navigationHistory.empty() && historyTruncated && !currentPath.empty()) {
+    // v346：history 丟過最舊的層，退到這裡還不是書庫最上層 → 先回最上層，下一次 Back 才離開書庫。
+    historyTruncated = false;
+    DiagLog::line("OPDS back: history truncated, to root");
+    currentPath.clear();
+    pendingRestoreIndex = -1;
+    pendingRestoreHref.clear();
     state = BrowserState::LOADING;
     setStatus(tr(STR_LOADING));
     releaseEntries();
     selectorIndex = 0;
     requestUpdate();
     fetchFeed(currentPath);
+  } else if (navigationHistory.empty()) {
+    DiagLog::line("OPDS home: back at root state=%d", static_cast<int>(state));
+    clearFeedCache();  // v347：在這裡清（未持 RenderLock），不放 onExit（見 clearFeedCache）
+    onGoHome();
+  } else {
+    const uint32_t cacheId = navigationHistory.back().cacheId;
+    currentPath = navigationHistory.back().path;
+    pendingRestoreIndex = navigationHistory.back().selectorIndex;  // v13/v156：feed 載入後還原
+    pendingRestoreHref = navigationHistory.back().href;
+    navigationHistory.pop_back();
+    state = BrowserState::LOADING;
+    setStatus(tr(STR_LOADING));
+    releaseEntries();  // 先釋放目前這一頁，讀快取也需要 RAM
+    selectorIndex = 0;
+    // v347：這一層離開時存過 SD → 直接讀回來，不用重新連線、也不用先畫「載入中」。
+    // 讀完就刪：之後再從這一層往前走，會存一份新的。
+    if (cacheId != 0) {
+      const bool hit = loadFeedCache(cacheId);
+      removeFeedCache(cacheId);
+      if (hit) return;
+    }
+    requestUpdate();
+    fetchFeed(currentPath);
   }
+}
+
+// v347：翻頁列（「下一頁」「上一頁」，按確認或長按）。這一頁如果是從隔壁那頁用反方向的翻頁列走過來的，
+// 往回翻就是回到那一頁 → 走「退出」：讀 SD 快取、游標回到原位、history 不會越翻越長。
+// 否則照舊往前載入（並記下是從哪個方向來的，讓之後的反方向翻頁配得起來）。
+void OpdsBookBrowserActivity::openPageItem(const bool next) {
+  if (entries.empty()) return;
+  const auto cameFrom = next ? HistoryLevel::Via::PrevPage : HistoryLevel::Via::NextPage;
+  if (!navigationHistory.empty() && navigationHistory.back().via == cameFrom) {
+    DiagLog::line("OPDS page: %s pairs with history, back", next ? "next" : "prev");
+    navigateBack();
+    return;
+  }
+  navigateToEntry(next ? entries.back() : entries.front(),
+                  next ? HistoryLevel::Via::NextPage : HistoryLevel::Via::PrevPage);
+}
+
+// v13/v156/v159：返回中的游標還原。必須在偽項目（上一頁/下一頁列）插入【之後】才套——
+// 儲存時的 selectorIndex 是顯示座標（含偽項目）。夾限到實際筆數（feed 可能變了）；只消費一次。
+// ⚠️ v156 把這段放在中段，被原本的「selectorIndex = 0」無條件蓋掉——還原從未生效過。
+// v347：從 fetchFeed 抽出來，SD 快取讀回的清單也走同一套。呼叫端必須持有 RenderLock。
+void OpdsBookBrowserActivity::applyPendingRestoreLocked() {
+  selectorIndex = 0;
+  if (pendingRestoreIndex >= 0) {
+    if (!entries.empty()) {
+      const int idx = std::min(pendingRestoreIndex, static_cast<int>(entries.size()) - 1);
+      selectorIndex = idx;
+      // v347（codex 複查）：原位置的 href 還對得上就留在原位 —— SD 快取讀回的是一模一樣的清單，
+      // 從頭找 href 會在同一個 href 出現兩次時跳到第一個。對不上（feed 變了）才找離原位最近的同 href 項目。
+      if (!pendingRestoreHref.empty() && entries[idx].href != pendingRestoreHref) {
+        int best = -1;
+        for (int i = 0; i < static_cast<int>(entries.size()); i++) {
+          if (entries[i].href == pendingRestoreHref && (best < 0 || std::abs(i - idx) < std::abs(best - idx))) {
+            best = i;
+          }
+        }
+        if (best >= 0) selectorIndex = best;
+      }
+    }
+    pendingRestoreIndex = -1;
+    pendingRestoreHref.clear();
+  }
+}
+
+// v347：把目前的清單寫到 SD。回傳快取編號；任何一步失敗回 0（呼叫端照舊，回來時重新連線）。
+uint32_t OpdsBookBrowserActivity::saveFeedCache() {
+  if (entries.empty() || entries.size() > FEED_CACHE_MAX_ENTRIES) return 0;
+  const unsigned long t0 = millis();
+  const uint32_t id = ++feedCacheSeq;
+  char path[80];
+  feedCachePath(path, sizeof(path), id);
+  HalFile f;
+  if (!Storage.openFileForWrite("OPDS", path, f)) {
+    // 每次進書庫都把資料夾清掉，所以第一次存一定開不了 → 建資料夾再試一次。
+    // 先開再建：mkdir 很慢（v283），而且「已存在時回傳什麼」沒確認過，不拿它的回傳值做判斷。
+    char dir[64];
+    feedCacheDir(dir, sizeof(dir));
+    Storage.mkdir(dir);
+    if (!Storage.openFileForWrite("OPDS", path, f)) {
+      DiagLog::line("OPDS cache save FAILED open id=%lu", static_cast<unsigned long>(id));
+      return 0;
+    }
+  }
+  FeedCacheWriter w{f};
+  const uint32_t magic = FEED_CACHE_MAGIC;
+  const uint8_t version = FEED_CACHE_VERSION;
+  const uint8_t flags =
+      static_cast<uint8_t>((hasPrevPageItem ? FEED_CACHE_FLAG_PREV : 0) | (hasNextPageItem ? FEED_CACHE_FLAG_NEXT : 0));
+  const uint16_t count = static_cast<uint16_t>(entries.size());
+  w.put(&magic, sizeof(magic));
+  w.put(&version, sizeof(version));
+  w.put(&flags, sizeof(flags));
+  w.put(&count, sizeof(count));
+  w.put(&feedCacheNonce, sizeof(feedCacheNonce));
+  w.put(&id, sizeof(id));
+  for (size_t i = 0; w.ok && i < entries.size(); i++) {
+    const auto& e = entries[i];
+    const uint8_t type = static_cast<uint8_t>(e.type);
+    w.put(&type, sizeof(type));
+    w.str(e.title, FEED_CACHE_MAX_TITLE);
+    w.str(e.author, FEED_CACHE_MAX_AUTHOR);
+    w.str(e.href, FEED_CACHE_MAX_HREF);
+    w.str(e.id, FEED_CACHE_MAX_ID);
+  }
+  const uint32_t crc = w.crc;
+  w.put(&crc, sizeof(crc));
+  const size_t bytes = f.size();
+  const bool ok = f.close() && w.ok;  // close 會把緩衝寫出去；失敗時也要先關才能刪
+  if (!ok) {
+    Storage.remove(path);
+    DiagLog::line("OPDS cache save FAILED write id=%lu", static_cast<unsigned long>(id));
+    return 0;
+  }
+  DiagLog::line("OPDS cache save id=%lu n=%u bytes=%u ms=%lu", static_cast<unsigned long>(id),
+                static_cast<unsigned>(count), static_cast<unsigned>(bytes), millis() - t0);
+  return id;
+}
+
+// v347：讀回快取並換上。只要有任何一點不對（檔頭、筆數、長度、CRC、翻頁列、記憶體不夠）就回 false，
+// 目前的 entries 不動，呼叫端改成重新連線。
+bool OpdsBookBrowserActivity::loadFeedCache(const uint32_t id) {
+  const unsigned long t0 = millis();
+  char path[80];
+  feedCachePath(path, sizeof(path), id);
+  HalFile f;
+  if (!Storage.openFileForRead("OPDS", path, f)) {
+    DiagLog::line("OPDS back: cache miss id=%lu open", static_cast<unsigned long>(id));
+    return false;
+  }
+  FeedCacheReader r{f};
+  uint32_t magic = 0;
+  uint8_t version = 0;
+  uint8_t flags = 0;
+  uint16_t count = 0;
+  uint32_t nonce = 0;
+  uint32_t fileId = 0;
+  r.get(&magic, sizeof(magic));
+  r.get(&version, sizeof(version));
+  r.get(&flags, sizeof(flags));
+  r.get(&count, sizeof(count));
+  r.get(&nonce, sizeof(nonce));
+  r.get(&fileId, sizeof(fileId));
+  if (!r.ok || magic != FEED_CACHE_MAGIC || version != FEED_CACHE_VERSION ||
+      (flags & ~(FEED_CACHE_FLAG_PREV | FEED_CACHE_FLAG_NEXT)) != 0 || count == 0 || count > FEED_CACHE_MAX_ENTRIES ||
+      nonce != feedCacheNonce || fileId != id) {
+    DiagLog::line("OPDS back: cache miss id=%lu header", static_cast<unsigned long>(id));
+    return false;
+  }
+  // -fno-exceptions：配置失敗會 abort，不會丟例外 → 先看記憶體夠不夠，不夠就改重新連線。
+  // 最大連續塊要放得下整個 vector；總量要放得下所有字串（大約就是檔案大小）。
+  // 這是估計不是保證（其他 task 也在配置），但讀回的就是剛才解析器握過的同一份清單，
+  // 而目前這一頁在呼叫之前已經釋放了。
+  const size_t maxBlock = ESP.getMaxAllocHeap();
+  const size_t freeHeap = ESP.getFreeHeap();
+  const size_t vecBytes = count * sizeof(OpdsEntry);
+  if (maxBlock < vecBytes + FEED_CACHE_HEAP_MARGIN || freeHeap < vecBytes + f.size() + 2 * FEED_CACHE_HEAP_MARGIN) {
+    DiagLog::line("OPDS back: cache miss id=%lu lowmem max=%u free=%u", static_cast<unsigned long>(id),
+                  static_cast<unsigned>(maxBlock), static_cast<unsigned>(freeHeap));
+    return false;
+  }
+  std::vector<OpdsEntry> loaded;
+  loaded.reserve(count);
+  for (uint16_t i = 0; r.ok && i < count; i++) {
+    uint8_t type = 0;
+    OpdsEntry e;
+    r.get(&type, sizeof(type));
+    // 明列兩種合法值，不靠 enum 的排列順序（codex 第二輪）
+    if (type != static_cast<uint8_t>(OpdsEntryType::NAVIGATION) && type != static_cast<uint8_t>(OpdsEntryType::BOOK)) {
+      r.ok = false;
+    }
+    r.str(e.title, FEED_CACHE_MAX_TITLE);
+    r.str(e.author, FEED_CACHE_MAX_AUTHOR);
+    r.str(e.href, FEED_CACHE_MAX_HREF);
+    r.str(e.id, FEED_CACHE_MAX_ID);
+    if (!r.ok) break;
+    e.type = static_cast<OpdsEntryType>(type);
+    loaded.push_back(std::move(e));
+  }
+  const uint32_t computed = r.crc;
+  uint32_t stored = 0;
+  r.get(&stored, sizeof(stored));
+  if (!r.ok || stored != computed || f.available() != 0) {
+    DiagLog::line("OPDS back: cache miss id=%lu body n=%u", static_cast<unsigned long>(id),
+                  static_cast<unsigned>(loaded.size()));
+    return false;
+  }
+  const bool prev = (flags & FEED_CACHE_FLAG_PREV) != 0;
+  const bool next = (flags & FEED_CACHE_FLAG_NEXT) != 0;
+  // 翻頁列一定是導覽項，而且兩列不會是同一列（只有一筆卻兩邊都標就是壞檔）
+  if ((prev && loaded.front().type != OpdsEntryType::NAVIGATION) ||
+      (next && loaded.back().type != OpdsEntryType::NAVIGATION) || (prev && next && loaded.size() < 2)) {
+    DiagLog::line("OPDS back: cache miss id=%lu pagerows", static_cast<unsigned long>(id));
+    return false;
+  }
+  setError({});  // 與 fetchFeed 相同（它在連線前清）；setError 自己拿鎖，所以放在下面的鎖外面
+  {
+    RenderLock lock;  // 與 fetchFeed 相同：entries、翻頁列旗標、selectorIndex 要對 render task 一起換掉
+    entries = std::move(loaded);
+    hasPrevPageItem = prev;
+    hasNextPageItem = next;
+    applyPendingRestoreLocked();
+  }
+  state = BrowserState::BROWSING;
+  requestUpdate();
+  DiagLog::line("OPDS back: cache hit id=%lu n=%u ms=%lu max=%u free=%u", static_cast<unsigned long>(id),
+                static_cast<unsigned>(count), millis() - t0, static_cast<unsigned>(maxBlock),
+                static_cast<unsigned>(freeHeap));
+  return true;
+}
+
+void OpdsBookBrowserActivity::removeFeedCache(const uint32_t id) {
+  if (id == 0) return;
+  char path[80];
+  feedCachePath(path, sizeof(path), id);
+  Storage.remove(path);
+}
+
+// 快取資料夾整個刪掉。呼叫端都未持 RenderLock：onEnter，以及 loop() 裡兩個回主畫面的出口。
+void OpdsBookBrowserActivity::clearFeedCache() {
+  char dir[64];
+  feedCacheDir(dir, sizeof(dir));
+  Storage.removeDir(dir);  // 資料夾不存在就是回 false，沒關係
 }
 
 void OpdsBookBrowserActivity::downloadBook(const OpdsEntry& book) {
