@@ -237,6 +237,8 @@ static int g_pwrPadErr[8] = {PWRPAD_NA, PWRPAD_NA, PWRPAD_NA, PWRPAD_NA, PWRPAD_
 static PwrPadSnap snapPwrPad(const int pinNo) {
   PwrPadSnap s;
   if (pinNo < 0 || pinNo >= GPIO_NUM_MAX) return s;
+#if CONFIG_IDF_TARGET_ESP32C3
+  // 以下暫存器配置是 C3 的；S3（Metalio 等）上這段診斷全部記 0。 / C3 register layout; zeros on S3.
   s.iomux = REG_READ(GPIO_PIN_MUX_REG[pinNo]);  // IO_MUX：FUN_IE(9) FUN_WPU(8) FUN_WPD(7) MCU_SEL(12–14) SLP_SEL(1)
   s.enable = (GPIO.enable.val >> pinNo) & 1u;   // GPIO 輸出致能（1 ＝ 腳位在驅動）
   s.out = (GPIO.out.val >> pinNo) & 1u;         // 輸出 latch
@@ -248,6 +250,7 @@ static PwrPadSnap snapPwrPad(const int pinNo) {
   s.digHold = REG_READ(RTC_CNTL_DIG_PAD_HOLD_REG);
   s.gpioWake = REG_READ(RTC_CNTL_GPIO_WAKEUP_REG);  // 深睡眠 GPIO 喚醒設定／狀態
   s.extWake = REG_READ(RTC_CNTL_EXT_WAKEUP_CONF_REG);
+#endif
   return s;
 }
 static void logPwrPad(const char* tag, const int pinNo, const PwrPadSnap& s) {
@@ -269,7 +272,9 @@ static void resetPwrPad(const int pinNo) {
 #if SOC_GPIO_SUPPORT_SLP_SWITCH
   g_pwrPadErr[1] = gpio_sleep_sel_dis(g);  // codex：SLP_SEL 不能靠 reset_pin 的副作用，明講
 #endif
+#if SOC_GPIO_SUPPORT_DEEPSLEEP_WAKEUP
   g_pwrPadErr[2] = gpio_deep_sleep_wakeup_disable(g);
+#endif
   g_pwrPadErr[3] = gpio_wakeup_disable(g);
 #if SOC_RTCIO_PIN_COUNT > 0
   // pad 從 RTC 功能交回數位 IO_MUX（C3 沒有）
