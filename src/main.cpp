@@ -585,6 +585,11 @@ static constexpr unsigned LIGHT_SLEEP_MIN_SOC = 10;
 static constexpr uint64_t LIGHT_SLEEP_WINDOW_US = 30ULL * 60ULL * 1000000ULL;  // 30 分鐘
 
 static bool lightSleepEnabled() {
+#if FREEINK_DEVICE_METALIO_EINK4
+  // 淺睡眠的喚醒與 GPIO13 電源閂鎖是照 X3／X4（C3）設計的；Metalio 的 GPIO13 是面板 DC 腳。
+  // Light sleep is built around the X3/X4 GPIO13 latch; on Metalio GPIO13 is EPD DC.
+  return false;
+#endif
   // v341（codex）：開機讀不到卡片 CID ＝ 醒來無法確認卡沒被換過 →
   // 不淺睡眠（每次都真關機、醒來重新掛卡），不要默默照舊。
   if (!g_sdCidOk) return false;
@@ -1638,8 +1643,14 @@ void setup() {
       // v197：這條就是「充電時按電源鍵被判成是 USB 叫醒的」的嫌犯。
       DiagLog::line("WAKE abort why=usbpower usb=%u t=%lu", static_cast<unsigned>(g_wakeUsb),
                     static_cast<unsigned long>(millis()));
+#if FREEINK_DEVICE_METALIO_EINK4
+      // Metalio has native USB only: sleeping here would make a USB-powered
+      // boot (or the reset after flashing) drop the serial/JTAG port.
+      break;
+#else
       powerManager.startDeepSleep(gpio);
       break;
+#endif
     case HalGPIO::WakeupReason::AfterFlash:
       // After flashing, just proceed to boot
     case HalGPIO::WakeupReason::Other:
