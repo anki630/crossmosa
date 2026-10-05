@@ -127,6 +127,21 @@ class ChapterHtmlSlimParser {
   int tableRowIndex = 0;
   int tableColIndex = 0;
   bool listItemBulletOnly = false;  // true when currentTextBlock has only the <li> bullet
+  // v362（上游 #3500 的想法）：開著的 <ul>／<ol>，最內層決定 <li> 前面放什麼記號（<li> 自己的 CSS 優先）。
+  //   depth＝開啟時的 depth；收尾時比對，因為 display:none／hidden 的清單根本沒推進來，不能誤 pop 外層的。
+  struct ListContext {
+    int depth = 0;
+    int counter = 0;  // 已經編到幾號；下一個 <li> 先加一（或照 value 屬性）。<ul> 也計數（CSS 給它編號樣式時用得到）
+    CssListStyleType type = CssListStyleType::Disc;  // 項目沒自己指定時的記號樣式
+  };
+  static constexpr uint8_t LIST_STACK_CAPACITY = 8;  // 固定容量：不在重排視窗裡配記憶體（codex v362）
+  ListContext listStack_[LIST_STACK_CAPACITY];
+  uint8_t listDepth_ = 0;
+  uint16_t listOverflowDepth_ = 0;  // 超過容量的巢狀層數（那些層的 <li> 照舊放圓點）
+  // v362：最外層 <nav> 開啟時的 depth；-1＝不在 <nav> 裡。nav 裡的清單預設不放記號 ——
+  //   EPUB 3.3 Reading Systems §7、EPUB 3.0.1 Content Documents §2.2.4.1：目錄（nav）裡清單項目的預設樣式
+  //   等同 list-style: none，書的 CSS 可以另外指定。目錄文件被放進 spine 的書（書庫約兩成）會把它當內文排。
+  int navOpenDepth_ = -1;
 
   // Anchor-to-page mapping: tracks which page each HTML id attribute lands on
   int completedPageCount = 0;

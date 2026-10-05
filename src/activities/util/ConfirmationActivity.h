@@ -13,8 +13,11 @@ class ConfirmationActivity : public Activity {
   std::string body;
 
   const int margin = 20;
-  const int spacing = 30;
-  const int fontId = UI_10_FONT_ID;
+  // v363：標題與說明改 14px（原本 10px；選項本來就是 14px）。字變高之後，行距 30→8、起點 1/6→1/8 螢幕高，
+  //   兩行字（底端＝起點＋76）才不會壓到置中的選項彈窗：最緊的是 X4 橫向（高 480）——起點 60、字底 136，
+  //   彈窗頂 Formosa Pro 156／Formosa 151。原本 10px 在 X4 橫向就已經壓到（Pro 2px、Formosa 15px）。
+  const int spacing = 8;
+  const int fontId = UI_12_FONT_ID;
 
   std::string safeHeading;
   std::string safeBody;

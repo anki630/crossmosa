@@ -33,7 +33,9 @@
 class CssParser {
  public:
   // Bump when CSS cache format or rules change; section caches are invalidated when this changes
-  static constexpr uint8_t CSS_CACHE_VERSION = 8;
+  // v362：規則多存 list-style-type。⚠️ v362 交付後（2026-10-04）9 已經在機器上：之後改清單樣式的語意
+  //   （CssListStyleType 的值、CssListStyle.h 的解析規則）要跳 10，Section.cpp 的 SECTION_FILE_VERSION 也要跳。
+  static constexpr uint8_t CSS_CACHE_VERSION = 9;
 
   explicit CssParser(std::string cachePath) : cachePath(std::move(cachePath)) {}
   ~CssParser() = default;

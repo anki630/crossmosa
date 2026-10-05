@@ -26,6 +26,9 @@
 #include "fontIds.h"
 
 namespace {
+// 比對結果畫面：兩個選項（套用遠端／上傳本機）從標題下方往下多少開始。render 與觸控共用（v363）。
+constexpr int RESULT_OPTIONS_OFFSET = 230;
+
 std::string calculateDocumentHashForMethod(const std::string& path, const DocumentMatchMethod method) {
   return method == DocumentMatchMethod::FILENAME ? KOReaderDocumentId::calculateFromFilename(path)
                                                  : KOReaderDocumentId::calculate(path);
@@ -471,22 +474,11 @@ void KOReaderSyncActivity::render(RenderLock&&) {
              localProgress.percentage * 100);
     renderer.drawText(UI_10_FONT_ID, screen.x + metrics.contentSidePadding, top + 200, localPageStr);
 
-    const int optionY = top + 230;
-    const int optionHeight = 30;
-
-    // Apply option
-    if (selectedOption == 0) {
-      renderer.fillRect(screen.x, optionY - 2, screen.width - 1, optionHeight);
-    }
-    renderer.drawText(UI_10_FONT_ID, screen.x + metrics.contentSidePadding, optionY, tr(STR_APPLY_REMOTE),
-                      selectedOption != 0);
-
-    // Upload option
-    if (selectedOption == 1) {
-      renderer.fillRect(screen.x, optionY + optionHeight - 2, screen.width - 1, optionHeight);
-    }
-    renderer.drawText(UI_10_FONT_ID, screen.x + metrics.contentSidePadding, optionY + optionHeight,
-                      tr(STR_UPLOAD_LOCAL), selectedOption != 1);
+    // v363：兩個選項改用主題的清單（14px、跟其他清單同一種選取框）；原本是 10px 加整列黑底。
+    //   版面跟觸控共用 RESULT_OPTIONS_OFFSET。
+    GUI.drawList(renderer, Rect{screen.x, top + RESULT_OPTIONS_OFFSET, screen.width, metrics.listRowHeight * 2}, 2,
+                 selectedOption,
+                 [](int index) { return std::string(index == 0 ? tr(STR_APPLY_REMOTE) : tr(STR_UPLOAD_LOCAL)); });
 
     // Bottom button hints
     const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
@@ -553,20 +545,14 @@ void KOReaderSyncActivity::loop() {
       const auto& metrics = UITheme::getInstance().getMetrics();
       const Rect screen = UITheme::getInstance().getScreenSafeArea(renderer, true, false);
       const int top = screen.y + metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
-      constexpr int optionHeight = 30;
-      int touchedOption = -1;
-      const auto touch = mappedInput.rowTouch(touchedOption, top + 230 - 2, optionHeight, 2);
-      if (touch == MappedInputManager::RowTouch::Down) {
-        if (selectedOption != touchedOption) {
-          selectedOption = touchedOption;
-          requestUpdate();
-        }
-        return;
-      }
-      if (touch == MappedInputManager::RowTouch::Tap) {
-        selectedOption = touchedOption;
-        chooseSelected();
-        return;
+      switch (handleListTouch(selectedOption, 2, top + RESULT_OPTIONS_OFFSET, metrics.listRowHeight * 2, false)) {
+        case ListTouchResult::Activated:
+          chooseSelected();
+          return;
+        case ListTouchResult::Consumed:
+          return;
+        case ListTouchResult::None:
+          break;
       }
     }
 

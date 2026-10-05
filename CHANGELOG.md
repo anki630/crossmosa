@@ -8,6 +8,32 @@
 
 ---
 
+## 2.2.0-beta.2 (2026-10) — internal build 364
+
+> 這是 Beta 版，給想先試新功能的人；一般使用請用正式版 [2.1.0](https://github.com/anki630/crossmosa/releases/tag/v2.1.0)。
+
+### 功能 (Features)
+
+- 書裡的編號清單會顯示 1. 2. 3.，也會照書的設定顯示 A. B. C.、i. ii. iii. 或一、二、三、。
+- 註腳清單、確認框和 WiFi 的選項改成大字。
+
+### 閱讀與效能 (Reading and performance)
+
+- 書標明不要記號的清單，不再多出圓點。
+- 目錄頁的項目前面不再多出圓點。
+- 清單照書的設定往內縮。
+
+### 穩定性 (Stability)
+
+- 已經打開過的書，目錄頁後面的英文清單也會消失。
+- 已經打開過的直排書，三位數字也不會再擠到隔壁欄。
+
+### 升級注意 (Upgrade notes)
+
+- 升級後，每本書的每一章第一次打開時會重新排版一次，會慢一點；書與閱讀進度都會保留。
+
+---
+
 ## 2.2.0-beta.1 (2026-10) — internal build 361
 
 > 這是 Beta 版，給想先試新功能的人；一般使用請用正式版 [2.1.0](https://github.com/anki630/crossmosa/releases/tag/v2.1.0)。

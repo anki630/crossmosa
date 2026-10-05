@@ -17,6 +17,7 @@
 #include "../../../../src/fontIds.h"
 #include "../VerticalEm.h"
 #include "../VerticalText.h"
+#include "ListMarker.h"
 
 namespace {
 // v252 BUILDPROF：RAII 累計計時器（ParsedText::buildProf 的欄位）。
@@ -67,7 +68,9 @@ constexpr size_t MAX_ANCHORS_PER_CHAPTER = 1024;
 constexpr int MIN_CHARS_PER_LINE = 8;
 
 constexpr const char* HEADER_TAGS[] = {"h1", "h2", "h3", "h4", "h5", "h6"};
-constexpr const char* BLOCK_TAGS[] = {"p", "li", "div", "br", "blockquote"};
+// v362（上游 #3500）：<ul>／<ol> 也是區塊容器 —— 書的 CSS 給清單的邊距、內距才會落到每個項目上
+//   （原本整個被略過，項目貼著版心；懸掛縮排的 <li><p> 第一行還會跑出版面）。
+constexpr const char* BLOCK_TAGS[] = {"p", "li", "div", "br", "blockquote", "ul", "ol"};
 constexpr const char* BOLD_TAGS[] = {"b", "strong"};
 constexpr const char* ITALIC_TAGS[] = {"i", "em"};
 constexpr const char* UNDERLINE_TAGS[] = {"u", "ins"};
@@ -531,6 +534,12 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
   std::string styleAttr;
   std::string dirAttr;
   bool hasHiddenAttr = false;
+  // v362：<ol start="5">、<li value="3">（書庫約 6%／2% 的書用到）。夾在合理範圍，壞值當沒有。
+  bool hasListNumberAttr = false;
+  int listNumberAttr = 0;
+  // v362：<ol type="A">（有書用字母標註腳，內文寫 [A][B]）。值分大小寫（HTML 規格），不認得的當沒寫。
+  bool hasListTypeAttr = false;
+  CssListStyleType listTypeAttr = CssListStyleType::Decimal;
   if (atts != nullptr) {
     for (int i = 0; atts[i]; i += 2) {
       if (strcmp(atts[i], "class") == 0) {
@@ -563,6 +572,39 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
         dirAttr = atts[i + 1];
       } else if (strcmp(atts[i], "hidden") == 0) {
         hasHiddenAttr = true;
+      } else if ((strcmp(atts[i], "start") == 0 && strcmp(element, "ol") == 0) ||
+                 (strcmp(atts[i], "value") == 0 && strcmp(element, "li") == 0)) {
+        char* endPtr = nullptr;
+        const long n = strtol(atts[i + 1], &endPtr, 10);
+        if (endPtr != atts[i + 1] && n > -100000 && n < 100000) {
+          hasListNumberAttr = true;
+          listNumberAttr = static_cast<int>(n);
+        }
+      } else if (strcmp(atts[i], "type") == 0 && strcmp(element, "ol") == 0) {
+        const char* const t = atts[i + 1];
+        if (t[0] != '\0' && t[1] == '\0') {
+          hasListTypeAttr = true;
+          switch (t[0]) {
+            case '1':
+              listTypeAttr = CssListStyleType::Decimal;
+              break;
+            case 'a':
+              listTypeAttr = CssListStyleType::LowerAlpha;
+              break;
+            case 'A':
+              listTypeAttr = CssListStyleType::UpperAlpha;
+              break;
+            case 'i':
+              listTypeAttr = CssListStyleType::LowerRoman;
+              break;
+            case 'I':
+              listTypeAttr = CssListStyleType::UpperRoman;
+              break;
+            default:
+              hasListTypeAttr = false;
+              break;
+          }
+        }
       }
     }
   }
@@ -585,7 +627,7 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
   // v361（上游 #3390）：HTML 的 hidden 屬性蓋過 CSS 的 display。放在 cssParser 之外 ——
   //   「內嵌樣式」關掉時也要生效。最常見的是被放進 spine 的導覽文件裡那段
   //   <nav epub:type="landmarks" hidden="">（封面／目錄／正文清單），原本會被當內文排出來。
-  //   ⚠️ 沒有 bump SECTION_FILE_VERSION：已經排過的章節維持舊快取，刪該書快取才看得到。
+  //   v362 跳了 SECTION_FILE_VERSION（130 → 131），既有快取重排一次，這項才對已經打開過的書生效。
   if (hasHiddenAttr) {
     cssStyle.display = CssDisplay::None;
     cssStyle.defined.display = 1;
@@ -1280,8 +1322,51 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
       if (!self->startNewTextBlock(accumulated.withoutBottom())) return;
       self->updateEffectiveInlineStyle();
       if (strcmp(element, "li") == 0) {
-        self->currentTextBlock->addWord("\xe2\x80\xa2", EpdFontFamily::REGULAR, false, false, self->visibleTextOffset);
-        self->listItemBulletOnly = true;
+        // v362：記號樣式＝<li> 自己的 CSS（CSS 的繼承：自己沒寫才用清單的）＞ 最內層 <ul>／<ol> 的。
+        //   不在任何清單裡的 <li>（壞掉的 HTML）照舊放圓點（自己寫 none 就不放）；
+        //   超過固定容量的巢狀層（listOverflowDepth_）也當成「不在清單裡」，不動外層的編號。
+        //   直排時「1.」「12.」由縦中横併進一格（VerticalText.h 的 tateChuYokoLen
+        //   本來就收列點）；字母、羅馬數字照西文躺著排。
+        ListContext* const list =
+            (self->listDepth_ > 0 && self->listOverflowDepth_ == 0) ? &self->listStack_[self->listDepth_ - 1] : nullptr;
+        if (list) {
+          // 沒有記號的項目也照樣占一個號碼（跟瀏覽器一樣），後面的編號才不會錯位。
+          list->counter = hasListNumberAttr ? listNumberAttr : list->counter + 1;
+        }
+        CssListStyleType type = cssStyle.hasListStyleType() ? cssStyle.listStyleType
+                                : list                      ? list->type
+                                                            : CssListStyleType::Disc;
+        if (!list && type != CssListStyleType::None) type = CssListStyleType::Disc;
+        char marker[ListMarker::MAX_BYTES];
+        if (ListMarker::format(type, list ? list->counter : 1, marker, sizeof(marker)) > 0) {
+          self->currentTextBlock->addWord(marker, EpdFontFamily::REGULAR, false, false, self->visibleTextOffset);
+          self->listItemBulletOnly = true;
+        }
+      } else if (strcmp(element, "ul") == 0 || strcmp(element, "ol") == 0) {
+        // v362（codex）：清單的【下邊距】不存進堆疊 —— 收尾時它會被存進收尾後建的空區塊，再被下一段的
+        //   「空區塊合併」當成那一段的下邊距，跑到下一段【後面】（所有容器都有這個老問題，div 也是；
+        //   清單原本整個沒有邊距，不要因為這版變成放錯位置）。上邊距與左右縮排照樣生效。
+        self->blockStyleStack.back() = self->blockStyleStack.back().withoutBottom();
+        // 固定容量、不配記憶體（重排視窗是記憶體最緊的時候）；超過的層數照舊放圓點。
+        if (self->listDepth_ < LIST_STACK_CAPACITY) {
+          ListContext& ctx = self->listStack_[self->listDepth_++];
+          const bool ordered = strcmp(element, "ol") == 0;
+          ctx.depth = self->depth;
+          ctx.counter = (ordered && hasListNumberAttr) ? listNumberAttr - 1 : 0;
+          // 優先序跟 CSS 一樣：書的 CSS ＞ type 屬性（作者寫的，算作者層）＞ <nav> 裡預設不放（閱讀器的預設）＞
+          //   HTML 的預設（ol 數字、ul 圓點）。
+          if (cssStyle.hasListStyleType()) {
+            ctx.type = cssStyle.listStyleType;
+          } else if (ordered && hasListTypeAttr) {
+            ctx.type = listTypeAttr;
+          } else if (self->navOpenDepth_ >= 0) {
+            ctx.type = CssListStyleType::None;
+          } else {
+            ctx.type = ordered ? CssListStyleType::Decimal : CssListStyleType::Disc;
+          }
+        } else {
+          self->listOverflowDepth_++;
+        }
       }
     }
   } else if (matches(element, UNDERLINE_TAGS, std::size(UNDERLINE_TAGS))) {
@@ -1387,6 +1472,12 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
       self->inlineStyleStack.push_back(entry);
       self->updateEffectiveInlineStyle();
     }
+  }
+
+  // v362：<nav> 裡的清單預設不放記號（見標頭 navOpenDepth_）。放在這裡＝已經走過所有「略過」的路徑
+  //   （display:none、hidden、分頁標記…都在前面 return 了），隱藏的 nav 不會被記到；只記最外層。
+  if (self->navOpenDepth_ < 0 && strcmp(element, "nav") == 0) {
+    self->navOpenDepth_ = self->depth;
   }
 
   // Unprocessed tag, just increasing depth and continue forward
@@ -1671,8 +1762,22 @@ void XMLCALL ChapterHtmlSlimParser::endElement(void* userData, const XML_Char* n
     self->nonVisibleTextDepth--;
   }
 
+  // v362（codex）：被略過的子樹（display:none、hidden、分頁標記、不顯示的標籤）。
+  //   開啟時，子樹【裡面】的元素在 startElement 的「Middle of skip」就 return 了，什麼都沒推；
+  //   被略過的那個元素本身也在推 blockStyleStack 之前就 return。原本收尾照走一般流程 ——
+  //   子樹裡每個 </p>／</li>／</ol> 都 pop 一層【外層】的 blockStyleStack（之後的段落掉了外層縮排），
+  //   </rt> 還會去動外層的注音（ruby）文字。上游同款；v361 的 hidden、v362 讓 <ul>／<ol> 也會 pop，碰到的更多。
+  //   這裡的 depth 還沒減：元素開啟時的 depth ＝ self->depth - 1。
+  if (self->skipUntilDepth < self->depth - 1) {
+    self->depth -= 1;  // 子樹裡面：只做 depth 簿記
+    return;
+  }
+  // 被略過的根元素本身：開啟時在推任何狀態之前就 return（ruby、表格、區塊樣式都沒動），
+  //   收尾只做共同的部分（flush、Leaving skip、粗斜體重設），下面的 ruby／表格／區塊收尾都要跳過（codex v362 第二輪）。
+  const bool closingSkippedRoot = self->skipUntilDepth == self->depth - 1;
+
   // Ruby text: </rt> distributes ruby to base words, </ruby> resets ruby state
-  if (strcmp(element, "rt") == 0) {
+  if (strcmp(element, "rt") == 0 && !closingSkippedRoot) {
     self->collectingRubyText = false;
     if (self->inRuby && self->currentTextBlock) {
       const int currentWordCount = static_cast<int>(self->currentTextBlock->size());
@@ -1704,7 +1809,7 @@ void XMLCALL ChapterHtmlSlimParser::endElement(void* userData, const XML_Char* n
     self->depth -= 1;
     return;
   }
-  if (strcmp(element, "ruby") == 0 && self->inRuby) {
+  if (strcmp(element, "ruby") == 0 && self->inRuby && !closingSkippedRoot) {
     self->inRuby = false;
     self->rubyStartWordIndex = -1;
     self->rubyTextBuffer.clear();
@@ -1727,7 +1832,7 @@ void XMLCALL ChapterHtmlSlimParser::endElement(void* userData, const XML_Char* n
   const bool headerOrBlockTag = isHeaderOrBlock(name);
   const bool tableStructuralTag = isTableStructuralTag(name);
 
-  if (self->tableDepth > 1 && strcmp(element, "table") == 0) {
+  if (self->tableDepth > 1 && strcmp(element, "table") == 0 && !closingSkippedRoot) {
     // get rid of all text inside the nested table
     self->partWordBufferIndex = 0;
     self->tableDepth -= 1;
@@ -1819,7 +1924,7 @@ void XMLCALL ChapterHtmlSlimParser::endElement(void* userData, const XML_Char* n
     self->nextWordContinues = false;
   }
 
-  if (self->tableDepth == 1 && strcmp(element, "table") == 0) {
+  if (self->tableDepth == 1 && strcmp(element, "table") == 0 && !closingSkippedRoot) {
     self->tableDepth -= 1;
     self->tableRowIndex = 0;
     self->tableColIndex = 0;
@@ -1844,7 +1949,8 @@ void XMLCALL ChapterHtmlSlimParser::endElement(void* userData, const XML_Char* n
   }
 
   // Clear block style when leaving header or block elements
-  if (headerOrBlockTag) {
+  // v362：被略過的區塊本身開啟時沒推 blockStyleStack（見上面 closingSkippedRoot），收尾也不能 pop。
+  if (headerOrBlockTag && !closingSkippedRoot) {
     self->currentCssStyle.reset();
     self->updateEffectiveInlineStyle();
 
@@ -1880,6 +1986,19 @@ void XMLCALL ChapterHtmlSlimParser::endElement(void* userData, const XML_Char* n
       self->listItemBulletOnly = false;
     }
   }
+  // v362：最外層 </nav> 收掉「nav 裡」的狀態 —— 只在 depth 對得上時（被略過的 nav 開啟時沒記）。
+  if (self->navOpenDepth_ == self->depth && !closingSkippedRoot && strcmp(element, "nav") == 0) {
+    self->navOpenDepth_ = -1;
+  }
+  // v362：</ul>／</ol> 收掉自己的清單狀態 —— 只在 depth 對得上時（沒推過的清單不能 pop 到外層的）。
+  //   被略過的清單（hidden、display:none）在上面 closingSkippedRoot 那裡就不會走到推堆疊，這裡也對不上 depth。
+  if ((strcmp(element, "ul") == 0 || strcmp(element, "ol") == 0) && !closingSkippedRoot) {
+    if (self->listOverflowDepth_ > 0) {
+      self->listOverflowDepth_--;
+    } else if (self->listDepth_ > 0 && self->listStack_[self->listDepth_ - 1].depth == self->depth) {
+      self->listDepth_--;
+    }
+  }
   if (strcmp(element, "body") == 0) {
     self->insideBody = false;
   }
@@ -1902,6 +2021,9 @@ bool ChapterHtmlSlimParser::beginParse() {
                                  : static_cast<CssTextAlign>(this->paragraphAlignment);
   blockStyleStack.clear();
   blockStyleStack.reserve(8);
+  listDepth_ = 0;  // v362
+  listOverflowDepth_ = 0;
+  navOpenDepth_ = -1;
   blockStyleStack.push_back(rootBlockStyle);
 
   auto paragraphAlignmentBlockStyle = BlockStyle();

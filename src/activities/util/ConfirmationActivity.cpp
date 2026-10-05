@@ -24,7 +24,7 @@ void ConfirmationActivity::onEnter() {
 
   // Text sits in the upper part of the screen so the confirmation popup
   // (centered) doesn't cover it.
-  startY = renderer.getScreenHeight() / 6;
+  startY = renderer.getScreenHeight() / 8;  // v363：見標頭 spacing 的註解
 
   const char* options[] = {I18N.get(StrId::STR_CANCEL), I18N.get(StrId::STR_CONFIRM)};
   confirmPopup.show(safeHeading.c_str(), options, 2, 0, [this](int idx) {

@@ -170,6 +170,9 @@ static uint32_t g_idleEarlyWakes = 0;
 //   idleus 用 64 位元：一直看書不睡的話，32 位元的 µs 半天就會繞回去（codex 第二輪）。
 static uint32_t g_idleChecks = 0;
 static uint64_t g_idleCheckUs = 0;
+// v362：v361 實機 idleus÷idlechk ＝ 0.73 ms（主畫面）～1.22 ms（看書），但 micros() 量的是牆上時間，
+//   別的 task 插隊也算進去 → 那是上限。最短的那一次沒被插隊，是一次讀按鍵的真實代價（下限）。
+static uint32_t g_idleCheckUsMin = UINT32_MAX;
 
 // ─── v310：電源鍵的【唯一真相】 ─────────────────────────────────────────────
 // 委員會鑑識（grok 讀 InputManager，codex 做結構審查，兩者收斂）：
@@ -1107,15 +1110,16 @@ void enterDeepSleep(bool fromTimeout = false) {
   //   的寫入路徑在堆疊上多一塊 512 B，這兩個數字是它的證人（量的是「到目前為止」，不是保證）。
   DiagLog::line(
       "SLEEP timeout=%d mode=%d nvsw=%lu nvsmax=%lu nvsfail=%lu nvserr=%d lstk=%u rstk=%u idlewake=%lu idlechk=%lu "
-      "idleus=%llu",
+      "idleus=%llu idleusmin=%lu",
       static_cast<int>(fromTimeout), static_cast<int>(WiFi.getMode()), static_cast<unsigned long>(nvsIn.writes),
       static_cast<unsigned long>(nvsIn.usMax), static_cast<unsigned long>(nvsIn.fails), nvsIn.lastErr,
       static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr)), activityManager.renderStackHighWater(),
       static_cast<unsigned long>(g_idleEarlyWakes), static_cast<unsigned long>(g_idleChecks),
-      static_cast<unsigned long long>(g_idleCheckUs));
+      static_cast<unsigned long long>(g_idleCheckUs), static_cast<unsigned long>(g_idleChecks ? g_idleCheckUsMin : 0));
   g_idleEarlyWakes = 0;
   g_idleChecks = 0;
   g_idleCheckUs = 0;
+  g_idleCheckUsMin = UINT32_MAX;
   APP_STATE.lastSleepFromReader = activityManager.isReaderActivity();
 
   // ⭐ v326（帳本 A9，維護者 2026-09-21 選定）：wake frame
@@ -2132,7 +2136,9 @@ void loop() {
         delay(10);
         const uint32_t checkT0 = micros();
         const bool touched = gpio.inputActive();
-        g_idleCheckUs += micros() - checkT0;
+        const uint32_t checkUs = micros() - checkT0;
+        g_idleCheckUs += checkUs;
+        if (checkUs < g_idleCheckUsMin) g_idleCheckUsMin = checkUs;
         g_idleChecks++;
         if (touched) {
           g_idleEarlyWakes++;

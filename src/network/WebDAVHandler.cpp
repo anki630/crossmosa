@@ -617,9 +617,11 @@ void WebDAVHandler::handleCopy(WebServer& s) {
     return;
   }
 
-  // v361：複製緩衝原本是 4 KB 的區域陣列，放在主迴圈的堆疊上（總共 8 KB）。SD 批次寫入（USE_SPI_ARRAY_TRANSFER）
-  //   在寫入路徑又多 560 B（SdSpiArduinoDriver::send），兩個疊起來太貼（codex 量 ELF：本函式 4,224 B）。改放堆積，
-  //   而且在刪掉舊的目的檔之前配 —— 配不到就什麼都不動。用 malloc：記憶體見底時 nothrow new 也可能直接 abort。
+  // v361：複製緩衝原本是 4 KB 的區域陣列，放在主迴圈的堆疊上；SD 批次寫入（USE_SPI_ARRAY_TRANSFER）在寫入路徑
+  //   又多 560 B（SdSpiArduinoDriver::send）。當時以為主迴圈只有 8 KB 而判成太貼 —— v361 實機後更正：主迴圈是
+  //   16 KB（freeink-sdk 的 getArduinoLoopTaskStackSize 弱定義），實測最低還剩 7.3 KB，原本其實放得下。
+  //   放堆積無害就留著，而且在刪掉舊的目的檔之前配 —— 配不到就什麼都不動。用 malloc：記憶體見底時 nothrow new 也可能
+  //   abort。
   constexpr size_t kCopyBufSize = 4096;
   std::unique_ptr<uint8_t, void (*)(void*)> buf(static_cast<uint8_t*>(malloc(kCopyBufSize)), free);
   if (!buf) {

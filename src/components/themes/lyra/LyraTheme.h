@@ -62,9 +62,9 @@ constexpr ThemeMetrics values = {.batteryWidth = 16,
                                  .optionPopupItemSpacing = 8,
                                  .optionPopupInnerPadding = 20,
                                  .optionPopupSelectionHPadding = 16,
-                                 .optionPopupSelectionVPadding = 12,
+                                 .optionPopupSelectionVPadding = 3,  // v363：列高 34+6=40
                                  .optionPopupTitleGap = 16,
-                                 .optionPopupUseSmallFont = true,
+                                 .optionPopupUseSmallFont = false,  // v363：14px
                                  .optionPopupOptionFontBold = false,
                                  .optionPopupSelectionRadius = 6,
                                  .optionPopupSelectionLight = true,

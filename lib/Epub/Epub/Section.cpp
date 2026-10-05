@@ -78,7 +78,12 @@ namespace {
 // v218：110 → 111。混合 token 依「漢字段／ASCII 段」拆開、縦中横規則放寬到「一到三位
 // 數字＋可選結尾標點」。兩者都改變 unit 切分，也就改變版面。
 // v285：檔頭新增凍結的 emFP 欄位（佈局改變），且行距檔位回到快取身分裡，v284 是 129
-constexpr uint8_t SECTION_FILE_VERSION = 130;
+// v362：130 → 131。檔頭佈局不變，跳號是為了讓既有快取重排一次：編號清單（<ol> 的 1. 2. 3.、
+//   字母／羅馬數字／中文數字與 type 屬性、list-style-type: none 不放記號、目錄 <nav> 裡預設不放、
+//   <ul>／<ol> 的邊距落到項目上），以及之前沒跳號的兩項 ——
+//   v361 的 HTML hidden 屬性、v352 的直排三位數縦中横門檻。代價：每本書每一章下次打開重排一次（A-11）。
+//   ⚠️ v362 交付後（2026-10-04）131 已經在機器上：之後改清單記號（ListMarker.h、CssListStyle.h、<nav> 預設）要跳 132。
+constexpr uint8_t SECTION_FILE_VERSION = 131;
 // v187 檔頭的 cssState 欄位：0 = 沒用 CSS（embeddedStyle 關或載入失敗）、1 = 規則全載、
 // 2 = 撞記憶體地板被截斷（樣式打折的版面）。loadSectionFile 看到 2 且此刻記憶體寬裕就重排。
 constexpr uint8_t CSS_STATE_NONE = 0;

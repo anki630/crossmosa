@@ -571,29 +571,19 @@ void WifiSelectionActivity::loop() {
   if (state == WifiSelectionState::SAVE_PROMPT) {
     {
       const Rect screen = UITheme::getInstance().getScreenSafeArea(renderer, true, false);
-      const auto height = renderer.getLineHeight(UI_10_FONT_ID);
-      const int buttonY = screen.y + (screen.height - height * 3) / 2 + 80;
-      constexpr int buttonWidth = 60;
-      constexpr int buttonSpacing = 30;
-      const int startX = screen.x + (screen.width - (buttonWidth * 2 + buttonSpacing)) / 2;
-      int touchedOption = -1;
-      const auto touch = mappedInput.colTouch(touchedOption, startX - 8, buttonWidth + buttonSpacing, 2, buttonY - 8,
-                                              buttonY + height + 8, buttonWidth + 16);
-      if (touch == MappedInputManager::RowTouch::Down) {
-        if (savePromptSelection != touchedOption) {
-          savePromptSelection = touchedOption;
-          requestUpdate();
-        }
-        return;
-      }
-      if (touch == MappedInputManager::RowTouch::Tap) {
-        savePromptSelection = touchedOption;
-        if (savePromptSelection == 0) {
-          RenderLock lock(*this);
-          WIFI_STORE.addCredential(selectedSSID, enteredPassword);
-        }
-        onComplete(true);
-        return;
+      const PromptLayout layout = promptLayout(screen, UITheme::getInstance().getMetrics());
+      switch (handleListTouch(savePromptSelection, 2, layout.listTop, layout.listHeight, false)) {
+        case ListTouchResult::Activated:
+          if (savePromptSelection == 0) {
+            RenderLock lock(*this);
+            WIFI_STORE.addCredential(selectedSSID, enteredPassword);
+          }
+          onComplete(true);
+          return;
+        case ListTouchResult::Consumed:
+          return;
+        case ListTouchResult::None:
+          break;
       }
     }
 
@@ -628,34 +618,24 @@ void WifiSelectionActivity::loop() {
   if (state == WifiSelectionState::FORGET_PROMPT) {
     {
       const Rect screen = UITheme::getInstance().getScreenSafeArea(renderer, true, false);
-      const auto height = renderer.getLineHeight(UI_10_FONT_ID);
-      const int buttonY = screen.y + (screen.height - height * 3) / 2 + 80;
-      constexpr int buttonWidth = 120;
-      constexpr int buttonSpacing = 30;
-      const int startX = screen.x + (screen.width - (buttonWidth * 2 + buttonSpacing)) / 2;
-      int touchedOption = -1;
-      const auto touch = mappedInput.colTouch(touchedOption, startX - 8, buttonWidth + buttonSpacing, 2, buttonY - 8,
-                                              buttonY + height + 8, buttonWidth + 16);
-      if (touch == MappedInputManager::RowTouch::Down) {
-        if (forgetPromptSelection != touchedOption) {
-          forgetPromptSelection = touchedOption;
-          requestUpdate();
-        }
-        return;
-      }
-      if (touch == MappedInputManager::RowTouch::Tap) {
-        forgetPromptSelection = touchedOption;
-        if (forgetPromptSelection == 1) {
-          RenderLock lock(*this);
-          WIFI_STORE.removeCredential(selectedSSID);
-          const auto network = find_if(networks.begin(), networks.end(),
-                                       [this](const WifiNetworkInfo& net) { return net.ssid == selectedSSID; });
-          if (network != networks.end()) {
-            network->hasSavedPassword = false;
+      const PromptLayout layout = promptLayout(screen, UITheme::getInstance().getMetrics());
+      switch (handleListTouch(forgetPromptSelection, 2, layout.listTop, layout.listHeight, false)) {
+        case ListTouchResult::Activated:
+          if (forgetPromptSelection == 1) {
+            RenderLock lock(*this);
+            WIFI_STORE.removeCredential(selectedSSID);
+            const auto network = find_if(networks.begin(), networks.end(),
+                                         [this](const WifiNetworkInfo& net) { return net.ssid == selectedSSID; });
+            if (network != networks.end()) {
+              network->hasSavedPassword = false;
+            }
           }
-        }
-        startWifiScan();
-        return;
+          startWifiScan();
+          return;
+        case ListTouchResult::Consumed:
+          return;
+        case ListTouchResult::None:
+          break;
       }
     }
 
@@ -961,46 +941,52 @@ void WifiSelectionActivity::renderConnected(const Rect* screen, const ThemeMetri
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 }
 
-void WifiSelectionActivity::renderSavePrompt(const Rect* screen, const ThemeMetrics* metrics) const {
-  const auto height = renderer.getLineHeight(UI_10_FONT_ID);
-  const auto top = screen->y + (screen->height - height * 3) / 2;
+// v363：儲存密碼／忘記網路的確認框 —— 說明三行 14px，兩個選項用主題的清單（跟目錄、設定同一種字級與選取框）。
+//   原本是 10px 的「[是]　否」左右排列。網路名稱改照寬度截斷（原本照位元組數截，中文名稱會切在字的中間）。
+WifiSelectionActivity::PromptLayout WifiSelectionActivity::promptLayout(const Rect& screen,
+                                                                        const ThemeMetrics& metrics) const {
+  constexpr int LINE_GAP = 8;
+  constexpr int LIST_GAP = 16;
+  const int lineHeight = renderer.getLineHeight(UI_12_FONT_ID);
+  // 內容區從副標（MAC 位址那一列）下面開始，整塊（三行字＋兩列選項）在剩下的空間裡置中。
+  const int contentTop =
+      screen.y + metrics.topPadding + metrics.headerHeight + metrics.tabBarHeight + metrics.verticalSpacing;
+  const int contentBottom = screen.y + screen.height - metrics.verticalSpacing;
+  PromptLayout layout;
+  layout.listHeight = metrics.listRowHeight * 2;
+  const int blockHeight = lineHeight * 3 + LINE_GAP * 2 + LIST_GAP + layout.listHeight;
+  const int top = contentTop + std::max(0, (contentBottom - contentTop - blockHeight) / 2);
+  layout.titleY = top;
+  layout.ssidY = top + lineHeight + LINE_GAP;
+  layout.questionY = top + (lineHeight + LINE_GAP) * 2;
+  layout.listTop = top + lineHeight * 3 + LINE_GAP * 2 + LIST_GAP;
+  return layout;
+}
 
-  UITheme::drawCenteredText(renderer, *screen, UI_12_FONT_ID, top - 40, tr(STR_CONNECTED), true, EpdFontFamily::BOLD);
+void WifiSelectionActivity::renderPrompt(const Rect* screen, const ThemeMetrics* metrics, const char* title,
+                                         const char* question, const char* option0, const char* option1,
+                                         const int selected, const char* backLabel) const {
+  const PromptLayout layout = promptLayout(*screen, *metrics);
+  const int maxTextWidth = screen->width - metrics->contentSidePadding * 2;
 
-  std::string ssidInfo = std::string(tr(STR_NETWORK_PREFIX)) + selectedSSID;
-  if (ssidInfo.length() > 28) {
-    ssidInfo.replace(25, ssidInfo.length() - 25, "...");
-  }
-  UITheme::drawCenteredText(renderer, *screen, UI_10_FONT_ID, top, ssidInfo.c_str());
+  UITheme::drawCenteredText(renderer, *screen, UI_12_FONT_ID, layout.titleY, title, true, EpdFontFamily::BOLD);
+  const std::string ssidInfo =
+      renderer.truncatedText(UI_12_FONT_ID, (std::string(tr(STR_NETWORK_PREFIX)) + selectedSSID).c_str(), maxTextWidth);
+  UITheme::drawCenteredText(renderer, *screen, UI_12_FONT_ID, layout.ssidY, ssidInfo.c_str());
+  const std::string questionText = renderer.truncatedText(UI_12_FONT_ID, question, maxTextWidth);
+  UITheme::drawCenteredText(renderer, *screen, UI_12_FONT_ID, layout.questionY, questionText.c_str());
 
-  UITheme::drawCenteredText(renderer, *screen, UI_10_FONT_ID, top + 40, tr(STR_SAVE_PASSWORD));
+  GUI.drawList(renderer, Rect{screen->x, layout.listTop, screen->width, layout.listHeight}, 2, selected,
+               [option0, option1](int index) { return std::string(index == 0 ? option0 : option1); });
 
-  // Draw Yes/No buttons
-  const int buttonY = top + 80;
-  constexpr int buttonWidth = 60;
-  constexpr int buttonSpacing = 30;
-  constexpr int totalWidth = buttonWidth * 2 + buttonSpacing;
-  const int startX = screen->x + (screen->width - totalWidth) / 2;
-
-  // Draw "Yes" button
-  if (savePromptSelection == 0) {
-    std::string text = "[" + std::string(tr(STR_YES)) + "]";
-    renderer.drawText(UI_10_FONT_ID, startX, buttonY, text.c_str());
-  } else {
-    renderer.drawText(UI_10_FONT_ID, startX + 4, buttonY, tr(STR_YES));
-  }
-
-  // Draw "No" button
-  if (savePromptSelection == 1) {
-    std::string text = "[" + std::string(tr(STR_NO)) + "]";
-    renderer.drawText(UI_10_FONT_ID, startX + buttonWidth + buttonSpacing, buttonY, text.c_str());
-  } else {
-    renderer.drawText(UI_10_FONT_ID, startX + buttonWidth + buttonSpacing + 4, buttonY, tr(STR_NO));
-  }
-
-  // Use centralized button hints
-  const auto labels = mappedInput.mapLabels(tr(STR_CANCEL), tr(STR_SELECT), tr(STR_DIR_LEFT), tr(STR_DIR_RIGHT));
+  const auto labels = mappedInput.mapLabels(backLabel, tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+}
+
+void WifiSelectionActivity::renderSavePrompt(const Rect* screen, const ThemeMetrics* metrics) const {
+  // 返回鍵＝不存密碼、照樣完成（標「取消」是原本的寫法）。
+  renderPrompt(screen, metrics, tr(STR_CONNECTED), tr(STR_SAVE_PASSWORD), tr(STR_YES), tr(STR_NO), savePromptSelection,
+               tr(STR_CANCEL));
 }
 
 void WifiSelectionActivity::renderConnectionFailed(const Rect* screen, const ThemeMetrics* metrics) const {
@@ -1017,46 +1003,8 @@ void WifiSelectionActivity::renderConnectionFailed(const Rect* screen, const The
 }
 
 void WifiSelectionActivity::renderForgetPrompt(const Rect* screen, const ThemeMetrics* metrics) const {
-  const auto height = renderer.getLineHeight(UI_10_FONT_ID);
-  const auto top = screen->y + (screen->height - height * 3) / 2;
-
-  UITheme::drawCenteredText(renderer, *screen, UI_12_FONT_ID, top - 40, tr(STR_FORGET_NETWORK), true,
-                            EpdFontFamily::BOLD);
-
-  std::string ssidInfo = std::string(tr(STR_NETWORK_PREFIX)) + selectedSSID;
-  if (ssidInfo.length() > 28) {
-    ssidInfo.replace(25, ssidInfo.length() - 25, "...");
-  }
-  UITheme::drawCenteredText(renderer, *screen, UI_10_FONT_ID, top, ssidInfo.c_str());
-
-  UITheme::drawCenteredText(renderer, *screen, UI_10_FONT_ID, top + 40, tr(STR_FORGET_AND_REMOVE));
-
-  // Draw Cancel/Forget network buttons
-  const int buttonY = top + 80;
-  constexpr int buttonWidth = 120;
-  constexpr int buttonSpacing = 30;
-  constexpr int totalWidth = buttonWidth * 2 + buttonSpacing;
-  const int startX = screen->x + (screen->width - totalWidth) / 2;
-
-  // Draw "Cancel" button
-  if (forgetPromptSelection == 0) {
-    std::string text = "[" + std::string(tr(STR_CANCEL)) + "]";
-    renderer.drawText(UI_10_FONT_ID, startX, buttonY, text.c_str());
-  } else {
-    renderer.drawText(UI_10_FONT_ID, startX + 4, buttonY, tr(STR_CANCEL));
-  }
-
-  // Draw "Forget network" button
-  if (forgetPromptSelection == 1) {
-    std::string text = "[" + std::string(tr(STR_FORGET_BUTTON)) + "]";
-    renderer.drawText(UI_10_FONT_ID, startX + buttonWidth + buttonSpacing, buttonY, text.c_str());
-  } else {
-    renderer.drawText(UI_10_FONT_ID, startX + buttonWidth + buttonSpacing + 4, buttonY, tr(STR_FORGET_BUTTON));
-  }
-
-  // Use centralized button hints
-  const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_LEFT), tr(STR_DIR_RIGHT));
-  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+  renderPrompt(screen, metrics, tr(STR_FORGET_NETWORK), tr(STR_FORGET_AND_REMOVE), tr(STR_CANCEL),
+               tr(STR_FORGET_BUTTON), forgetPromptSelection, tr(STR_BACK));
 }
 
 void WifiSelectionActivity::onComplete(const bool connected) {

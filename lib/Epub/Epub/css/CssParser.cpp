@@ -13,6 +13,8 @@
 #include <string_view>
 #include <vector>
 
+#include "CssListStyle.h"
+
 namespace {
 
 // Stack-allocated string buffer to avoid heap reallocations during parsing
@@ -423,6 +425,21 @@ void CssParser::parseDeclarationIntoStyle(std::string_view decl, CssStyle& style
       style.verticalAlign = CssVerticalAlign::Sub;
       style.defined.verticalAlign = 1;
     }
+  } else if (iequalsAscii(name, "list-style-type")) {
+    // v362（上游 #3500 的想法）：認得的樣式才算數（CssListStyle.h）。
+    CssListStyleType type;
+    if (CssListStyle::parseType(stripTrailingImportant(value), type)) {
+      style.listStyleType = type;
+      style.defined.listStyleType = 1;
+    }
+  } else if (iequalsAscii(name, "list-style")) {
+    // 縮寫（書庫約 5% 的書用 `list-style: none`）：照 CSS Lists 3 解析，合法就一定設定樣式（沒寫是 disc）；
+    // 有任何一個值不認得就整條不算數。規則與例子在 CssListStyle.h。
+    CssListStyleType type;
+    if (CssListStyle::parseShorthand(stripTrailingImportant(value), type)) {
+      style.listStyleType = type;
+      style.defined.listStyleType = 1;
+    }
   }
 }
 
@@ -769,6 +786,7 @@ bool CssParser::saveToCache() const {
     writeLength(style.imageWidth);
     file.write(static_cast<uint8_t>(style.display));
     file.write(static_cast<uint8_t>(style.verticalAlign));
+    file.write(static_cast<uint8_t>(style.listStyleType));  // v362
 
     // Write defined flags as uint32_t
     uint32_t definedBits = 0;
@@ -790,6 +808,7 @@ bool CssParser::saveToCache() const {
     if (style.defined.display) definedBits |= 1 << 15;
     if (style.defined.direction) definedBits |= 1 << 16;
     if (style.defined.verticalAlign) definedBits |= 1 << 17;
+    if (style.defined.listStyleType) definedBits |= 1 << 18;  // v362
     file.write(reinterpret_cast<const uint8_t*>(&definedBits), sizeof(definedBits));
   }
 
@@ -1008,8 +1027,9 @@ bool CssParser::loadFromCache(const char* usageHtmlPath) {
 
   constexpr size_t CSS_LENGTH_FIELD_COUNT = 11;
   constexpr size_t CSS_LENGTH_BYTES = sizeof(float) + sizeof(uint8_t);
+  // v362（codex）：尾端是 display＋verticalAlign＋listStyleType 三個 byte（原本只算一個，v361 以前就少算一個）。
   constexpr size_t CSS_FIXED_STYLE_BYTES =
-      5 * sizeof(uint8_t) + (CSS_LENGTH_FIELD_COUNT * CSS_LENGTH_BYTES) + sizeof(uint8_t) + sizeof(uint32_t);
+      5 * sizeof(uint8_t) + (CSS_LENGTH_FIELD_COUNT * CSS_LENGTH_BYTES) + 3 * sizeof(uint8_t) + sizeof(uint32_t);
 
   // Read each rule
   for (uint16_t i = 0; i < ruleCount; ++i) {
@@ -1123,6 +1143,14 @@ bool CssParser::loadFromCache(const char* usageHtmlPath) {
     }
     style.verticalAlign = static_cast<CssVerticalAlign>(verticalAlignVal);
 
+    // v362：listStyleType。超出範圍＝檔案壞了或不是這個版本寫的 → 整份快取作廢重建。
+    uint8_t listStyleTypeVal;
+    if (file.read(&listStyleTypeVal, 1) != 1 || listStyleTypeVal > static_cast<uint8_t>(CSS_LIST_STYLE_TYPE_MAX)) {
+      rulesBySelector_.clear();
+      return false;
+    }
+    style.listStyleType = static_cast<CssListStyleType>(listStyleTypeVal);
+
     // Read defined flags
     uint32_t definedBits = 0;
     if (file.read(&definedBits, sizeof(definedBits)) != sizeof(definedBits)) {
@@ -1147,6 +1175,7 @@ bool CssParser::loadFromCache(const char* usageHtmlPath) {
     style.defined.display = (definedBits & 1 << 15) != 0;
     style.defined.direction = (definedBits & 1 << 16) != 0;
     style.defined.verticalAlign = (definedBits & 1 << 17) != 0;
+    style.defined.listStyleType = (definedBits & 1 << 18) != 0;
 
     if (filter) {
       const size_t dot = selector.find('.');

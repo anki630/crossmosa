@@ -101,6 +101,17 @@ class WifiSelectionActivity final : public Activity {
   void renderSavePrompt(const Rect* screen, const ThemeMetrics* metrics) const;
   void renderConnectionFailed(const Rect* screen, const ThemeMetrics* metrics) const;
   void renderForgetPrompt(const Rect* screen, const ThemeMetrics* metrics) const;
+  // v363：儲存密碼／忘記網路兩個確認框的版面（render 與觸控共用同一份，才不會畫的跟點的對不上）。
+  struct PromptLayout {
+    int titleY = 0;
+    int ssidY = 0;
+    int questionY = 0;
+    int listTop = 0;
+    int listHeight = 0;
+  };
+  PromptLayout promptLayout(const Rect& screen, const ThemeMetrics& metrics) const;
+  void renderPrompt(const Rect* screen, const ThemeMetrics* metrics, const char* title, const char* question,
+                    const char* option0, const char* option1, int selected, const char* backLabel) const;
 
   void startWifiScan(bool autoScan = false);
   void processWifiScanResults();
