@@ -35,17 +35,9 @@ void HalClock::fatDateTimeCb(uint16_t* date, uint16_t* time) {
   //   四次都不成就回佔位值）。秒數 0 ＝ 撤銷；往前推超過 kFatMaxAgeMs 也回佔位值。
   uint32_t epoch = 0;
   uint32_t atMs = 0;
-  bool ok = false;
-  for (int attempt = 0; attempt < 4 && !ok; ++attempt) {
-    const uint32_t s1 = halClock._fatSeq.load(std::memory_order_acquire);
-    if (s1 & 1u) continue;  // 寫入中
-    epoch = halClock._fatEpoch.load(std::memory_order_relaxed);
-    atMs = halClock._fatAtMs.load(std::memory_order_relaxed);
-    std::atomic_thread_fence(std::memory_order_acquire);
-    ok = halClock._fatSeq.load(std::memory_order_relaxed) == s1;
-  }
+  const bool ok = halClock.readPublished(epoch, atMs);
   const uint32_t age = static_cast<uint32_t>(millis()) - atMs;
-  if (!ok || epoch == 0 || age >= kFatMaxAgeMs) {
+  if (!ok || age >= kFatMaxAgeMs) {
     // 跟沒有 callback 時同一個佔位時戳（編譯年 1 月 1 日 00:00）
     *date = FS_DEFAULT_DATE;
     *time = FS_DEFAULT_TIME;
@@ -56,6 +48,30 @@ void HalClock::fatDateTimeCb(uint16_t* date, uint16_t* time) {
   clockcache::civilFromEpoch(epoch + age / 1000u, y, mo, d, h, mi, s);
   *date = FS_DATE(y, mo, d);
   *time = FS_TIME(h, mi, s);
+}
+
+bool HalClock::readPublished(uint32_t& epoch, uint32_t& atMs) const {
+  bool ok = false;
+  for (int attempt = 0; attempt < 4 && !ok; ++attempt) {
+    const uint32_t s1 = _fatSeq.load(std::memory_order_acquire);
+    if (s1 & 1u) continue;  // 寫入中
+    epoch = _fatEpoch.load(std::memory_order_relaxed);
+    atMs = _fatAtMs.load(std::memory_order_relaxed);
+    std::atomic_thread_fence(std::memory_order_acquire);
+    ok = _fatSeq.load(std::memory_order_relaxed) == s1;
+  }
+  return ok && epoch != 0;  // 秒數 0 ＝ 撤銷
+}
+
+bool HalClock::trustedUtcNow(uint32_t& epochOut, const uint32_t maxAgeMs) const {
+  if (!_available) return false;
+  uint32_t epoch = 0;
+  uint32_t atMs = 0;
+  if (!readPublished(epoch, atMs)) return false;
+  const uint32_t age = static_cast<uint32_t>(millis()) - atMs;
+  if (age >= maxAgeMs) return false;
+  epochOut = epoch + age / 1000u;
+  return true;
 }
 
 // v194（複查）：順帶在第一次有可信時間時補註冊 ——原本只在開機試一次，那一次 I2C 失敗就整次開機都不會有 FAT 時戳。

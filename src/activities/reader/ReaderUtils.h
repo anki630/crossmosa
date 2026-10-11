@@ -207,6 +207,7 @@ struct BackNavCallback {
 };
 
 // Returns true if the back button was consumed (caller should return).
+// 「file browser」＝書庫：Formosa Cover 主題是書架（ActivityManager::goToLibrary）。
 // Long press (>= GO_BACK_OR_HOME_MS):
 // - default: go to file browser
 // - with backShortToFileBrowser: go home
@@ -219,13 +220,13 @@ inline bool handleBackNavigation(const MappedInputManager& mappedInput, Activity
     if (SETTINGS.backShortToFileBrowser) {
       goHome.fn(goHome.ctx);
     } else {
-      activityManager.goToFileBrowser(filePath);
+      activityManager.goToLibrary(filePath);
     }
     return true;
   }
   if (mappedInput.wasReleased(MappedInputManager::Button::Back) && mappedInput.getHeldTime() < GO_BACK_OR_HOME_MS) {
     if (SETTINGS.backShortToFileBrowser) {
-      activityManager.goToFileBrowser(filePath);
+      activityManager.goToLibrary(filePath);
     } else {
       goHome.fn(goHome.ctx);
     }

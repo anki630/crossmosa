@@ -59,6 +59,7 @@
 #include "util/ButtonNavigator.h"
 #include "util/GhostTest.h"
 #include "util/NvsStore.h"
+#include "util/ReadingStats.h"
 #include "util/ScreenshotUtil.h"
 
 GfxRenderer renderer(display);
@@ -1047,6 +1048,8 @@ static bool lightSleepCycle(bool wakeFrameDeferred,
 
   // ⚠️ v304：放開繪製鎖 —— 下面要請 render task 重畫，還握著就是自己鎖死自己。
   sleepLock.unlock();
+  // 閱讀統計（codex 第三輪）：醒來先刷新時鐘發布值、再請閱讀器重畫 —— 重畫時的 observe 才不會拿睡前的舊時間歸日。
+  ReadingStats::refreshClock();
 
   // ⭐ v304：**重置閒置計時器**。`millis()` 在淺睡眠期間照常前進，不重置的話，只要睡得比
   //    「自動休眠」設定值久，一醒來就立刻又睡回去（實機：睡 25 分鐘 → 117ms 後 SLEEP timeout=1）。
@@ -1055,6 +1058,7 @@ static bool lightSleepCycle(bool wakeFrameDeferred,
   if (frameRestored) {
     activityManager.requestUpdate();  // 背景重畫（不等）
   } else {
+    activityManager.invalidateScreen();  // 畫面上是桌布：局部重畫（Formosa Cover 選取框）不能用
     // 請閱讀器重畫。它完整留在 RAM，所以只要付「繪製 ＋ 面板刷新」。
     // ⚠️ 用 AndWait：不等的話會在桌布還在畫面上時就返回，而按鍵邊緣會對著一個看不見的頁面
     //    派送（開機路徑的 Silent 分支為了同一個理由也用它）。
@@ -1162,7 +1166,10 @@ void enterDeepSleep(bool fromTimeout = false) {
   //   （它不再自己取鎖；renderingMutex 不可重入），真關機前才 unlock 再 goToSleep()。
   //   快照只有「回書」才需要（wake frame 存的是書頁）；從首頁等處休眠時 framebuffer 接下來就被桌布覆寫，
   //   直接畫提示、不付 52KB（codex 第一輪點名）。
-  RenderLock fbLock;      // v326：一把鎖從提示、快照、wake frame 一路握到淺睡眠結束（傳進 lightSleepCycle）
+  RenderLock fbLock;  // v326：一把鎖從提示、快照、wake frame 一路握到淺睡眠結束（傳進 lightSleepCycle）
+  // 閱讀統計（codex 第一輪）：單一睡眠入口，拿到繪製鎖就停錶 —— 下面的提示、存檔、桌布都不是閱讀。
+  //   淺睡、低電量、WiFi 開著、逾時真關機都經過這裡；之後閱讀器 onExit 再停一次無害（冪等）。
+  ReadingStats::pause();
   bool pageValid = true;  // framebuffer 此刻是不是書頁（提示還原失敗就不是 → 不存 wake frame、也不延後）
   {
     bool early = false;
@@ -1188,6 +1195,8 @@ void enterDeepSleep(bool fromTimeout = false) {
         DiagLog::line("PROGRESS flush retry fail=%u", fails);
       }
     }
+    // 閱讀統計：跟進度同一個持久點（鎖在手上；NVS 寫入 3–4 ms）。失敗保持 dirty，onExit／真關機出口再試。
+    ReadingStats::save("sleep");
     if (APP_STATE.lastSleepFromReader && readerOnTop && pageValid) {
       // ⭐ 代號先 +1 再存，而且 **APP_STATE 緊接著就會被寫出去**（下面那行），
       //   所以畫面檔與狀態檔帶的是同一個值。喚醒時兩者不相等就不還原 ——
@@ -1252,6 +1261,8 @@ void enterDeepSleep(bool fromTimeout = false) {
   //   閱讀器的 progress.bin 已由 goToSleep() 觸發的 onExit 寫掉（ActivityManager 持 RenderLock）。
   //   ⚠️ 在 display.deepSleep() 之後：面板已睡，這次 SD 寫入（偶爾 1 秒）不會晚到任何畫面。
   APP_STATE.saveDurable();
+  // 閱讀統計：最後一次重試（前面成功就不會寫；這裡已不持繪製鎖，但閱讀器已銷毀，沒有 render 會來）
+  ReadingStats::save("final");
   // v331（codex 第二輪）：真關機前把這一段的 NVS 統計印掉 —— 入口那幾次 state 寫入只有淺睡眠醒來那條路
   //   （LSLEEP resume）看得到；真關機的路上 RAM 會沒掉。這裡沒人在等（面板已睡），一次 SD append 無妨。
   {
@@ -1503,6 +1514,8 @@ void setup() {
     return;
   }
   g_sdCidOk = Storage.readCardId(g_sdCid);  // v341：淺睡眠醒來的比較基準（rebootIfCardChanged）
+  // 閱讀統計（2026-10-07）：書的身分＝卡片序號雜湊 ‖ 路徑（兩張卡同路徑的書不合併；codex 第三輪）。讀 NVS 一次。
+  ReadingStats::begin(g_sdCidOk ? g_sdCid : nullptr);
 
   // v53/v57：診斷 log。**預設關閉**，靠 SD【根目錄】的空檔 `/diag.on` 開啟（放了要重開機）。
   // 判定只在這裡做一次，之後不再碰 SD；關閉時 mem()/line()/dumpPools() 全在第一行就 return，
@@ -1945,6 +1958,15 @@ void loop() {
   halTiltSensor.update(SETTINGS.tiltPageTurn, SETTINGS.orientation, activityManager.isReaderActivity());
 
   renderer.setFadingFix(SETTINGS.fadingFix);
+
+  // 閱讀統計：每分鐘讓時鐘發布值保持新鮮（狀態列不畫時鐘時沒人會去讀 RTC）。X4 沒有 RTC → 立刻返回。
+  {
+    static uint32_t lastStatsClockMs = 0;
+    if (millis() - lastStatsClockMs >= 60000) {
+      lastStatsClockMs = millis();
+      ReadingStats::refreshClock();
+    }
+  }
 
   if (Serial && millis() - lastMemPrint >= 10000) {
     LOG_INF("MEM", "Free: %d bytes, Total: %d bytes, Min Free: %d bytes, MaxAlloc: %d bytes", ESP.getFreeHeap(),

@@ -6,10 +6,13 @@
 
 #include <algorithm>
 
+#include "CrossPointSettings.h"
 #include "OpdsServerStore.h"
 #include "boot_sleep/BootActivity.h"
 #include "boot_sleep/SleepActivity.h"
 #include "browser/OpdsBookBrowserActivity.h"
+#include "home/BookshelfActivity.h"
+#include "home/CoverHomeActivity.h"
 #include "home/CrashActivity.h"
 #include "home/FileBrowserActivity.h"
 #include "home/HomeActivity.h"
@@ -222,6 +225,18 @@ void ActivityManager::goToFileBrowser(std::string path) {
   replaceActivity(std::make_unique<FileBrowserActivity>(renderer, mappedInput, std::move(path)));
 }
 
+void ActivityManager::goToBookshelf(std::string returnPath, const int initialTab) {
+  replaceActivity(std::make_unique<BookshelfActivity>(renderer, mappedInput, std::move(returnPath), initialTab));
+}
+
+void ActivityManager::goToLibrary(std::string path) {
+  if (SETTINGS.uiTheme == CrossPointSettings::FORMOSA_COVER) {
+    goToBookshelf(std::move(path));  // 是書的路徑就停在那本；資料夾路徑在書架上找不到 → 停在分頁列
+    return;
+  }
+  goToFileBrowser(std::move(path));
+}
+
 void ActivityManager::goToRecentBooks() {
   replaceActivity(std::make_unique<RecentBooksActivity>(renderer, mappedInput));
 }
@@ -257,7 +272,7 @@ void ActivityManager::goToFullScreenMessage(std::string message, EpdFontFamily::
 void ActivityManager::goHome(HomeMenuItem initialMenuItem) {
   if (initialMenuItem == HomeMenuItem::NONE && currentActivity) {
     const auto& activityName = currentActivity->name;
-    if (activityName == "FileBrowser") {
+    if (activityName == "FileBrowser" || activityName == "Bookshelf") {
       initialMenuItem = HomeMenuItem::FILE_BROWSER;
     } else if (activityName == "RecentBooks") {
       initialMenuItem = HomeMenuItem::RECENTS;
@@ -268,6 +283,11 @@ void ActivityManager::goHome(HomeMenuItem initialMenuItem) {
     } else if (activityName == "Settings") {
       initialMenuItem = HomeMenuItem::SETTINGS_MENU;
     }
+  }
+  // 2026-10-07：Formosa Cover 主題的首頁是另一個 Activity（封面首頁）；其他主題的首頁一行不動
+  if (SETTINGS.uiTheme == CrossPointSettings::FORMOSA_COVER) {
+    replaceActivity(std::make_unique<CoverHomeActivity>(renderer, mappedInput, initialMenuItem));
+    return;
   }
   replaceActivity(std::make_unique<HomeActivity>(renderer, mappedInput, initialMenuItem));
 }
@@ -281,6 +301,7 @@ void ActivityManager::pushActivity(std::unique_ptr<Activity>&& activity) {
   }
   pendingActivity = std::move(activity);
   pendingAction = PendingAction::Push;
+  invalidateScreen();
 }
 
 void ActivityManager::popActivity() {
@@ -290,6 +311,7 @@ void ActivityManager::popActivity() {
     pendingActivity.reset();
   }
   pendingAction = PendingAction::Pop;
+  invalidateScreen();
 }
 
 bool ActivityManager::preventAutoSleep() const { return currentActivity && currentActivity->preventAutoSleep(); }

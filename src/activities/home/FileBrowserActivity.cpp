@@ -10,10 +10,14 @@
 
 #include "CrossPointSettings.h"
 #include "MappedInputManager.h"
+#include "activities/ActivityManager.h"
+#include "activities/home/BookshelfActivity.h"
 #include "activities/util/ConfirmationActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "util/BookCacheUtils.h"
+#include "util/Favorites.h"
+#include "util/TabSwitchProbe.h"
 
 namespace {
 constexpr unsigned long GO_HOME_MS = 1000;
@@ -78,6 +82,14 @@ void FileBrowserActivity::onEnter() {
   // its release — otherwise we'd immediately auto-open whatever is at index 0.
   lockNextConfirmRelease = mappedInput.isPressed(MappedInputManager::Button::Confirm);
 
+  // v376：從書架的分頁列換過來（⑥ 或長按 ⑦⑧）→ 選取停在分頁列，跟書架換分頁一樣。
+  //   tabHoldUsed_：長按換過來時 ⑦⑧ 還按著，放開之前不再換一格。
+  if (showShelfTabs() && BookshelfActivity::sFolderOnTabs) {
+    onTabs_ = true;
+    tabHoldUsed_ = true;
+  }
+  BookshelfActivity::sFolderOnTabs = false;
+
   auto root = Storage.open(basepath.c_str());
   if (!root) {
     basepath = "/";
@@ -96,6 +108,7 @@ void FileBrowserActivity::onEnter() {
     loadFiles();
   }
 
+  TabSwitchProbe::ready();  // 從書架換過來：讀完資料夾了
   requestUpdate();
 }
 
@@ -203,10 +216,15 @@ void FileBrowserActivity::loop() {
     return;
   }
 
+  if (onTabs_) {
+    loopOnTabs();
+    return;
+  }
+
   const int pathReserved = renderer.getLineHeight(UI_10_FONT_ID) + UITheme::getInstance().getMetrics().verticalSpacing;
-  const int pageItems = UITheme::getNumberOfItemsPerPage(renderer, true, false, true, false, pathReserved);
+  const int pageItems = UITheme::getNumberOfItemsPerPage(renderer, true, showShelfTabs(), true, false, pathReserved);
   const auto& metrics = UITheme::getInstance().getMetrics();
-  const int contentTop = metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
+  const int contentTop = metrics.topPadding + metrics.headerHeight + tabBarSpace() + metrics.verticalSpacing;
   const int contentHeight =
       renderer.getScreenHeight() - contentTop - metrics.buttonHintsHeight - metrics.verticalSpacing - pathReserved;
 
@@ -247,6 +265,8 @@ void FileBrowserActivity::loop() {
           LOG_DBG("FileBrowser", "Attempting to delete: %s", fullPath.c_str());
           if (removeDirFile(fullPath)) {
             LOG_DBG("FileBrowser", "Deleted successfully");
+            Favorites::removeBook(
+                fullPath);  // v367：刪掉的書不再佔我的最愛的名額（整個資料夾：底下的身分留著，只佔名額）
             loadFiles();
             if (files.empty()) {
               selectorIndex = 0;
@@ -318,6 +338,15 @@ void FileBrowserActivity::loop() {
         res.isCancelled = true;
         setResult(std::move(res));
         finish();
+      } else if (SETTINGS.uiTheme == CrossPointSettings::FORMOSA_COVER) {
+        // v375：最上層 ⑤＝選取跳到分頁列（同書架：書上 ⑤ 先到分頁列，分頁列上 ⑤ 才回首頁）
+        onTabs_ = true;
+        tabNext_.reset();
+        tabPrev_.reset();
+        tabConfirmSeen_ = false;
+        tabBackSeen_ = false;
+        tabHoldUsed_ = true;  // 這次放開 ⑤ 之前若還按著 ⑦⑧，不算換分頁
+        requestUpdate();
       } else {
         onGoHome();
       }
@@ -379,6 +408,7 @@ std::string getFileExtension(const std::string& filename) {
 }
 
 void FileBrowserActivity::render(RenderLock&&) {
+  TabSwitchProbe::drawStart();
   renderer.clearScreen();
 
   const auto pageWidth = renderer.getScreenWidth();
@@ -393,7 +423,16 @@ void FileBrowserActivity::render(RenderLock&&) {
 
   const int pathLineHeight = renderer.getLineHeight(UI_10_FONT_ID);
   const int pathReserved = pathLineHeight + metrics.verticalSpacing;
-  const int contentTop = metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
+  if (showShelfTabs()) {
+    std::vector<TabInfo> tabs;
+    tabs.reserve(3);
+    if (BookshelfActivity::sHasFavTab) tabs.push_back({tr(STR_TAB_FAVORITES), false});
+    tabs.push_back({tr(STR_TAB_ALL), false});
+    tabs.push_back({tr(STR_TAB_FOLDERS), true});
+    GUI.drawTabBar(renderer, Rect{0, metrics.topPadding + metrics.headerHeight, pageWidth, metrics.tabBarHeight}, tabs,
+                   onTabs_);
+  }
+  const int contentTop = metrics.topPadding + metrics.headerHeight + tabBarSpace() + metrics.verticalSpacing;
   const int contentHeight =
       pageHeight - contentTop - metrics.buttonHintsHeight - metrics.verticalSpacing - pathReserved;
   if (files.empty()) {
@@ -401,7 +440,8 @@ void FileBrowserActivity::render(RenderLock&&) {
     renderer.drawText(UI_10_FONT_ID, metrics.contentSidePadding, contentTop + 20, emptyMsg);
   } else {
     GUI.drawList(
-        renderer, Rect{0, contentTop, pageWidth, contentHeight}, files.size(), selectorIndex,
+        renderer, Rect{0, contentTop, pageWidth, contentHeight}, files.size(),
+        onTabs_ ? -1 : static_cast<int>(selectorIndex),  // 選取在分頁列：列表不標選取（停在第一頁）
         [this](int index) { return getFileName(files[index]); }, nullptr,
         [this](int index) { return UITheme::getFileIcon(files[index]); },
         [this](int index) { return getFileExtension(files[index]); }, false);
@@ -435,16 +475,82 @@ void FileBrowserActivity::render(RenderLock&&) {
   }
 
   // Help text
-  const char* backLabel = (basepath == "/") ? (mode == Mode::PickFirmware ? tr(STR_BACK) : tr(STR_HOME)) : tr(STR_BACK);
+  const char* backLabel = (basepath == "/") ? (mode == Mode::PickFirmware ? tr(STR_BACK)
+                                               : showShelfTabs()          ? tr(STR_BOOKSHELF)
+                                                                          : tr(STR_HOME))
+                                            : tr(STR_BACK);
   // In PickFirmware mode, Confirm on a .bin returns the path to the caller (not "open"); show
   // STR_SELECT instead. Directories in the same picker still descend, so keep STR_OPEN there.
   const bool selectingFirmwareFile = mode == Mode::PickFirmware && !files.empty() && files[selectorIndex].back() != '/';
   const char* confirmLabel = files.empty() ? "" : (selectingFirmwareFile ? tr(STR_SELECT) : tr(STR_OPEN));
-  const auto labels = mappedInput.mapLabels(backLabel, confirmLabel, files.empty() ? "" : tr(STR_DIR_UP),
-                                            files.empty() ? "" : tr(STR_DIR_DOWN));
+  const auto labels =
+      onTabs_ ? mappedInput.mapLabels(
+                    tr(STR_HOME),
+                    shelfTabAfter(+1) == BookshelfActivity::kTabFav ? tr(STR_TAB_FAVORITES) : tr(STR_TAB_ALL), "‹", "›")
+              : mappedInput.mapLabels(backLabel, confirmLabel, files.empty() ? "" : tr(STR_DIR_UP),
+                                      files.empty() ? "" : tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
+  TabSwitchProbe::beforeDisplay();
   renderer.displayBuffer();
+  TabSwitchProbe::afterDisplay("folder", -1, renderer.lastRefreshBank());
+}
+
+// 分頁順序同書架：有最愛時「最愛｜全部｜資料夾」，沒有時「全部｜資料夾」；這裡永遠在最後一格「資料夾」，繞圈。
+int FileBrowserActivity::shelfTabAfter(const int dir) const {
+  if (dir > 0) return BookshelfActivity::sHasFavTab ? BookshelfActivity::kTabFav : BookshelfActivity::kTabAll;
+  return BookshelfActivity::kTabAll;  // 往左一格永遠是「全部」
+}
+
+void FileBrowserActivity::switchShelfTab(const int dir) {
+  activityManager.goToBookshelf({}, shelfTabAfter(dir));  // 換到「最愛」／「全部」＝回書架那個分頁，選取在分頁列
+}
+
+void FileBrowserActivity::loopOnTabs() {
+  using B = MappedInputManager::Button;
+  if (mappedInput.wasPressed(B::Confirm)) {
+    tabConfirmSeen_ = true;
+    tabConfirmAt_ = millis();  // v379 換分頁量測：按下的時間
+  }
+  if (mappedInput.wasPressed(B::Back)) tabBackSeen_ = true;
+  if (mappedInput.wasReleased(B::Confirm) && tabConfirmSeen_) {
+    tabConfirmSeen_ = false;
+    TabSwitchProbe::begin("ok", "folder", tabConfirmAt_);
+    switchShelfTab(+1);
+    return;
+  }
+  if (mappedInput.wasReleased(B::Back) && tabBackSeen_) {
+    tabBackSeen_ = false;
+    onGoHome();
+    return;
+  }
+  const uint32_t now = millis();
+  if (!mappedInput.isPressed(B::NavNext) && !mappedInput.isPressed(B::NavPrevious)) tabHoldUsed_ = false;
+  // 分頁列上長按換分頁的門檻同書架（v380：0.3 秒）
+  const auto next = tabNext_.update(mappedInput.wasPressed(B::NavNext), mappedInput.wasReleased(B::NavNext),
+                                    mappedInput.isPressed(B::NavNext), now, HoldRepeat::kTabStartMs);
+  const auto prev = tabPrev_.update(mappedInput.wasPressed(B::NavPrevious), mappedInput.wasReleased(B::NavPrevious),
+                                    mappedInput.isPressed(B::NavPrevious), now, HoldRepeat::kTabStartMs);
+  if (next == HoldRepeat::Action::Long || prev == HoldRepeat::Action::Long) {
+    if (tabHoldUsed_) return;
+    tabHoldUsed_ = true;
+    TabSwitchProbe::begin("hold", "folder", (next == HoldRepeat::Action::Long ? tabNext_ : tabPrev_).downAt());
+    switchShelfTab(next == HoldRepeat::Action::Long ? +1 : -1);
+    return;
+  }
+  if ((next == HoldRepeat::Action::Short || prev == HoldRepeat::Action::Short) && !files.empty()) {
+    onTabs_ = false;
+    selectorIndex = next == HoldRepeat::Action::Short ? 0 : files.size() - 1;
+    requestUpdate();
+  }
+}
+
+bool FileBrowserActivity::showShelfTabs() const {
+  return mode == Mode::Books && SETTINGS.uiTheme == CrossPointSettings::FORMOSA_COVER;
+}
+
+int FileBrowserActivity::tabBarSpace() const {
+  return showShelfTabs() ? UITheme::getInstance().getMetrics().tabBarHeight : 0;
 }
 
 size_t FileBrowserActivity::findEntry(const std::string& name) const {

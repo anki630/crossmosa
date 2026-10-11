@@ -95,6 +95,39 @@ class GfxRenderer {
   //   桌布平面快取只在三趟都完整時才存檔，否則壞掉的半張圖會被當成有效快取永久留在 SD 卡上。
   mutable bool _lastBitmapOk = false;
 
+  // v380 量測（書架「全部」第一頁畫 0.63 秒、一般頁 0.29 秒，差在真封面）：drawBitmap／drawBitmap1Bit 累計
+  //   讀列（SD＋轉 2-bit）與逐像素寫入各花多少。呼叫端自己 reset、自己讀；只計時，不改畫法。
+ public:
+  struct BitmapDrawStats {
+    uint32_t readUs = 0;    // readNextRow 合計
+    uint32_t pixUs = 0;     // 每列的逐像素迴圈合計
+    uint32_t rows = 0;      // 讀了幾列
+    uint16_t calls = 0;     // 畫了幾張
+    uint16_t oneBit = 0;    // 其中幾張走 1-bit 路徑
+    uint16_t scaled = 0;    // 要縮放的張數（兩條路徑都算；縮放的列不走快路）
+    uint32_t fastRows = 0;  // v381：走 blitBwRowFast 的列數
+    // v383 量測：每張圖挑第一條走快路的列，同一列再畫兩次（只清黑點，重畫結果不變）——
+    //   一次在關中斷的臨界區裡跑快路、一次跑逐點 drawPixel，用 CPU 週期數比「沒被打斷時」到底要多久。
+    uint16_t sampRows = 0;     // 取樣了幾列
+    uint32_t sampPx = 0;       // 取樣列的像素數合計
+    uint32_t sampUs = 0;       // 這些列平常（沒關中斷）走快路的牆鐘時間合計
+    uint32_t sampCycN = 0;     // 同上，CPU 週期數
+    uint32_t sampCycFast = 0;  // 關中斷：快路
+    uint32_t sampCycSlow = 0;  // 關中斷：逐點 drawPixel
+  };
+  // v381 量測：圓角表到目前為止建了幾次（快取沒命中才建）
+  static uint32_t smoothTableBuilds();
+  void resetBitmapStats() const { _bmpStats = BitmapDrawStats{}; }
+  // v383：只在 CoverTile 的 beginStats／logStats 之間取樣（codex：別讓桌布、看圖、書內圖片也進臨界區）
+  void setBitmapSampling(const bool on) const { _bmpSampling = on; }
+  const BitmapDrawStats& bitmapStats() const { return _bmpStats; }
+
+ private:
+  mutable BitmapDrawStats _bmpStats;
+  mutable bool _bmpSampling = false;
+  void sampleBwRow(const uint8_t* row, int bmpX0, int bmpX1, int sx0, int sy, uint32_t cycN, uint32_t us) const;
+  bool blitBwRowFast(const uint8_t* row, int bmpX0, int bmpX1, int sx0, int sy) const;
+
   // v313 證人：probeEmFP 最後一次量到的碼位／路徑／原始值／像素（純觀測；只在 _probing 時寫入，
   //   一般排版的 getTextAdvanceX 不多做任何事）。路徑：1=SD 字寬表命中 2=SD 表未命中→逐字
   //   3=非 SD 逐字路徑 0=沒量到。要抓的是 v284 起身分裡的 lineHeightEmBits 有沒有在兩次量測間翻轉。
@@ -352,7 +385,8 @@ class GfxRenderer {
   // 灰階平面趟只標灰階級。逐像素走 drawPixel（吃方向變換）。
   void drawImageGray(const uint8_t data[], int x, int y, int width, int height) const;
 
-  void drawIcon(const uint8_t bitmap[], int x, int y, int size) const;
+  // black＝false：畫成白色（反白的選取格裡用，v370）
+  void drawIcon(const uint8_t bitmap[], int x, int y, int size, bool black = true) const;
   // v352：同一顆 UI 圖示放大 scale 倍（每個墨點畫成 scale×scale 的方塊）。
   //   對映跟 drawIcon 逐點相同；scale＝1 直接交給 drawIcon。
   void drawIconScaled(const uint8_t bitmap[], int x, int y, int size, int scale) const;

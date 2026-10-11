@@ -451,3 +451,42 @@ TEST_F(Clock, EveryReadFailurePathRevokesTheFatStampAfterSixtySeconds) {  // cod
   EXPECT_FALSE(halClock.getTime(h, m));
   EXPECT_TRUE(isDefault(fatNow()));
 }
+
+// ---- 閱讀統計（2026-10-07）：trustedUtcNow 讀的是 FAT 時戳那份發布值，不鎖、不 I2C ----
+
+TEST_F(Clock, TrustedUtcNowAdvancesFromThePublishedStampAndExpires) {
+  HalClock c;
+  c.begin();
+  ASSERT_TRUE(shown(c).ok);  // 一次可信讀取 → 發布
+  const uint32_t base = clockcache::epochOf(2026, 9, 26, 12, 0, 0);
+  uint32_t e = 0;
+  ASSERT_TRUE(c.trustedUtcNow(e, 600000));
+  EXPECT_EQ(e, base);
+  const int readsBefore = fake::reads;
+  fake::nowMs += 90000;  // 不再讀 RTC：靠單調時鐘往前推
+  ASSERT_TRUE(c.trustedUtcNow(e, 600000));
+  EXPECT_EQ(e, base + 90);
+  EXPECT_EQ(fake::reads, readsBefore) << "trustedUtcNow 不可以打 I2C";
+  fake::nowMs += 600000;  // 發布值超過 maxAge → 不給
+  EXPECT_FALSE(c.trustedUtcNow(e, 600000));
+}
+
+TEST_F(Clock, TrustedUtcNowIsRevokedWhenTheChipReadsAResetTime) {
+  HalClock c;
+  c.begin();
+  ASSERT_TRUE(shown(c).ok);
+  uint32_t e = 0;
+  ASSERT_TRUE(c.trustedUtcNow(e, 600000));
+  fake::setRtc(2000, 1, 1, 0, 0, 0);
+  fake::nowMs += 11000;  // 過了輪詢窗，下一次 getTime 會真的讀
+  EXPECT_FALSE(shown(c).ok);
+  EXPECT_FALSE(c.trustedUtcNow(e, 600000)) << "不可信的時間要撤銷，不能再靠舊值往前推";
+}
+
+TEST_F(Clock, TrustedUtcNowWithoutAnRtcIsAlwaysFalse) {
+  fake::rtcPresent = false;
+  HalClock c;
+  c.begin();
+  uint32_t e = 0;
+  EXPECT_FALSE(c.trustedUtcNow(e, 600000));
+}

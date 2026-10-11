@@ -39,6 +39,7 @@ void UITheme::setTheme(CrossPointSettings::UI_THEME type) {
       currentTheme = std::make_unique<Lyra3CoversTheme>();
       currentMetrics = &Lyra3CoversMetrics::values;
       break;
+    case CrossPointSettings::UI_THEME::FORMOSA_COVER:  // 2026-10-07：外觀＝Formosa Pro；首頁與書架另有 Activity
     case CrossPointSettings::UI_THEME::FORMOSA_PRO:
     default:  // v184：範圍外一律 Pro（Classic 已退役，BaseTheme 只當父類）
       LOG_DBG("UI", "Using Formosa Pro theme");

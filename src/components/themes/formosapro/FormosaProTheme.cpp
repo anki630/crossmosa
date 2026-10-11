@@ -502,7 +502,8 @@ void FormosaProTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect, cons
               float ratio = coverWidth / coverHeight;
               const float tileRatio = static_cast<float>(tileWidth - 2 * hPaddingInSelection) /
                                       static_cast<float>(FormosaProMetrics::values.homeCoverHeight);
-              float cropX = 1.0f - (tileRatio / ratio);
+              // v382：縮圖比框窄時 cropX 是負的 → drawBitmap 會從負的 bmpX 讀列緩衝（codex）。同 LyraTheme 夾 0。
+              const float cropX = std::max(0.0f, 1.0f - (tileRatio / ratio));
 
               renderer.drawBitmap(bitmap, tileX + hPaddingInSelection, tileY + hPaddingInSelection,
                                   tileWidth - 2 * hPaddingInSelection, FormosaProMetrics::values.homeCoverHeight,

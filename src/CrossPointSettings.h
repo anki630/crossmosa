@@ -176,7 +176,9 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   // UI Theme
   // v182 RoundedRaff、v184 Classic 相繼退役（維護者拍板）。枚舉重排後 settings.json 帶 uiThemeSchema=2；
   // 沒有 schema 的舊存檔在 loadFromFile 依舊編號遷移（見該處）。
-  enum UI_THEME { LYRA = 0, LYRA_3_COVERS = 1, FORMOSA_PRO = 2 };
+  // 2026-10-07：FORMOSA_COVER（封面首頁＋書架）附加在尾端 —— 序數就是 settings.json 存的值，不能插在中間。
+  //   舊韌體讀到 3 會被泛用迴圈夾回預設（Pro），降版安全。
+  enum UI_THEME { LYRA = 0, LYRA_3_COVERS = 1, FORMOSA_PRO = 2, FORMOSA_COVER = 3 };
 
   // Image rendering in EPUB reader
   enum IMAGE_RENDERING { IMAGES_DISPLAY = 0, IMAGES_PLACEHOLDER = 1, IMAGES_SUPPRESS = 2, IMAGE_RENDERING_COUNT };

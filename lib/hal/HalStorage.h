@@ -143,6 +143,8 @@ class HalFile : public Print {
   HalFile openNextFile();
   bool isOpen() const;
   operator bool() const;
+  // openNextFile() 回來的空檔柄是「看完了」還是「檔柄配置失敗」：配置失敗時沒有 Impl（2026-10-07，書架掃描用）
+  bool allocFailed() const { return impl == nullptr; }
 };
 
 // Downstream code must use Storage instead of SdMan

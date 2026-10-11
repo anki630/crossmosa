@@ -41,6 +41,8 @@ class HalClock {
   static constexpr uint32_t kFatMaxAgeMs = 24u * 3600u * 1000u;
   void publishFatStamp(const Rtc::DateTime& dt, uint32_t nowMs) const;
   void revokeFatStamp() const;
+  // seqlock 讀發布值（FAT callback 與 trustedUtcNow 共用；不鎖、不 I2C）。讀不到一致的一份、或已撤銷 → false。
+  bool readPublished(uint32_t& epoch, uint32_t& atMs) const;
   // 以下三個在持有 _mu 時呼叫
   void noteTrusted(const Rtc::DateTime& dt, uint32_t nowMs) const;  // 可信讀取 → 快取＋FAT
   void noteUntrusted() const;                                       // 確定不可信 → 快取失效＋撤銷 FAT
@@ -89,6 +91,11 @@ class HalClock {
   // use12Hour: when true, format as 12-hour clock with AM/PM suffix.
   // Returns false if RTC is not available or the time is not trustworthy (see getTime).
   bool formatTime(char* buf, size_t bufSize, uint8_t utcOffsetQuarterHoursBiased = 48, bool use12Hour = false) const;
+
+  // 閱讀統計（2026-10-07）：上一次可信讀取的 UTC 秒數往前推到現在 —— 讀的是 FAT 時戳那份 seqlock 發布值，
+  //   【不鎖 _mu、不打 I2C】，render 任務裡可以呼叫。沒有 RTC、時間不可信（已撤銷）、或發布值比 maxAgeMs 舊 → false。
+  //   發布值由 getTime()（每 CLOCK_POLL_MS 一次 I2C）與 probe() 更新：要新鮮度的人在主任務定期呼叫 getTime()。
+  bool trustedUtcNow(uint32_t& epochOut, uint32_t maxAgeMs) const;
 
   // Sync the RTC from an NTP server. Requires WiFi to be connected.
   // Blocks for up to ~5s while waiting for SNTP response.

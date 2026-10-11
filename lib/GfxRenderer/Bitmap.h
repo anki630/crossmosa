@@ -77,6 +77,13 @@ class Bitmap {
   bool is1Bit() const { return bpp == 1; }
   uint16_t getBpp() const { return bpp; }
 
+  // v387 量測（只在 CoverTile 的 beginStats／logStats 之間開）：readNextRow 裡從卡上讀的時間、走 1-bit 快轉的列數。
+  //   「讀列」減掉 io 就是轉換。全域計數只算開啟它的那個任務（codex：別的任務同時畫圖不混進來）。
+  static void beginIoStats();
+  static void endIoStats() { sIoTiming = false; }
+  static uint32_t ioUs() { return sIoUs; }
+  static uint32_t fastRows1Bit() { return sFastRows; }
+
  private:
   static uint16_t readLE16(HalFile& f);
   static uint32_t readLE32(HalFile& f);
@@ -100,4 +107,10 @@ class Bitmap {
 
   mutable AtkinsonDitherer* atkinsonDitherer = nullptr;
   mutable FloydSteinbergDitherer* fsDitherer = nullptr;
+
+  static bool timingThisTask();
+  static bool sIoTiming;
+  static void* sIoOwner;
+  static uint32_t sIoUs;
+  static uint32_t sFastRows;
 };

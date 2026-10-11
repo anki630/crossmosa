@@ -189,6 +189,9 @@ class EpubReaderActivity final : public Activity {
   uint8_t nvsFailStreak_ = 10;  // NVS 失敗計數：第一次失敗立刻寫 SD，之後每 10 次一次（v329 節奏；codex）
   int lastObservedSpine_ = -1;
   int lastObservedPage_ = -1;
+  // 閱讀統計（2026-10-07）：版面世代 —— 改文字設定、轉向、固定版面降級這三種重排時 +1，跟位置快照一起交給
+  //   ReadingStats::observe；世代變了的那次位置變動是重排，不算翻頁。只在持 RenderLock 時改／讀。
+  uint32_t statsLayoutGen_ = 0;
   uint32_t lastRenderDlogMs_ = 0;  // 上一次 render（含尾段）花在 DiagLog append 的毫秒 → EPLAT dlog=
   int32_t lastNvsUs_ = -1;         // 上一次尾段的 NVS 進度寫入微秒（-1＝沒寫、-2＝寫失敗）→ EPLAT nvs=
   uint32_t nvsBookHash_ = 0;       // fnv1a(書路徑)|1，開書時算（onEnter 的進度載入）；0＝還沒算

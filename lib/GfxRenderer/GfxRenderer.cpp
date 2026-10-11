@@ -7,6 +7,8 @@
 #include <Logging.h>
 #include <SdCardFont.h>
 #include <Utf8.h>
+#include <esp_cpu.h>
+#include <freertos/FreeRTOS.h>
 
 #include <algorithm>
 #include <cmath>
@@ -1214,16 +1216,40 @@ void buildSmoothTable(SmoothTable& tb, const int r, const int smoothingPct, cons
     if (tb.inset[j] > tb.inset[j - 1]) tb.inset[j] = tb.inset[j - 1];
   }
 }
+// v381（diag380：有星號＋進度條的封面格，圓角外框那段每格 20–29 ms，沒有的只要 3–4 ms）：一格封面會用到
+//   封面圓角（12／內圈 11）、星號圓（11／內圈 10）、進度條（3／內圈 2）共 6 種表，舊的 4 格輪替快取每次都被擠掉、
+//   每畫一個形狀就重算一次三角函數。加到 12 格（每格 112 B），一個畫面用到的表都放得下。
+// v383（diag382：有真封面的書架頁每次仍重建 13 張表）：一個畫面還有電池、分頁、按鍵提示、選取框，
+//   加起來超過 12 種 → 照順序輪替一路擠掉。兩件事：
+//   ① key 正規化：角沒被 maxP 截到時（(1+s)·r ≤ maxP），表跟 maxP 無關 → 一律記成 kSmoothMaxP，
+//      寬度不同的分頁、按鍵就共用同一張；② 加到 20 格（每格 112 B）。
+constexpr int kSmoothCacheSize = 20;
+uint32_t sSmoothBuilds = 0;  // 量測：建了幾次表（COVERDRAW smb=）
 const SmoothTable& smoothTable(const int r, const int smoothingPct, const int maxP) {
-  static SmoothTable cache[4];
+  static SmoothTable cache[kSmoothCacheSize];
   static int next = 0;
-  const int mp = std::min(maxP, kSmoothMaxP);
-  for (const auto& t : cache) {
-    if (t.r == r && t.s == smoothingPct && t.maxP == mp) return t;
+  // codex v381：drawSmoothRoundedRect 先拿外圈表（to）再拿內圈表（ti）；拿 ti 沒命中時不能剛好蓋掉 to 那一格
+  //   （舊的 4 格輪替就有這個洞）。所以永遠不淘汰上一次回傳的那一格。
+  static int last = -1;
+  int mp = std::min(maxP, kSmoothMaxP);
+  {
+    const float sNorm = std::min(std::max(smoothingPct, 0), 100) / 100.0f;
+    if ((1.0f + sNorm) * static_cast<float>(r) <= static_cast<float>(mp)) mp = kSmoothMaxP;
   }
-  SmoothTable& t = cache[next];
-  next = (next + 1) % 4;
+  for (int i = 0; i < kSmoothCacheSize; ++i) {
+    const SmoothTable& t = cache[i];
+    if (t.r == r && t.s == smoothingPct && t.maxP == mp) {
+      last = i;
+      return t;
+    }
+  }
+  int slot = next;
+  if (slot == last) slot = (slot + 1) % kSmoothCacheSize;
+  next = (slot + 1) % kSmoothCacheSize;
+  last = slot;
+  SmoothTable& t = cache[slot];
   buildSmoothTable(t, r, smoothingPct, mp);
+  sSmoothBuilds++;
   return t;
 }
 // 矩形第 j 列（0..h-1）的內縮量：上下各 p 列有角。
@@ -1234,6 +1260,8 @@ int smoothRowInset(const SmoothTable& t, const int j, const int h) {
   return 0;
 }
 }  // namespace
+
+uint32_t GfxRenderer::smoothTableBuilds() { return sSmoothBuilds; }
 
 int GfxRenderer::smoothCornerInset(const int rowFromEdge, const int cornerRadius, const int smoothing,
                                    const int maxP) const {
@@ -1504,7 +1532,7 @@ void GfxRenderer::drawImageGray(const uint8_t data[], const int x, const int y, 
   }
 }
 
-void GfxRenderer::drawIcon(const uint8_t bitmap[], const int x, const int y, const int size) const {
+void GfxRenderer::drawIcon(const uint8_t bitmap[], const int x, const int y, const int size, const bool black) const {
   // Plot the icon pixel-by-pixel through drawPixel (which applies the orientation
   // transform) instead of the byte-aligned framebuffer blit. The blit snaps the
   // icon's position to 8px (one byte) along the rotated axis, which prevents it
@@ -1518,7 +1546,7 @@ void GfxRenderer::drawIcon(const uint8_t bitmap[], const int x, const int y, con
       const uint8_t byte = bitmap[row * rowBytes + (col >> 3)];
       const bool ink = ((byte >> (7 - (col & 7))) & 1) == 0;
       if (ink) {
-        drawPixel(x + (size - 1 - row), y + col, true);
+        drawPixel(x + (size - 1 - row), y + col, black);
       }
     }
   }
@@ -1544,12 +1572,77 @@ void GfxRenderer::drawIconScaled(const uint8_t bitmap[], const int x, const int 
 
 // ⚠️ v320：這支（含 drawBitmap1Bit 與 Bitmap 的抖色）的輸出被【桌布平面快取】存在 SD 卡上。
 //    改了任何會影響像素的邏輯，要把 SleepActivity.cpp 的 WALLCACHE_PIXEL_VERSION +1，否則舊快取照舊算法顯示。
+// v381（diag380：書架第一頁六張真封面，逐點寫入 259 ms，每點約 1.4 µs —— drawPixel 每點都要轉座標、查邊界、查分帶）：
+//   不縮放、黑白模式、沒在分帶繪製時，一列像素在面板上的座標是等差的（四個方向都是線性轉換），
+//   所以先用 rotateCoordinates 算頭、第二點、尾三點，確認真的等差而且頭尾都在面板內，就直接改 framebuffer 的位元。
+//   改到的像素與做法跟逐點 drawPixel(x, y, true) 完全相同；任何一個條件不成立就回 false，呼叫端照舊逐點畫。
+//   row：readNextRow 給的 2-bit 列；[bmpX0, bmpX1) 畫到 (sx0, sy) 起；值 < 3（不是白）＝畫黑。
+bool GfxRenderer::blitBwRowFast(const uint8_t* row, const int bmpX0, const int bmpX1, const int sx0,
+                                const int sy) const {
+  if (renderMode != BW || _stripActive || frameBuffer == nullptr) return false;
+  const int n = bmpX1 - bmpX0;
+  if (n < 2) return false;
+  if (sy < 0 || sy >= getScreenHeight() || sx0 < 0 || sx0 + n > getScreenWidth()) return false;
+  int px0, py0, px1, py1, pxl, pyl;
+  rotateCoordinates(orientation, sx0, sy, &px0, &py0, panelWidth, panelHeight);
+  rotateCoordinates(orientation, sx0 + 1, sy, &px1, &py1, panelWidth, panelHeight);
+  rotateCoordinates(orientation, sx0 + n - 1, sy, &pxl, &pyl, panelWidth, panelHeight);
+  const int dx = px1 - px0;
+  const int dy = py1 - py0;
+  if (pxl != px0 + dx * (n - 1) || pyl != py0 + dy * (n - 1)) return false;
+  if (px0 < 0 || px0 >= panelWidth || py0 < 0 || py0 >= panelHeight) return false;
+  if (pxl < 0 || pxl >= panelWidth || pyl < 0 || pyl >= panelHeight) return false;
+  // v384（v383 COVERSAMP：關中斷仍每點 138 週期）：有號 int 的 /4、%8 被編成真的 div／rem，C3 每道約 33 週期，
+  //   這一圈每個黑點 4 道。索引全都非負（上面驗過頭尾在面板內；bmpX0 ≥ 0
+  //   由下一行檢查），改成無號位移／遮罩，結果逐位元相同。
+  if (bmpX0 < 0) return false;
+  uint8_t* const fb = frameBuffer;
+  const uint32_t stride = panelWidthBytes;
+  int phyX = px0;
+  int phyY = py0;
+  for (int bmpX = bmpX0; bmpX < bmpX1; ++bmpX, phyX += dx, phyY += dy) {
+    const uint32_t ux = static_cast<uint32_t>(bmpX);
+    const uint8_t val = row[ux >> 2] >> (6 - ((ux & 3u) << 1)) & 0x3;
+    if (val < 3) {
+      const uint32_t px = static_cast<uint32_t>(phyX);
+      fb[static_cast<uint32_t>(phyY) * stride + (px >> 3)] &= static_cast<uint8_t>(~(0x80u >> (px & 7u)));
+    }
+  }
+  return true;
+}
+
+// v383 量測（diag382：快路每點仍約 0.9 µs、逐點約 1.0 µs —— 換算座標不是主因，要分清是迴圈本身慢還是被打斷）。
+//   同一列在關中斷的臨界區裡再跑兩次：快路、逐點 drawPixel。兩者都只把黑點清成 0，重畫不改變畫面。
+void GfxRenderer::sampleBwRow(const uint8_t* row, const int bmpX0, const int bmpX1, const int sx0, const int sy,
+                              const uint32_t cycN, const uint32_t us) const {
+  static portMUX_TYPE mux = portMUX_INITIALIZER_UNLOCKED;
+  uint32_t c0, c1, c2;
+  portENTER_CRITICAL(&mux);
+  c0 = esp_cpu_get_cycle_count();
+  blitBwRowFast(row, bmpX0, bmpX1, sx0, sy);
+  c1 = esp_cpu_get_cycle_count();
+  for (int bmpX = bmpX0; bmpX < bmpX1; bmpX++) {
+    if ((row[static_cast<uint32_t>(bmpX) >> 2] >> (6 - ((static_cast<uint32_t>(bmpX) & 3u) << 1)) & 0x3) < 3)
+      drawPixel(sx0 + (bmpX - bmpX0), sy, true);
+  }
+  c2 = esp_cpu_get_cycle_count();
+  portEXIT_CRITICAL(&mux);
+  _bmpStats.sampRows++;
+  _bmpStats.sampPx += static_cast<uint32_t>(bmpX1 - bmpX0);
+  _bmpStats.sampUs += us;
+  _bmpStats.sampCycN += cycN;
+  _bmpStats.sampCycFast += c1 - c0;
+  _bmpStats.sampCycSlow += c2 - c1;
+}
+
 void GfxRenderer::drawBitmap(const Bitmap& bitmap, const int x, const int y, const int maxWidth, const int maxHeight,
                              const float cropX, const float cropY) const {
   if (fontCacheManager_ && fontCacheManager_->isScanning()) return;
   _lastBitmapOk = false;  // v320：只有整張畫完才會變 true（桌布平面快取用它決定這一趟能不能存）
   // For 1-bit bitmaps, use optimized 1-bit rendering path (no crop support for 1-bit)
+  _bmpStats.calls++;
   if (bitmap.is1Bit() && cropX == 0.0f && cropY == 0.0f) {
+    _bmpStats.oneBit++;
     drawBitmap1Bit(bitmap, x, y, maxWidth, maxHeight);
     return;
   }
@@ -1577,9 +1670,13 @@ void GfxRenderer::drawBitmap(const Bitmap& bitmap, const int x, const int y, con
     hasTargetBounds = true;
   }
 
-  if (hasTargetBounds && fitScale < 1.0f) {
+  // v385（diag384：首頁 4 張有 2 張、書架 6 張有 1 張走縮放）：裁切後的寬是浮點算的，剛好等於框寬的封面常算成
+  //   框寬多一點點 → fitScale＝0.99999988 → 整張走逐點浮點縮放（C3 沒有浮點硬體），而且整張往左上偏 1 點。
+  //   差不到 1e-5（2000 點寬也不到 0.02 點）就是不用縮：不縮的路會把多出的 1–2 點裁在框內（v382）。
+  if (hasTargetBounds && fitScale < 1.0f - 1e-5f) {
     scale = fitScale;
     isScaled = true;
+    _bmpStats.scaled++;
   }
   LOG_DBG("GFX", "Scaling by %f - %s", scale, isScaled ? "scaled" : "not scaled");
 
@@ -1596,6 +1693,7 @@ void GfxRenderer::drawBitmap(const Bitmap& bitmap, const int x, const int y, con
     return;
   }
 
+  bool sampled = !_bmpSampling;  // v383 量測：每張圖取樣一列（只在封面計時期間）
   for (int bmpY = 0; bmpY < (bitmap.getHeight() - cropPixY); bmpY++) {
     // The BMP's (0, 0) is the bottom-left corner (if the height is positive, top-left if negative).
     // Screen's (0, 0) is the top-left corner.
@@ -1608,7 +1706,11 @@ void GfxRenderer::drawBitmap(const Bitmap& bitmap, const int x, const int y, con
       break;
     }
 
-    if (bitmap.readNextRow(outputRow, rowBytes) != BmpReaderError::Ok) {
+    const uint32_t readT0 = micros();
+    const BmpReaderError rowErr = bitmap.readNextRow(outputRow, rowBytes);
+    _bmpStats.readUs += micros() - readT0;
+    _bmpStats.rows++;
+    if (rowErr != BmpReaderError::Ok) {
       LOG_ERR("GFX", "Failed to read row %d from bitmap", bmpY);
       free(outputRow);
       free(rowBytes);
@@ -1623,21 +1725,45 @@ void GfxRenderer::drawBitmap(const Bitmap& bitmap, const int x, const int y, con
       // Skip the row if it's outside the crop area
       continue;
     }
+    // v382：不畫出呼叫端給的框。裁切量是往下取整的（cropPixX = floor），封面比框寬時實際畫出的寬度
+    // 會比 maxWidth 多 1–2 點（shelf 144 寬的格子，封面寬 146／148… 都多 2 點），深色封面就在圓角外框外多一條黑線。
+    if (maxHeight > 0 && screenY >= y + maxHeight) {
+      continue;
+    }
+    int bmpXEnd = bitmap.getWidth() - cropPixX;
+    if (!isScaled && maxWidth > 0 && bmpXEnd - cropPixX > maxWidth) {
+      bmpXEnd = cropPixX + maxWidth;
+    }
 
-    for (int bmpX = cropPixX; bmpX < bitmap.getWidth() - cropPixX; bmpX++) {
+    const uint32_t pixT0 = micros();
+    const uint32_t cycT0 = esp_cpu_get_cycle_count();
+    if (!isScaled && blitBwRowFast(outputRow, cropPixX, bmpXEnd, x, screenY)) {
+      const uint32_t cycN = esp_cpu_get_cycle_count() - cycT0;
+      const uint32_t us = micros() - pixT0;
+      _bmpStats.pixUs += us;
+      _bmpStats.fastRows++;
+      if (!sampled) {
+        sampled = true;
+        sampleBwRow(outputRow, cropPixX, bmpXEnd, x, screenY, cycN, us);
+      }
+      continue;
+    }
+    for (int bmpX = cropPixX; bmpX < bmpXEnd; bmpX++) {
       int screenX = bmpX - cropPixX;
       if (isScaled) {
         screenX = std::floor(screenX * scale);
       }
       screenX += x;  // the offset should not be scaled
-      if (screenX >= getScreenWidth()) {
+      if (screenX >= getScreenWidth() || (maxWidth > 0 && screenX >= x + maxWidth)) {
         break;
       }
       if (screenX < 0) {
         continue;
       }
 
-      const uint8_t val = outputRow[bmpX / 4] >> (6 - ((bmpX * 2) % 8)) & 0x3;
+      // v384：無號位移（同 blitBwRowFast；bmpX 從 cropPixX ≥ 0 起算）
+      const uint8_t val =
+          outputRow[static_cast<uint32_t>(bmpX) >> 2] >> (6 - ((static_cast<uint32_t>(bmpX) & 3u) << 1)) & 0x3;
 
       if (renderMode == BW && val < 3) {
         drawPixel(screenX, screenY);
@@ -1651,6 +1777,7 @@ void GfxRenderer::drawBitmap(const Bitmap& bitmap, const int x, const int y, con
         drawPixel(screenX, screenY, false);  // 絕對四階 DTM2：黑、淺灰
       }
     }
+    _bmpStats.pixUs += micros() - pixT0;
   }
 
   free(outputRow);
@@ -1671,6 +1798,7 @@ void GfxRenderer::drawBitmap1Bit(const Bitmap& bitmap, const int x, const int y,
     scale = std::min(scale, static_cast<float>(maxHeight) / static_cast<float>(bitmap.getHeight()));
     isScaled = true;
   }
+  if (isScaled) _bmpStats.scaled++;
 
   // For 1-bit BMP, output is still 2-bit packed (for consistency with readNextRow)
   const int outputRowSize = (bitmap.getWidth() + 3) / 4;
@@ -1684,9 +1812,14 @@ void GfxRenderer::drawBitmap1Bit(const Bitmap& bitmap, const int x, const int y,
     return;
   }
 
+  bool sampled = !_bmpSampling;  // v383 量測：每張圖取樣一列（只在封面計時期間）
   for (int bmpY = 0; bmpY < bitmap.getHeight(); bmpY++) {
     // Read rows sequentially using readNextRow
-    if (bitmap.readNextRow(outputRow, rowBytes) != BmpReaderError::Ok) {
+    const uint32_t readT0 = micros();
+    const BmpReaderError rowErr = bitmap.readNextRow(outputRow, rowBytes);
+    _bmpStats.readUs += micros() - readT0;
+    _bmpStats.rows++;
+    if (rowErr != BmpReaderError::Ok) {
       LOG_ERR("GFX", "Failed to read row %d from 1-bit bitmap", bmpY);
       free(outputRow);
       free(rowBytes);
@@ -1703,6 +1836,19 @@ void GfxRenderer::drawBitmap1Bit(const Bitmap& bitmap, const int x, const int y,
       continue;
     }
 
+    const uint32_t pixT0 = micros();
+    const uint32_t cycT0 = esp_cpu_get_cycle_count();
+    if (!isScaled && blitBwRowFast(outputRow, 0, bitmap.getWidth(), x, screenY)) {
+      const uint32_t cycN = esp_cpu_get_cycle_count() - cycT0;
+      const uint32_t us = micros() - pixT0;
+      _bmpStats.pixUs += us;
+      _bmpStats.fastRows++;
+      if (!sampled) {
+        sampled = true;
+        sampleBwRow(outputRow, 0, bitmap.getWidth(), x, screenY, cycN, us);
+      }
+      continue;
+    }
     for (int bmpX = 0; bmpX < bitmap.getWidth(); bmpX++) {
       int screenX = x + (isScaled ? static_cast<int>(std::floor(bmpX * scale)) : bmpX);
       if (screenX >= getScreenWidth()) {
@@ -1713,7 +1859,9 @@ void GfxRenderer::drawBitmap1Bit(const Bitmap& bitmap, const int x, const int y,
       }
 
       // Get 2-bit value (result of readNextRow quantization)
-      const uint8_t val = outputRow[bmpX / 4] >> (6 - ((bmpX * 2) % 8)) & 0x3;
+      // v384：無號位移（同 blitBwRowFast；bmpX 從 cropPixX ≥ 0 起算）
+      const uint8_t val =
+          outputRow[static_cast<uint32_t>(bmpX) >> 2] >> (6 - ((static_cast<uint32_t>(bmpX) & 3u) << 1)) & 0x3;
 
       // For 1-bit source: 0 or 1 -> map to black (0,1,2) or white (3)
       // val < 3 means black pixel (draw it)
@@ -1722,6 +1870,7 @@ void GfxRenderer::drawBitmap1Bit(const Bitmap& bitmap, const int x, const int y,
       }
       // White pixels (val == 3) are not drawn (leave background)
     }
+    _bmpStats.pixUs += micros() - pixT0;
   }
 
   free(outputRow);

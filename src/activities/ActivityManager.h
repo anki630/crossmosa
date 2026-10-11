@@ -66,6 +66,7 @@ class ActivityManager {
   // Whether to trigger a render after the current loop()
   // This variable must only be set by the main loop, to avoid race conditions
   std::atomic<bool> requestedUpdate{false};
+  std::atomic<uint32_t> screenEpoch_{0};
 
  public:
   // v110/v161：投機工作（字型預取）的中止提示，不是正確性閘門。新樹以 requestedUpdate
@@ -90,6 +91,12 @@ class ActivityManager {
   void goToSettings();
   void goToFileBrowser(std::string path = {});
   void goToRecentBooks();
+  // 2026-10-07：Formosa Cover
+  // 的書架（卡上所有的書，封面）。returnPath＝剛讀完的那本（從閱讀器回來停在它上面）；空＝停在分頁列
+  // initialTab（v375）：從「資料夾」分頁換過來＝停在那個分頁的分頁列（BookshelfActivity::kTabAll／kTabFav；−1＝照預設）
+  void goToBookshelf(std::string returnPath = {}, int initialTab = -1);
+  // 閱讀器的「回書庫」：Formosa Cover 沒有瀏覽檔案，書庫就是書架；其他主題進瀏覽檔案（path＝要停在哪個檔／資料夾）
+  void goToLibrary(std::string path = {});
   void goToBrowser();
   // v280：goToReader 被呼叫的時刻（喚醒路徑分項計時）。
   // ⚠️ **取走即清空**（複查抓到）：不清的話，之後任何一次沒有經過 goToReader 的 `onEnter`
@@ -133,6 +140,10 @@ class ActivityManager {
   // Trigger a render and block until it completes.
   // Must NOT be called from the render task or while holding a RenderLock.
   void requestUpdateAndWait();
+  // 螢幕世代（2026-10-07，Formosa Cover 的局部重畫用）：有別人蓋過畫面（子畫面進出、淺睡眠醒來沒還原畫面）就加一。
+  //   只擦舊框、畫新框的 render 要先確認世代沒變；變了就整頁重畫。
+  uint32_t screenEpoch() const { return screenEpoch_.load(); }
+  void invalidateScreen() { screenEpoch_.fetch_add(1); }
 };
 
 extern ActivityManager activityManager;  // singleton, to be defined in main.cpp

@@ -53,8 +53,8 @@ constexpr uint16_t WALLCACHE_VERSION = 1;  // 檔案佈局的版本
 // ⚠️ 像素語意的版本：GfxRenderer::drawBitmap／drawBitmap1Bit／Bitmap 的抖色或平面對映改了就 +1，
 //    否則舊快取會用舊的算法顯示。v320 一度用韌體版號字串，但那讓【每次刷韌體】所有桌布都要重算——
 //    對每天刷機的人等於沒有快取。（GfxRenderer.cpp 的 drawBitmap 上方有指回這裡的註解。）
-constexpr uint16_t WALLCACHE_PIXEL_VERSION = 1;
-constexpr uint16_t WALLCACHE_MAX_FILES = 400;  // 約 63MB 上限
+constexpr uint16_t WALLCACHE_PIXEL_VERSION = 2;  // v385：drawBitmap 不再把誤差內的比例當縮放
+constexpr uint16_t WALLCACHE_MAX_FILES = 400;    // 約 63MB 上限
 
 struct WallCacheFooter {  // 放【檔尾】：寫入時不需要回頭 seek 改檔頭
   char magic[4];          // "CMWP"

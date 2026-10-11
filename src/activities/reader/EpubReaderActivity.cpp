@@ -47,7 +47,9 @@
 #include "util/BenchFlags.h"
 #include "util/BookmarkUtil.h"
 #include "util/DiagLog.h"
+#include "util/Favorites.h"
 #include "util/NvsStore.h"
+#include "util/ReadingStats.h"
 #include "util/ScreenshotUtil.h"
 
 namespace {
@@ -140,6 +142,10 @@ void moveFinishedBookToReadFolder(const std::string& srcPath, const std::string&
     LOG_ERR("ERS", "Failed to move finished book to '/Read' folder");
     return;
   }
+  // 閱讀統計（codex 程式碼複查）：主檔一改名成功就先把累計搬到新路徑並存 —— 下面的快取改名、recent.json 都有 SD I/O，
+  //   那段期間當機的話書只在新路徑、累計卻還在舊 key 上。
+  ReadingStats::renameBook(srcPath, dstPath);
+  Favorites::renameBook(srcPath, dstPath);  // v367：我的最愛同理，緊接著主檔改名（不在最愛裡就什麼都不做）
 
   // Cache dir is keyed by hash of the epub path (see Epub ctor), so it must be re-keyed.
   const std::string newCachePath =
@@ -387,6 +393,8 @@ void EpubReaderActivity::onEnter() {
 }
 
 void EpubReaderActivity::onExit() {
+  // 閱讀統計：離開的第一件事就停錶＋結束這一段（下面的存檔、釋放都不是閱讀）；存檔留到搬書之後（codex 第三輪阻斷 2）。
+  ReadingStats::endSession();
   emitBuildEnd("exit");
   // v279（複查）：延後的寫入若還沒發生就在這裡補完 —— 否則「開書後馬上退出／休眠」會讓
   //   這本書沒進最近閱讀（`APP_STATE` 下面本來就會存，但最近閱讀沒有別的補救點）。
@@ -453,6 +461,9 @@ void EpubReaderActivity::onExit() {
   } else {
     epub.reset();
   }
+  ReadingStats::save(
+      "exit");  // 搬書（含 renameBook 的改 key）之後才存。搬書本身與 recent.json 之間的當機窗口是既有的，
+                //   統計不另加遷移標記（codex 程式碼複查第二輪，刻意不做：小需求不加持久化機制）
 }
 
 void EpubReaderActivity::openReaderMenu() {
@@ -1706,6 +1717,7 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
                                  nextPageNumber = section->currentPage;
                                }
                                section.reset();
+                               statsLayoutGen_++;  // 閱讀統計：重排不算翻頁
                              });
       break;
     }
@@ -1812,6 +1824,7 @@ void EpubReaderActivity::applyOrientation(const uint8_t orientation) {
 
     // Reset section to force re-layout in the new orientation.
     section.reset();
+    statsLayoutGen_++;  // 閱讀統計：重排不算翻頁
   }
 }
 
@@ -2012,6 +2025,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
     renderer.clearScreen();
     endOfBookOptions.render(renderer, mappedInput);
     renderer.displayBuffer();
+    ReadingStats::endOfBook();  // 閱讀統計：正文 → 結書那一次結算並停錶（停在推薦清單不算讀書）
     showPendingSyncSaveError();
     return;
   }
@@ -2534,6 +2548,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
     renderer.drawCenteredText(UI_12_FONT_ID, 300, tr(STR_EMPTY_CHAPTER), true, EpdFontFamily::BOLD);
     renderStatusBar();
     renderer.displayBuffer();
+    ReadingStats::pause();  // 閱讀統計：錯誤／空白畫面不算讀書
     showPendingSyncSaveError();
     return;
   }
@@ -2543,6 +2558,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
     renderer.drawCenteredText(UI_12_FONT_ID, 300, tr(STR_OUT_OF_BOUNDS), true, EpdFontFamily::BOLD);
     renderStatusBar();
     renderer.displayBuffer();
+    ReadingStats::pause();  // 閱讀統計：錯誤／空白畫面不算讀書
     showPendingSyncSaveError();
     return;
   }
@@ -2553,6 +2569,9 @@ void EpubReaderActivity::render(RenderLock&& lock) {
   //   做成了就不必在最後再做一次（連同背景預解：那一頁沒有要預解的圖才會做成，見 prefetchNextPage 的 duringRefresh）。
   bool nextPagePreparedEarly = false;
   uint32_t overlapDoneMs = 0;  // 非同步刷新收完的時刻（EPLAT lat 的終點；0＝這一頁不是非同步刷新）
+  // 閱讀統計：這一次真正畫的位置（跟 loadPage 用同一份快照；尾段不回讀可變的 section->currentPage —— codex 第一輪）
+  int statsSpine = -1;
+  int statsPage = -1;
 
   {
     // Unified page read: the in-progress build's in-RAM table if it has reached the page,
@@ -2561,6 +2580,8 @@ void EpubReaderActivity::render(RenderLock&& lock) {
     // 不持鎖改 currentPage 的；loadPage 的 SD I/O（數十毫秒）之間再重讀就會拿到下一頁，
     // 快取身分於是掛錯頁 —— 假 warm 命中、整頁走 overflow ring 而 diag 印 warm=1。
     const int pageNo = section->currentPage;
+    statsSpine = currentSpineIndex;
+    statsPage = pageNo;
     const uint32_t tPhaseMid = millis();
     auto p = section->loadPage(pageNo);
     const uint32_t tPhaseLoad = millis();
@@ -2592,6 +2613,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
         renderer.clearScreen();
         renderer.drawCenteredText(UI_12_FONT_ID, 300, tr(STR_PAGE_LOAD_ERROR), true, EpdFontFamily::BOLD);
         renderer.displayBuffer();
+        ReadingStats::pause();  // 閱讀統計：錯誤／空白畫面不算讀書
         showPendingSyncSaveError();
         return;
       }
@@ -2617,6 +2639,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
         curSpineFxl_ = false;
         nextPageNumber = 0;  // 重排之後頁數不同，舊頁碼沒有意義；這一章從頭顯示
         section.reset();
+        statsLayoutGen_++;  // 閱讀統計：重排不算翻頁
         requestUpdate();
         showPendingSyncSaveError();
         return;
@@ -2721,6 +2744,11 @@ void EpubReaderActivity::render(RenderLock&& lock) {
   // v332：閱讀位置的主檔是 NVS（見 .h）—— 每一次真的翻頁在這裡寫 NVS（3–4ms），progress.bin 只在離開書時寫。
   //   只數位置相對【上一次 render】真的變了的那些（選單／補圖／截圖的同頁重畫不算；codex）；
   //   註腳頁不算翻頁、不寫進度（來源位置由 onExit／flush-origin 專責）；第一次 render 只建基準（codex）。
+  // 閱讀統計：正文成功繪製（註腳頁不算，同進度）。位置用上面捕捉的快照；只做 RAM 運算。
+  if (footnoteDepth == 0 && statsPage >= 0) {
+    ReadingStats::observe(epub->getPath(), static_cast<uint32_t>(statsSpine), static_cast<uint32_t>(statsPage),
+                          statsLayoutGen_);
+  }
   if (footnoteDepth == 0) {
     const bool positionChanged = currentSpineIndex != lastSavedSpineIndex || section->currentPage != lastSavedPage ||
                                  section->pageCount != lastSavedPageCount;
@@ -3337,6 +3365,9 @@ bool EpubReaderActivity::applyDeferredReposition() {
     if (newPage != section->currentPage) {
       section->currentPage = newPage;
       changed = true;
+      // 閱讀統計（codex 程式碼複查）：重排後的自動定位（同步或背景建置完成時）也是重排，不算翻頁。兩個呼叫端都持
+      // RenderLock。
+      statsLayoutGen_++;
     }
   }
   cachedChapterTotalPageCount = 0;  // consumed; don't read cached progress again

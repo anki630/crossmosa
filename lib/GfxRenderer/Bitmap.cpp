@@ -1,8 +1,12 @@
 #include "Bitmap.h"
 
+#include <Arduino.h>
+
 #include <cstdlib>
 #include <cstring>
 #include <new>
+
+#include "BmpRow1Bit.h"
 
 // ============================================================================
 // IMAGE PROCESSING OPTIONS
@@ -13,6 +17,20 @@
 // For cover images, dithering is done in JpegToBmpConverter.cpp instead.
 constexpr bool USE_ATKINSON = true;  // Use Atkinson dithering instead of Floyd-Steinberg
 // ============================================================================
+
+bool Bitmap::sIoTiming = false;
+void* Bitmap::sIoOwner = nullptr;
+uint32_t Bitmap::sIoUs = 0;
+uint32_t Bitmap::sFastRows = 0;
+
+void Bitmap::beginIoStats() {
+  sIoUs = 0;
+  sFastRows = 0;
+  sIoOwner = xTaskGetCurrentTaskHandle();
+  sIoTiming = true;
+}
+
+bool Bitmap::timingThisTask() { return sIoTiming && xTaskGetCurrentTaskHandle() == sIoOwner; }
 
 Bitmap::~Bitmap() {
   delete[] errorCurRow;
@@ -194,9 +212,22 @@ BmpReaderError Bitmap::parseHeaders() {
 // packed 2bpp output, 0 = black, 1 = dark gray, 2 = light gray, 3 = white
 BmpReaderError Bitmap::readNextRow(uint8_t* data, uint8_t* rowBuffer) const {
   // Note: rowBuffer should be pre-allocated by the caller to size 'rowBytes'
+  const bool timing = timingThisTask();
+  const uint32_t ioT0 = timing ? micros() : 0;
   if (file.read(rowBuffer, rowBytes) != rowBytes) return BmpReaderError::ShortReadRow;
+  if (timing) sIoUs += micros() - ioT0;
 
   prevRowY += 1;
+
+  // v387：1-bit（封面縮圖）一次轉 8 點，結果跟下面逐點的 case 1 逐位元組相同（test/bmp_row）。
+  //   1-bit 一定是 nativePalette、不建抖色器；顏色照逐點版算（adjustPixel 再 >>6），亮度設定改了也一致。
+  if (bpp == 1 && nativePalette && !atkinsonDitherer && !fsDitherer) {
+    const auto c0 = static_cast<uint8_t>(adjustPixel(paletteLum[0]) >> 6);
+    const auto c1 = static_cast<uint8_t>(adjustPixel(paletteLum[1]) >> 6);
+    BmpRow1Bit::convertRow(rowBuffer, width, c0, c1, data);
+    if (timing) sFastRows++;
+    return BmpReaderError::Ok;
+  }
 
   uint8_t* outPtr = data;
   uint8_t currentOutByte = 0;

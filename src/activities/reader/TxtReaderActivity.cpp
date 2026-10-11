@@ -42,6 +42,7 @@
 #include "util/BookmarkUtil.h"
 #include "util/DiagLog.h"
 #include "util/NvsStore.h"
+#include "util/ReadingStats.h"
 #include "util/ScreenshotUtil.h"  // v289：選單觸發的截圖
 
 namespace {
@@ -125,16 +126,20 @@ void TxtReaderActivity::onEnter() {
 
   // Save current txt as last opened file and add to recent books
   auto filePath = txt->getPath();
-  auto fileName = filePath.substr(filePath.rfind('/') + 1);
+  // 書名＝檔名去掉副檔名（v378：書架與首頁原本顯示「Essay 0153.txt」；舊的最近閱讀紀錄下次打開這本就更新）
+  auto title = filePath.substr(filePath.rfind('/') + 1);
+  const size_t dot = title.rfind('.');
+  if (dot != std::string::npos && dot > 0) title.resize(dot);
   APP_STATE.openEpubPath = filePath;
   APP_STATE.save();
-  RECENT_BOOKS.addBook(filePath, fileName, "", "");
+  RECENT_BOOKS.addBook(filePath, title, "", "");
 
   // Trigger first update
   requestUpdate();
 }
 
 void TxtReaderActivity::onExit() {
+  ReadingStats::endSession();                   // 閱讀統計：離開的第一件事就停錶＋結束這一段
   if (progressDirty_) saveProgressNow("exit");  // v329：欠的進度在離開時寫掉（ActivityManager 持 RenderLock）
   Activity::onExit();
 
@@ -155,6 +160,7 @@ void TxtReaderActivity::onExit() {
   APP_STATE.readerActivityLoadCount = 0;
   APP_STATE.saveDurable();  // v332：離開書＝沒人等的時刻，NVS＋state.json 都寫（SD 那份是降版／換卡的保險）
   txt.reset();
+  ReadingStats::save("exit");
 }
 
 // ---------------------------------------------------------------------------
@@ -726,6 +732,7 @@ void TxtReaderActivity::render(RenderLock&&) {
     renderer.clearScreen();
     renderer.drawCenteredText(UI_12_FONT_ID, 300, tr(STR_EMPTY_FILE), true, EpdFontFamily::BOLD);
     renderer.displayBuffer();
+    ReadingStats::pause();  // 閱讀統計：空檔畫面不算讀書
     return;
   }
   if (pageStartOffset_ >= fileSize) {
@@ -760,7 +767,8 @@ void TxtReaderActivity::render(RenderLock&&) {
   const uint32_t layoutStartMs = millis();
   currentPageLines.clear();
   size_t nextOffset = pageOffset;
-  loadPageAtOffset(pageOffset, currentPageLines, nextOffset);
+  // 閱讀統計（codex 程式碼複查）：載頁失敗（配置、短讀、排不出字）畫的不是正文 —— 不計時。畫面行為維持原樣。
+  const bool pageLoaded = loadPageAtOffset(pageOffset, currentPageLines, nextOffset);
   const uint32_t layoutMs = millis() - layoutStartMs;
 
   // v240：往前翻頁的證人 —— 往回排出來的上一頁，往後排是不是剛好停在原頁（分頁唯一性的直接證據）。
@@ -807,6 +815,12 @@ void TxtReaderActivity::render(RenderLock&&) {
     const bool firstObs = lastObservedOffset_ == SIZE_MAX;
     const bool moved = !firstObs && pageOffset != lastObservedOffset_;
     lastObservedOffset_ = pageOffset;
+    // 閱讀統計：正文成功繪製，位置用開頭捕捉的 pageOffset（txt 轉向／改設定只重排當頁，offset 不變 → 世代用 0）
+    if (pageLoaded) {
+      ReadingStats::observe(txt->getPath(), static_cast<uint32_t>(pageOffset), 0, 0);
+    } else {
+      ReadingStats::pause();
+    }
     if (firstObs || moved) {
       progressDirty_ = true;  // progress.bin 過期：離開時補寫（第一次 render 也算，同 EPUB）
       nvsProgDirty_ = true;

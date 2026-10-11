@@ -19,6 +19,10 @@ class XtcReaderActivity final : public Activity {
   std::shared_ptr<Xtc> xtc;
 
   uint32_t currentPage = 0;
+  // 閱讀統計（2026-10-07）：這一次 render 正在畫的頁（render 開頭捕捉）。狀態列與 renderPage 用它，不回讀 currentPage
+  //   （主任務會不持鎖改 currentPage；codex 第一、三輪）。只在 render 任務、持 RenderLock 時讀寫。
+  uint32_t drawnPage_ = 0;
+
   int pagesUntilFullRefresh = 0;
   // Next-book suggestion menu for the End-of-Book screen
   EndOfBookOptions endOfBookOptions;
@@ -30,12 +34,13 @@ class XtcReaderActivity final : public Activity {
     std::string title;
   };
 
-  void renderPage();
+  // 回傳這一頁有沒有真的畫出來（配置／讀取失敗畫的是錯誤畫面 → false）。page＝render 開頭捕捉的頁碼。
+  bool renderPage(uint32_t page);
   // Opens chapter selection when the book has chapters (short-press Confirm); no-op otherwise
   void openChapterSelection();
   void renderStatusBarOverlay(StatusBarOverlayPosition position) const;
   StatusBarInfo getStatusBarInfo() const;
-  void saveProgress() const;
+  void saveProgress(uint32_t page) const;
   void loadProgress();
 
  public:

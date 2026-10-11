@@ -194,8 +194,9 @@ std::unique_ptr<Txt> ReaderActivity::loadTxt(const std::string& path) {
 
 void ReaderActivity::goToLibrary(const std::string& fromBookPath) {
   // If coming from a book, start in that book's folder; otherwise start from root
+  //   （2026-10-07：Formosa Cover 主題由 goToLibrary 改進書架）
   auto initialPath = fromBookPath.empty() ? "/" : FsHelpers::extractFolderPath(fromBookPath);
-  activityManager.goToFileBrowser(std::move(initialPath));
+  activityManager.goToLibrary(std::move(initialPath));
 }
 
 void ReaderActivity::onGoToEpubReader(std::unique_ptr<Epub> epub) {

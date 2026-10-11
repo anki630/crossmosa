@@ -23,6 +23,7 @@
 #include "XtcReaderChapterSelectionActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "util/ReadingStats.h"
 
 void XtcReaderActivity::onEnter() {
   // ⭐ 這個閱讀器【永遠是橫排】——把當前文件的軸向明確歸零。
@@ -52,11 +53,13 @@ void XtcReaderActivity::onEnter() {
 }
 
 void XtcReaderActivity::onExit() {
+  ReadingStats::endSession();  // 閱讀統計：離開的第一件事就停錶＋結束這一段
   Activity::onExit();
 
   APP_STATE.readerActivityLoadCount = 0;
   APP_STATE.saveDurable();  // v332：離開書＝沒人等的時刻，NVS＋state.json 都寫（SD 那份是降版／換卡的保險）
   xtc.reset();
+  ReadingStats::save("exit");
 }
 
 void XtcReaderActivity::openChapterSelection() {
@@ -168,25 +171,35 @@ void XtcReaderActivity::render(RenderLock&&) {
     return;
   }
 
+  // 閱讀統計（codex 第一、三輪）：頁碼【捕捉一次】—— 主任務會不持鎖改 currentPage；畫、狀態列、進度、統計都用這一份。
+  const uint32_t page = currentPage;
+  drawnPage_ = page;
+
   // Bounds check
-  if (currentPage >= xtc->getPageCount()) {
+  if (page >= xtc->getPageCount()) {
     // Show end of book screen. Sole load site: runs on the render task (serialized by
     // RenderLock); the main task only reads the suggestions once the flag is published.
     endOfBookOptions.loadOnce(xtc->getPath());
     renderer.clearScreen();
     endOfBookOptions.render(renderer, mappedInput);
     renderer.displayBuffer();
+    ReadingStats::endOfBook();  // 閱讀統計：正文 → 結書那一次結算並停錶
     return;
   }
 
-  renderPage();
-  saveProgress();
+  const bool drawn = renderPage(page);
+  saveProgress(page);
+  if (drawn) {
+    ReadingStats::observe(xtc->getPath(), page, 0, 0);
+  } else {
+    ReadingStats::pause();  // 錯誤畫面不算讀書
+  }
 }
 
 XtcReaderActivity::StatusBarInfo XtcReaderActivity::getStatusBarInfo() const {
   const auto sb = SETTINGS.statusBarSpec();
   const int bookPageCount = static_cast<int>(xtc->getPageCount());
-  const int bookPage = static_cast<int>(currentPage) + 1;
+  const int bookPage = static_cast<int>(drawnPage_) + 1;
   std::string title = sb.titleMode == CrossPointSettings::STATUS_BAR_TITLE::BOOK_TITLE ? xtc->getTitle() : "";
 
   if (!xtc->hasChapters()) {
@@ -195,7 +208,7 @@ XtcReaderActivity::StatusBarInfo XtcReaderActivity::getStatusBarInfo() const {
 
   const auto& chapters = xtc->getChapters();
   const auto chapterIt = std::find_if(chapters.begin(), chapters.end(), [this](const xtc::ChapterInfo& chapter) {
-    return currentPage >= chapter.startPage && currentPage <= chapter.endPage;
+    return drawnPage_ >= chapter.startPage && drawnPage_ <= chapter.endPage;
   });
 
   if (chapterIt == chapters.end() || chapterIt->endPage < chapterIt->startPage) {
@@ -206,7 +219,7 @@ XtcReaderActivity::StatusBarInfo XtcReaderActivity::getStatusBarInfo() const {
     title = chapterIt->name.empty() ? tr(STR_UNNAMED) : chapterIt->name;
   }
 
-  return StatusBarInfo{static_cast<int>(currentPage - chapterIt->startPage) + 1,
+  return StatusBarInfo{static_cast<int>(drawnPage_ - chapterIt->startPage) + 1,
                        static_cast<int>(chapterIt->endPage - chapterIt->startPage) + 1, std::move(title)};
 }
 
@@ -248,13 +261,13 @@ void XtcReaderActivity::renderStatusBarOverlay(const StatusBarOverlayPosition po
   }
 
   const int pageCount = static_cast<int>(xtc->getPageCount());
-  const int displayPage = static_cast<int>(currentPage) + 1;
+  const int displayPage = static_cast<int>(drawnPage_) + 1;
   const float progress = pageCount > 0 ? (static_cast<float>(displayPage) * 100.0f) / pageCount : 0.0f;
   const auto pageInfo = getStatusBarInfo();
   GUI.drawStatusBar(renderer, progress, pageInfo.currentPage, pageInfo.pageCount, pageInfo.title, paddingBottom);
 }
 
-void XtcReaderActivity::renderPage() {
+bool XtcReaderActivity::renderPage(const uint32_t page) {
   const uint16_t pageWidth = xtc->getPageWidth();
   const uint16_t pageHeight = xtc->getPageHeight();
   const uint8_t bitDepth = xtc->getBitDepth();
@@ -276,19 +289,19 @@ void XtcReaderActivity::renderPage() {
     renderer.clearScreen();
     renderer.drawCenteredText(UI_12_FONT_ID, 300, tr(STR_MEMORY_ERROR), true, EpdFontFamily::BOLD);
     renderer.displayBuffer();
-    return;
+    return false;
   }
 
   // Load page data
-  size_t bytesRead = xtc->loadPage(currentPage, pageBuffer, pageBufferSize);
+  size_t bytesRead = xtc->loadPage(page, pageBuffer, pageBufferSize);
   if (bytesRead == 0) {
-    LOG_ERR("XTR", "Failed to load page %lu: bufferSize=%lu bitDepth=%u error=%s", currentPage, pageBufferSize,
-            bitDepth, xtc::errorToString(xtc->getLastError()));
+    LOG_ERR("XTR", "Failed to load page %lu: bufferSize=%lu bitDepth=%u error=%s", page, pageBufferSize, bitDepth,
+            xtc::errorToString(xtc->getLastError()));
     free(pageBuffer);
     renderer.clearScreen();
     renderer.drawCenteredText(UI_12_FONT_ID, 300, tr(STR_PAGE_LOAD_ERROR), true, EpdFontFamily::BOLD);
     renderer.displayBuffer();
-    return;
+    return false;
   }
 
   // Clear screen first
@@ -401,8 +414,8 @@ void XtcReaderActivity::renderPage() {
 
     free(pageBuffer);
 
-    LOG_DBG("XTR", "Rendered page %lu/%lu (2-bit grayscale)", currentPage + 1, xtc->getPageCount());
-    return;
+    LOG_DBG("XTR", "Rendered page %lu/%lu (2-bit grayscale)", page + 1, xtc->getPageCount());
+    return true;
   } else {
     // 1-bit mode: 8 pixels per byte, MSB first
     const size_t srcRowBytes = (pageWidth + 7) / 8;  // 60 bytes for 480 width
@@ -434,17 +447,18 @@ void XtcReaderActivity::renderPage() {
 
   ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh);
 
-  LOG_DBG("XTR", "Rendered page %lu/%lu (%u-bit)", currentPage + 1, xtc->getPageCount(), bitDepth);
+  LOG_DBG("XTR", "Rendered page %lu/%lu (%u-bit)", page + 1, xtc->getPageCount(), bitDepth);
+  return true;
 }
 
-void XtcReaderActivity::saveProgress() const {
+void XtcReaderActivity::saveProgress(const uint32_t page) const {
   uint8_t data[4];
-  data[0] = currentPage & 0xFF;
-  data[1] = (currentPage >> 8) & 0xFF;
-  data[2] = (currentPage >> 16) & 0xFF;
-  data[3] = (currentPage >> 24) & 0xFF;
+  data[0] = page & 0xFF;
+  data[1] = (page >> 8) & 0xFF;
+  data[2] = (page >> 16) & 0xFF;
+  data[3] = (page >> 24) & 0xFF;
   if (!ProgressFile::writeAtomic(xtc->getCachePath(), data, sizeof(data))) {
-    LOG_ERR("XTR", "Failed to save progress: page %lu", currentPage);
+    LOG_ERR("XTR", "Failed to save progress: page %lu", page);
   }
 }
 
