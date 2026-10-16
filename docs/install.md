@@ -82,7 +82,7 @@ SD 卡
 ```
 
 只裝一套也可以，先裝 `NotoSerifTC`。已經放在 `.fonts` 資料夾裡的字型不用搬，兩個位置都讀得到。
-想挑字型、裝大字版或注音字型，看[字型](fonts.md)。
+想挑字型、裝大杯和特大杯或注音字型，看[字型](fonts.md)。
 
 ## 步驟 3：開機
 
@@ -187,7 +187,7 @@ SD card
 
 You can install only one family. Start with `NotoSerifTC`. You do not need to move fonts already stored in `.fonts`; CrossMosa reads both locations.
 
-To compare fonts or install large-print or zhuyin fonts, see [Fonts](fonts.md#fonts-english).
+To compare fonts or install Large, Extra Large, or zhuyin fonts, see [Fonts](fonts.md#fonts-english).
 
 ## Step 3: Start the device
 

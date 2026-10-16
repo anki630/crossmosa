@@ -38,13 +38,13 @@
 
 ## 換一套字，換一種心情
 
-明體耐讀，黑體清楚，圓體柔和，硬筆楷書像手寫。給孩子有注音，給爸媽有大字版。字型放在 SD 卡上，隨時可以換。
+明體耐讀，黑體清楚，圓體柔和，硬筆楷書像手寫。給孩子有注音，給爸媽有大杯、特大杯。字型放在 SD 卡上，隨時可以換。
 
 | 明體 | 黑體 | 圓體 |
 |:---:|:---:|:---:|
 | <img src="docs/promo/fonts/serif.png" width="220" alt="明體樣張"><br>長篇首選 | <img src="docs/promo/fonts/sans.png" width="220" alt="黑體樣張"><br>字小也清楚 | <img src="docs/promo/fonts/round.png" width="220" alt="圓體樣張"><br>筆畫圓潤，看久不累 |
-| **硬筆楷書** | **注音楷書** | **大字版** |
-| <img src="docs/promo/fonts/iansui.png" width="220" alt="硬筆楷書樣張"><br>像原子筆寫在紙上 | <img src="docs/promo/fonts/zhuyin.png" width="220" alt="注音楷書樣張"><br>破音字也照詞來標 | <img src="docs/promo/fonts/large.png" width="220" alt="大字版樣張"><br>明體、黑體、圓體都有 |
+| **硬筆楷書** | **注音楷書** | **大杯、特大杯** |
+| <img src="docs/promo/fonts/iansui.png" width="220" alt="硬筆楷書樣張"><br>像原子筆寫在紙上 | <img src="docs/promo/fonts/zhuyin.png" width="220" alt="注音楷書樣張"><br>破音字也照詞來標 | <img src="docs/promo/fonts/large.png" width="220" alt="大杯樣張"><br>明體、黑體、圓體、楷書都有 |
 
 <details>
 <summary>看直排的樣子</summary>
@@ -52,8 +52,8 @@
 | 明體 | 黑體 | 圓體 |
 |:---:|:---:|:---:|
 | <img src="docs/promo/fonts/v-serif.png" width="220" alt="明體直排樣張"> | <img src="docs/promo/fonts/v-sans.png" width="220" alt="黑體直排樣張"> | <img src="docs/promo/fonts/v-round.png" width="220" alt="圓體直排樣張"> |
-| **硬筆楷書** | **注音楷書** | **大字版** |
-| <img src="docs/promo/fonts/v-iansui.png" width="220" alt="硬筆楷書直排樣張"> | <img src="docs/promo/fonts/v-zhuyin.png" width="220" alt="注音楷書直排樣張"> | <img src="docs/promo/fonts/v-large.png" width="220" alt="大字版直排樣張"> |
+| **硬筆楷書** | **注音楷書** | **大杯、特大杯** |
+| <img src="docs/promo/fonts/v-iansui.png" width="220" alt="硬筆楷書直排樣張"> | <img src="docs/promo/fonts/v-zhuyin.png" width="220" alt="注音楷書直排樣張"> | <img src="docs/promo/fonts/v-large.png" width="220" alt="大杯直排樣張"> |
 
 </details>
 
@@ -115,7 +115,7 @@
 | 更新到新版 | [更新到新版](docs/update.md) |
 | X3 刷完畫面不動 | [螢幕停住了](docs/rescue.md) |
 | 刷不進去 | [刷不進去怎麼辦](docs/flash-troubleshooting.md) |
-| 挑字型、裝大字版、給孩子的注音 | [字型](docs/fonts.md) |
+| 挑字型、裝大杯和特大杯、給孩子的注音 | [字型](docs/fonts.md) |
 | 把書放進機器 | [把書放進去](docs/books.md) |
 | 換桌布 | [桌布](docs/wallpaper.md) |
 | 刷回原廠系統 | [社群整理的步驟](https://pocketink.io/firmware/recovery/)（英文） |
@@ -264,13 +264,13 @@ The zhuyin font needs firmware 2.1.0 or later. [Get the zhuyin font →](https:/
 
 ## A new typeface, a new mood
 
-Serif for long reads, sans for clarity, rounded for comfort, handwritten for warmth. Zhuyin for children, large print for parents. The fonts live on the SD card, so you can switch anytime.
+Serif for long reads, sans for clarity, rounded for comfort, handwritten for warmth. Zhuyin for children, Large and Extra Large for parents. The fonts live on the SD card, so you can switch anytime.
 
 | Serif | Sans serif | Rounded |
 |:---:|:---:|:---:|
 | <img src="docs/promo/fonts/serif.png" width="220" alt="Serif sample"><br>Made for long reads | <img src="docs/promo/fonts/sans.png" width="220" alt="Sans-serif sample"><br>Clear even when small | <img src="docs/promo/fonts/round.png" width="220" alt="Rounded sample"><br>Soft strokes, easy on the eyes |
-| **Handwritten** | **Zhuyin** | **Large print** |
-| <img src="docs/promo/fonts/iansui.png" width="220" alt="Handwritten sample"><br>Like ballpoint pen on paper | <img src="docs/promo/fonts/zhuyin.png" width="220" alt="Zhuyin sample"><br>Readings that fit the word | <img src="docs/promo/fonts/large.png" width="220" alt="Large-print sample"><br>In serif, sans serif, and rounded |
+| **Handwritten** | **Zhuyin** | **Large and Extra Large** |
+| <img src="docs/promo/fonts/iansui.png" width="220" alt="Handwritten sample"><br>Like ballpoint pen on paper | <img src="docs/promo/fonts/zhuyin.png" width="220" alt="Zhuyin sample"><br>Readings that fit the word | <img src="docs/promo/fonts/large.png" width="220" alt="Large sample"><br>In serif, sans serif, rounded, and handwritten |
 
 <details>
 <summary>See them in vertical text</summary>
@@ -278,8 +278,8 @@ Serif for long reads, sans for clarity, rounded for comfort, handwritten for war
 | Serif | Sans serif | Rounded |
 |:---:|:---:|:---:|
 | <img src="docs/promo/fonts/v-serif.png" width="220" alt="Serif sample, vertical"> | <img src="docs/promo/fonts/v-sans.png" width="220" alt="Sans-serif sample, vertical"> | <img src="docs/promo/fonts/v-round.png" width="220" alt="Rounded sample, vertical"> |
-| **Handwritten** | **Zhuyin** | **Large print** |
-| <img src="docs/promo/fonts/v-iansui.png" width="220" alt="Handwritten sample, vertical"> | <img src="docs/promo/fonts/v-zhuyin.png" width="220" alt="Zhuyin sample, vertical"> | <img src="docs/promo/fonts/v-large.png" width="220" alt="Large-print sample, vertical"> |
+| **Handwritten** | **Zhuyin** | **Large and Extra Large** |
+| <img src="docs/promo/fonts/v-iansui.png" width="220" alt="Handwritten sample, vertical"> | <img src="docs/promo/fonts/v-zhuyin.png" width="220" alt="Zhuyin sample, vertical"> | <img src="docs/promo/fonts/v-large.png" width="220" alt="Large sample, vertical"> |
 
 </details>
 
@@ -338,7 +338,7 @@ Before your first flash, read the precautions in the [install guide](docs/instal
 | Update CrossMosa | [Updating](docs/update.md#updating-english) |
 | Fix an X3 screen that stopped updating | [Screen stopped updating](docs/rescue.md#screen-stopped-updating-rescue-english) |
 | Fix a flash that won't go through | [Flash troubleshooting](docs/flash-troubleshooting.md#flash-troubleshooting-english) |
-| Choose fonts, install large print, or add zhuyin | [Fonts](docs/fonts.md#fonts-english) |
+| Choose fonts, install Large or Extra Large, or add zhuyin | [Fonts](docs/fonts.md#fonts-english) |
 | Check why characters are missing | [Missing characters](docs/fonts.md#character-set-limits-english) |
 | Add books | [Adding books](docs/books.md#adding-books-english) |
 | Change the wallpaper | [Wallpapers](docs/wallpaper.md#wallpapers-english) |
