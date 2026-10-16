@@ -5,6 +5,15 @@ CrossMosa 的中文字型分成兩種：
 - **介面字型**：選單、書名、目錄用的字，內建在系統裡。
 - **書的字型**：書的內文用的字，放在 SD 卡上，隨時可以換，不用重新刷機。
 
+## ⬇ 下載：挑一杯
+
+- **[⬇ 中杯](https://github.com/anki630/crossmosa/releases/download/fonts-2026-09/crossmosa-sd-fonts-2026-09.zip)**：適合大多數人。
+- **[⬇ 大杯](https://github.com/anki630/crossmosa/releases/download/fonts-2026-09/crossmosa-sd-fonts-large-2026-09.zip)**：字大一點，看久了眼睛比較輕鬆。
+- **[⬇ 特大杯](https://github.com/anki630/crossmosa/releases/download/fonts-2026-09/crossmosa-sd-fonts-xl-2026-10.zip)**：最大的字。
+- **[⬇ 兒童杯](https://github.com/anki630/crossmosa/releases/download/zhuyin-2026-09/crossmosa-zhuyin-2026-09.zip)**：每個字旁都有注音，孩子也能自己讀。
+
+看不清楚小字？先試大杯，還不夠再換特大杯。
+
 ## 挑一套字型
 
 | 字型 | 風格 | 適合 |
@@ -22,15 +31,13 @@ CrossMosa 的中文字型分成兩種：
 全部裝完大約 430 MB。只裝一套也可以；第一次裝，建議整個資料夾複製。
 空間不夠的話，每個字級是一個獨立的檔案，檔名裡的數字就是字級，例如 `NotoSerifTC_18.cpfont` 是 18 pt。
 
-## 看不清小字：大字版
+## 看不清小字：大杯和特大杯
 
-[字型包的下載頁](https://github.com/anki630/crossmosa/releases/tag/fonts-2026-09)另有一包大字版（明體、黑體、圓體），裝法一樣。
-裝好之後，「閱讀字級」的清單會多出更大的尺寸。
-字太大反而不好讀，一頁的字變少，就得一直翻頁，所以大字版停在剛好的大小。
+[大杯](https://github.com/anki630/crossmosa/releases/download/fonts-2026-09/crossmosa-sd-fonts-large-2026-09.zip)和[特大杯](https://github.com/anki630/crossmosa/releases/download/fonts-2026-09/crossmosa-sd-fonts-xl-2026-10.zip)都有明體、黑體、圓體和芫荽。裝法跟其他字型一樣，裝好之後在「閱讀字型」裡選它。
 
-## 給孩子：注音字型
+## 給孩子：兒童杯
 
-每個字旁都有注音，給剛開始自己讀書的孩子。在 [`zhuyin-2026-09`](https://github.com/anki630/crossmosa/releases/tag/zhuyin-2026-09) 下載，裝法跟其他字型一樣。
+每個字旁都有注音，給剛開始自己讀書的孩子。[下載兒童杯](https://github.com/anki630/crossmosa/releases/download/zhuyin-2026-09/crossmosa-zhuyin-2026-09.zip)，裝法跟其他字型一樣。
 
 注音字型的名稱是 ZhuyinKai（注音楷書），裝好之後在「閱讀字型」裡選它。需要 2.1.0-beta.5 或更新的版本。在沒看過的書上實測，注音引擎每千字平均約 4 字讀錯。
 
@@ -77,6 +84,15 @@ CrossMosa uses two kinds of Chinese fonts:
 - **Interface fonts:** Used for menus, book titles, and tables of contents. They are built into the system.
 - **Book fonts:** Used for book text. They are stored on the SD card, so you can change them at any time without reflashing.
 
+## ⬇ Download: pick a size
+
+- **[⬇ Regular](https://github.com/anki630/crossmosa/releases/download/fonts-2026-09/crossmosa-sd-fonts-2026-09.zip)**: right for most readers.
+- **[⬇ Large](https://github.com/anki630/crossmosa/releases/download/fonts-2026-09/crossmosa-sd-fonts-large-2026-09.zip)**: bigger text that's easier on your eyes.
+- **[⬇ Extra Large](https://github.com/anki630/crossmosa/releases/download/fonts-2026-09/crossmosa-sd-fonts-xl-2026-10.zip)**: the biggest text.
+- **[⬇ Kids](https://github.com/anki630/crossmosa/releases/download/zhuyin-2026-09/crossmosa-zhuyin-2026-09.zip)**: zhuyin beside every character, so children can read on their own.
+
+Small text hard to read? Start with Large. If that's not enough, try Extra Large.
+
 ## Choose a font family
 
 | Font | Style | Best for |
@@ -96,17 +112,13 @@ Installing every family takes about 430 MB. You can install only one family, but
 
 If space is limited, each text size is a separate file. The number in the filename is the size. For example, `NotoSerifTC_18.cpfont` is 18 pt.
 
-## Large-print fonts
+## Large and Extra Large
 
-The [font pack download page](https://github.com/anki630/crossmosa/releases/tag/fonts-2026-09) also includes a large-print pack with serif, sans-serif, and rounded fonts. Install it in the same way.
+[Large](https://github.com/anki630/crossmosa/releases/download/fonts-2026-09/crossmosa-sd-fonts-large-2026-09.zip) and [Extra Large](https://github.com/anki630/crossmosa/releases/download/fonts-2026-09/crossmosa-sd-fonts-xl-2026-10.zip) both come in serif, sans serif, rounded, and Iansui. Install them like any other font, then select one under Settings → Reader → Reader Font Family.
 
-After installation, larger sizes appear under Settings → Reader → Reader Font Size.
+## Kids: zhuyin
 
-Very large text can be harder to read because fewer characters fit on each page and you must turn pages more often. The large-print pack stops at a practical size.
-
-## Zhuyin fonts for children
-
-These fonts place zhuyin beside each character for children who are beginning to read independently. Download them from [`zhuyin-2026-09`](https://github.com/anki630/crossmosa/releases/tag/zhuyin-2026-09) and install them like any other font.
+This font places zhuyin beside each character for children who are beginning to read independently. [Download Kids](https://github.com/anki630/crossmosa/releases/download/zhuyin-2026-09/crossmosa-zhuyin-2026-09.zip) and install it like any other font.
 
 The font is named ZhuyinKai. After installation, select it under Settings → Reader → Reader Font Family. It requires version 2.1.0-beta.5 or later. In testing with previously unseen books, the zhuyin engine misread an average of about 4 characters per thousand.
 
