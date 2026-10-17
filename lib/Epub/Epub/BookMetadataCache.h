@@ -80,7 +80,7 @@ class BookMetadataCache {
   //   實機建索引 4.9–8.6 秒。快路徑的記憶體是每章約 16–20 位元組（110 章約 2 KB；3000 章約 60 KB，但那種書本來就
   //   走這條路）—— 上游擔心 OOM 的是另一個「整份目錄進 RAM」的做法（見 buildBookBin 的註解）。
   //   比對只看 FNV-64＋長度（不逐字比）：意外碰撞約 1e-13，刻意做的碰撞只會讓進度百分比或目錄章名錯（codex
-  //   審過，接受）。 改前後書庫 304 本逐本比對 book.bin 等快取檔逐位元組相同。
+  //   審過，接受）。 改前後整個書庫逐本比對 book.bin 等快取檔逐位元組相同。
   static constexpr uint16_t LARGE_SPINE_THRESHOLD = 1;
 
   // FNV-1a 64-bit hash function

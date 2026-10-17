@@ -89,12 +89,19 @@ bool asciiRunInkExtent(const GfxRenderer& renderer, const int fontId, const EpdF
   int lo = 0;
   int hi = 0;
   std::string prefix;
+  // ⚠️ SUP：pen 來自 getTextAdvanceX（已經是半寬），墨水框卻是全尺寸 → 兩把尺。
+  //    照 renderCharScaled 的縮法（left/2、(width+1)/2）把墨水也縮成半尺寸。
+  const bool sup = (style & EpdFontFamily::SUP) != 0;
   for (int i = 0; i < len; ++i) {
     const int pen = i == 0 ? 0 : renderer.getTextAdvanceX(fontId, prefix.c_str(), style);
     int gw = 0, gh = 0, gl = 0, gt = 0;
     if (renderer.getGlyphInkBox(fontId, static_cast<uint32_t>(static_cast<unsigned char>(s[i])), style, &gw, &gh, &gl,
                                 &gt) &&
         gw > 0) {
+      if (sup) {
+        gl /= 2;
+        gw = (gw + 1) / 2;
+      }
       const int a = pen + gl;
       const int b = a + gw;
       if (!any) {
@@ -135,6 +142,10 @@ bool asciiRunInkExtent(const GfxRenderer& renderer, const int fontId, const EpdF
 //    左右的字全躺著 —— 因為單獨看它就是「單一西文字母」。
 //    同一條也適用於縮略詞與數字：`the FBI agent`／`Volume 10 of` 在句子裡要跟著躺。
 //    → 在西文句子裡一律走 ②（整串旋轉），基線才會一致。
+// v388：上標的西文最多幾個碼位改成直立逐字小字（合印是 1–4 字：1、iv、*17、[12]）。
+// 更長的就不是合印，退回全尺寸旋轉 —— 同時也是 unit 數的上界（見 emitRun）。
+constexpr int SUP_UPRIGHT_MAX_CODEPOINTS = 8;
+
 TokenPlan planToken(const GfxRenderer& renderer, const int fontId, const std::string& tok,
                     const EpdFontFamily::Style style, const float em, const bool inWesternPhrase,
                     const int rotatedCrossPx) {
@@ -497,6 +508,7 @@ void ParsedText::layoutAndExtractColumns(
     //    混合 token 依 ASCII 邊界切段、縮略詞逐字拆。拆完不黏回去，`fillColumns` 就可以
     //    斷在「第|10|章」中間，等於把切詞期建立的禁則毀掉（複查抓到）。
     //    ⚠️ **長度切片那兩條路【不能】黏** —— 它們本來就是為了跨欄而切的。
+    bool curSmall = false;  // emitRun 設定；emitRun 以外推的 unit（詞間空白）一律 false
     const auto pushUnit = [&](const size_t w, const size_t b0, const size_t blen, const float adv, const int cross,
                               const vtext::UnitKind kind, const float hangTail = 0.0f, const bool glued = false) {
       vtext::ColumnUnit u{};
@@ -505,6 +517,7 @@ void ParsedText::layoutAndExtractColumns(
       u.kind = kind;
       u.hangTail = hangTail;
       u.gluedToPrev = glued;
+      u.small = curSmall;
       units.push_back(u);
       unitSrcWord.push_back(static_cast<uint16_t>(w));
       unitByteBegin.push_back(static_cast<uint16_t>(b0));
@@ -542,10 +555,56 @@ void ParsedText::layoutAndExtractColumns(
       const std::string& parent = words[w];
       const std::string run = parent.substr(b0, blen);
       if (run.empty()) return;
-      const auto style = w < wordStyles.size() ? wordStyles[w] : EpdFontFamily::REGULAR;
+      // ⭐ v388 上標（註腳號碼）：半尺寸、半格，靠欄的右端（JLREQ 4.2.3 行中合印）。
+      //    出版社的 CSS 幾乎都寫 `vertical-align: super; font-size: 0.75em; text-decoration: none`
+      //    （直排的 super ＝往右移），沒有一家要線。
+      //    ⚠️ 量和畫必須同一把尺：getTextAdvanceX 對 SUP 回半寬、drawText 對 SUP 畫半尺寸，
+      //    所以凡是「量」的地方（advance、墨水、格距）都要跟著縮 —— 縮法集中在這裡決定。
+      //    ⚠️ 下標直排不做：拿掉（v387 以前 SUB 量半寬、畫全尺寸，量畫不一致）。
+      //    ⚠️ 旋轉串沒有縮小的畫法（drawTextVerticalCW）→ 上標的西文一律改成【直立逐字】的小字
+      //      （codex 複查：先前是拿掉 SUP，`<a class="noteref">iv</a>` 就變回全尺寸、橫躺）。
+      auto style = w < wordStyles.size() ? wordStyles[w] : EpdFontFamily::REGULAR;
+      style = static_cast<EpdFontFamily::Style>(style & ~EpdFontFamily::SUB);
+      bool small = (style & EpdFontFamily::SUP) != 0;
       const int64_t plT0 = profNowUs();  // v357 BUILDPROF vpl=
-      const TokenPlan plan = planToken(renderer, fontId, run, style, em, inWesternPhrase, rotatedCrossPx);
+      TokenPlan plan = planToken(renderer, fontId, run, style, small ? em * 0.5f : em, inWesternPhrase, rotatedCrossPx);
+      if (small && plan.rotated) {
+        const int cps = countCodepoints(run);
+        if (cps <= SUP_UPRIGHT_MAX_CODEPOINTS) {
+          plan.rotated = false;
+          plan.splitPerChar = true;
+          plan.advance = em * 0.5f * static_cast<float>(cps);
+        } else {
+          // 長的西文上標（不是合印，是整句 <sup>）：逐字拆會一次吐出任意多個 unit、繞過
+          // MAX_UNITS_PER_CHUNK 的記憶體護欄（codex 第二輪）→ 退回全尺寸旋轉（v387 的畫法）。
+          small = false;
+          style = static_cast<EpdFontFamily::Style>(style & ~EpdFontFamily::SUP);
+          plan = planToken(renderer, fontId, run, style, em, inWesternPhrase, rotatedCrossPx);
+        }
+      }
       buildProf.vplUs += static_cast<uint64_t>(profNowUs() - plT0);
+      const float runEm = small ? em * 0.5f : em;
+      curSmall = small;
+      // 合印不可與它標的字分開（JLREQ 4.2.3「該当項目に接して」）：解析器在 <a> 之前設了 wordContinues，
+      // 但直排的黏合原本只看同一 token 內的分段 → 欄尾剛好滿時號碼會單獨跑到下一欄欄首（codex 複查）。
+      // 只對上標做：一般的 wordContinues（段落中途換樣式）照舊可以斷。
+      // ⚠️ 「漢字＋數字」是 CJK 的合法斷點，addWord 會把 attachToPrevious 改記成 wordNoSpaceBefore
+      //    （ParsedText.cpp 的 hasCjkBreakOpportunityBetween）→ 兩個旗標都要看，否則最常見的
+      //    「漢<a>14</a>」照樣會拆欄（codex 第二輪）。
+      const bool glueHead = !segmentIsFirst || (small && ((w < wordContinues.size() && wordContinues[w]) ||
+                                                          (w < wordNoSpaceBefore.size() && wordNoSpaceBefore[w])));
+      // 上標的跨軸位置：縮小後的墨水右緣貼齊欄的右端（字格 [0, em]）。
+      // 直立逐字與全形格在產出端逐字算（那裡才知道實際畫哪個字形），這裡只算縦中横。
+      const auto supRightCross = [&](const int inkRight) {
+        const int c = emPx - inkRight;
+        return c > 0 ? c : 0;
+      };
+      if (small && vertSupLogged < 6) {
+        ++vertSupLogged;
+        ParsedText::vertDiag("VERTSUP \"%s\" kind=%s adv=%d em=%d", run.c_str(),
+                             plan.tateChuYoko ? "tcy" : (plan.splitPerChar ? "upright" : "cell"),
+                             static_cast<int>(plan.advance + 0.5f), emPx);
+      }
 
       if (plan.splitPerChar) {
         // ① 直立逐字：每個 ASCII 字母一格，欄內置中。
@@ -572,7 +631,7 @@ void ParsedText::layoutAndExtractColumns(
             const int w1 = renderer.getTextAdvanceX(fontId, one.c_str(), style);
             cross = w1 < emPx ? (emPx - w1) / 2 : 0;
           }
-          pushUnit(w, b0 + off, clen, em, cross, vtext::UnitKind::Cell, 0.0f, !firstCp || !segmentIsFirst);
+          pushUnit(w, b0 + off, clen, runEm, cross, vtext::UnitKind::Cell, 0.0f, !firstCp || glueHead);
           firstCp = false;
         }
         return;
@@ -620,7 +679,15 @@ void ParsedText::layoutAndExtractColumns(
 
       if (plan.tateChuYoko) {
         // ③ 縦中横：整組一格。
-        pushUnit(w, b0, run.size(), plan.advance, plan.crossPx, vtext::UnitKind::TateChuYoko, 0.0f, !segmentIsFirst);
+        int tcyCross = plan.crossPx;
+        if (small) {
+          int inkL = 0;
+          int inkR = 0;
+          tcyCross = asciiRunInkExtent(renderer, fontId, style, run.c_str(), static_cast<int>(run.size()), &inkL, &inkR)
+                         ? supRightCross(inkR)
+                         : supRightCross(renderer.getTextAdvanceX(fontId, run.c_str(), style));
+        }
+        pushUnit(w, b0, run.size(), plan.advance, tcyCross, vtext::UnitKind::TateChuYoko, 0.0f, glueHead);
         return;
       }
 
@@ -634,8 +701,8 @@ void ParsedText::layoutAndExtractColumns(
       const int cellLimit = (maxCells > indentCells + 1) ? (maxCells - indentCells) : maxCells;
       const int chars = countCodepoints(run);
       if (chars <= cellLimit) {
-        pushUnit(w, b0, run.size(), em * static_cast<float>(chars), 0, vtext::UnitKind::Cell, hangTailOf(run),
-                 !segmentIsFirst);
+        pushUnit(w, b0, run.size(), runEm * static_cast<float>(chars), 0, vtext::UnitKind::Cell,
+                 small ? 0.0f : hangTailOf(run), glueHead);
         return;
       }
       size_t c0 = 0;
@@ -646,7 +713,7 @@ void ParsedText::layoutAndExtractColumns(
         const auto* st = q;
         for (int k = 0; k < take; ++k) utf8NextCodepoint(&q);
         const size_t bl = static_cast<size_t>(q - st);
-        pushUnit(w, b0 + c0, bl, em * static_cast<float>(take), 0, vtext::UnitKind::Cell);
+        pushUnit(w, b0 + c0, bl, runEm * static_cast<float>(take), 0, vtext::UnitKind::Cell);
         c0 += bl;
         done += take;
       }
@@ -676,6 +743,7 @@ void ParsedText::layoutAndExtractColumns(
       //    ⚠️ 空白不在任何 token 裡（它是分隔符），所以這個 unit 指向前一個 word 的
       //      尾端、長度 0 → `substr(size, 0)` 是空字串，`drawTextVerticalCW` 直接 return。
       //      它只貢獻推進量。
+      curSmall = false;  // 詞間空白不是上標（上一個 token 的 emitRun 可能留著 true）
       if (westernSpaceBefore(w)) {
         const uint32_t prevLast = lastCodepointOf(words[w - 1]);
         const char* fp = tok.c_str();
@@ -829,6 +897,13 @@ void ParsedText::layoutAndExtractColumns(
         const size_t w = unitSrcWord[i];
         const std::string raw = words[w].substr(unitByteBegin[i], unitByteLen[i]);
         auto st = w < wordStyles.size() ? wordStyles[w] : EpdFontFamily::REGULAR;
+        // v388：與 emitRun 同一個決定 —— 只有 small 的 unit 保留 SUP（量的是半格，畫也要半尺寸）；
+        //   旋轉串與下標直排不做，量畫都是全尺寸。⚠️ 這裡不可以重新從 wordStyles 判斷，
+        //   同一個 token 的旋轉段已經拿掉 SUP，其他段沒有。
+        st = static_cast<EpdFontFamily::Style>(
+            st & ~(units[i].small ? EpdFontFamily::SUB : (EpdFontFamily::SUP | EpdFontFamily::SUB)));
+        const bool small = units[i].small;
+        const float cellEm = small ? em * 0.5f : em;
 
         if (units[i].kind == vtext::UnitKind::Rotated) {
           // 旋轉：整串一次畫（drawTextVerticalCW 自己沿欄推進）。不換字形。
@@ -849,9 +924,14 @@ void ParsedText::layoutAndExtractColumns(
           //    使用者回報「數字跟點有改進，但是點的位置怪怪的」——
           //    「怪」的不是格內位置，是它整個掉到下一格去了。
           // drawText 內部會 +ascender，所以這裡先扣掉；淨效果是基線落在 cellAscent。
-          const float tcyAlong = breaks.alongOff[i] + em * vtext::CELL_ASCENT_FACTOR - ascender;
+          const float tcyAlong = breaks.alongOff[i] + cellEm * vtext::CELL_ASCENT_FACTOR - ascender;
           colWords.push_back(raw);
           pushSrc(w);
+          if (small && vertSupPosLogged < 6) {
+            ++vertSupPosLogged;
+            ParsedText::vertDiag("VERTSUPPOS tcy \"%s\" along=%d cross=%d", raw.c_str(),
+                                 static_cast<int>(tcyAlong + 0.5f), static_cast<int>(units[i].crossOff + 0.5f));
+          }
           colAlong.push_back(static_cast<int16_t>(tcyAlong + 0.5f));
           colStyles.push_back(st);
           colCross.push_back(static_cast<uint16_t>(units[i].crossOff + 0.5f));
@@ -867,7 +947,7 @@ void ParsedText::layoutAndExtractColumns(
         //    表達的（追い出し），所以每一個行首禁則都會踩到。
         //    ⚠️ 拆在【產出階段】而不是建 units 時：分欄必須看到黏合後的整體才會把它
         //      整組推到下一欄；拆早了禁則就沒了。
-        const float cellAscent = em * vtext::CELL_ASCENT_FACTOR;
+        const float cellAscent = cellEm * vtext::CELL_ASCENT_FACTOR;
         const auto* cp = reinterpret_cast<const unsigned char*>(raw.c_str());
         int k = 0;
         while (const uint32_t c = utf8NextCodepoint(&cp)) {
@@ -887,10 +967,10 @@ void ParsedText::layoutAndExtractColumns(
           colWords.push_back(std::move(one));
           pushSrc(w);
 
-          const float cellTop = breaks.alongOff[i] + static_cast<float>(k) * em;
+          const float cellTop = breaks.alongOff[i] + static_cast<float>(k) * cellEm;
           // 這一格是不是「掛出去的那一個」？（ぶら下げ 的定義就是超出欄長，不是異常，
           // 所以 VERTCLIP 不能對它誤報，而它的位置也要另外算 —— 貼著版心邊。）
-          const bool hungCell = units[i].hangTail > 0.0f && cellTop + em > grid2.columnLength + 1.0f &&
+          const bool hungCell = units[i].hangTail > 0.0f && cellTop + cellEm > grid2.columnLength + 1.0f &&
                                 cellTop <= grid2.columnLength + 1.0f;
           // drawText 內部會 +ascender，所以這裡先扣掉；淨效果就是「基線落在 cellAscent」。
           float along = cellTop + cellAscent - ascender;
@@ -903,7 +983,15 @@ void ParsedText::layoutAndExtractColumns(
           //      跨軸置中： cross = em/2 + height/2 − top
           //    ⚠️ 兩個 ─ 相接要無縫：width ≈ em 時 along = 格頂 − left，
           //      而相鄰格相距正好 em → 接得起來。
-          if (rotateChar) {
+          // v388 上標：半格、墨水右緣貼齊欄的右端。旋轉字與句讀居中的幾何是全尺寸算的，上標不走那兩條
+          //   （註腳號碼裡不會有 ～ ─ 、。；真的出現就直立畫小字，不會壓到別的字）。
+          if (small) {
+            int gw = 0, gh = 0, gl = 0, gt = 0;
+            if (renderer.getGlyphInkBox(fontId, drawCp, st, &gw, &gh, &gl, &gt) && gw > 0) {
+              cross = static_cast<float>(emPx - (gl / 2 + (gw + 1) / 2));
+              if (cross < 0.0f) cross = 0.0f;
+            }
+          } else if (rotateChar) {
             int gw = 0, gh = 0, gl = 0, gt = 0;
             if (renderer.getGlyphInkBox(fontId, drawCp, st, &gw, &gh, &gl, &gt)) {
               styleBits = static_cast<EpdFontFamily::Style>(static_cast<uint8_t>(st) | vtext::STYLE_BIT_ROTATED);
@@ -919,7 +1007,7 @@ void ParsedText::layoutAndExtractColumns(
           //    墨水外框把它挪到格子中心 —— **不是一個可以猜的常數**，五套字型並不相同。
           //    直立字的墨水左上角 ＝ (x + left, y − top)（GfxRenderer.cpp:432-434），代入
           //    「墨水中心 == 格心」解出來就是下面兩行。
-          if (centered) {
+          if (centered && !small) {
             int gw = 0, gh = 0, gl = 0, gt = 0;
             if (renderer.getGlyphInkBox(fontId, drawCp, st, &gw, &gh, &gl, &gt)) {
               along = cellTop + em * 0.5f + static_cast<float>(gt) - static_cast<float>(gh) * 0.5f - ascender;
@@ -954,12 +1042,17 @@ void ParsedText::layoutAndExtractColumns(
           // 但要留下數字：v207 實機看到滿欄的字壓到狀態列上，而桌面重現不出來
           // （evenDistribute 的不變量在桌面是成立的，最壞超出 0.00 px）。
           // 缺的就是「裝置上 colLen / em / cellTop 到底是多少」。
-          if (!hungCell && cellTop + em > grid2.columnLength + 1.0f) {
+          if (!hungCell && cellTop + cellEm > grid2.columnLength + 1.0f) {
             // ⚠️ 這裡的 `c` 是【碼位】不是欄索引（內層迴圈遮蔽了外層的欄索引）——
             //    欄位名一度寫成 col=，於是 log 印出 col=12290 這種「不存在的欄」。
             ParsedText::vertDiag("VERTCLIP cp=U+%04X k=%d top=%d em10=%d gridLen=%d", static_cast<unsigned>(c), k,
                                  static_cast<int>(cellTop + 0.5f), static_cast<int>(em * 10.0f + 0.5f),
                                  static_cast<int>(grid2.columnLength));
+          }
+          if (small && vertSupPosLogged < 6) {
+            ++vertSupPosLogged;
+            ParsedText::vertDiag("VERTSUPPOS cell U+%04X along=%d cross=%d", static_cast<unsigned>(drawCp),
+                                 static_cast<int>(along + 0.5f), static_cast<int>(cross + 0.5f));
           }
           colAlong.push_back(static_cast<int16_t>(along + 0.5f));
           colStyles.push_back(styleBits);

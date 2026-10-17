@@ -640,7 +640,15 @@ void BookshelfActivity::render(RenderLock&&) {
       const int cy = y + kTilePadTop;
       CoverTile::draw(renderer, cx, cy, kCoverW, kCoverH, thumb, title, r ? r->author : std::string(),
                       index_.isFavorite(static_cast<size_t>(i)));
-      if (r && !r->coverBmpPath.empty()) pageRecents.push_back(*r);
+      if (r && !r->coverBmpPath.empty()) {
+        const uint32_t pathHash = static_cast<uint32_t>(std::hash<std::string>{}(r->path));
+        // 呼叫前就記；滿了就不補產（記不住＝又會每次重試；最近閱讀上限 10，目前到不了）
+        if (thumbTriedCount_ < kThumbTriedMax &&
+            std::find(thumbTried_, thumbTried_ + thumbTriedCount_, pathHash) == thumbTried_ + thumbTriedCount_) {
+          pageRecents.push_back(*r);
+          thumbTried_[thumbTriedCount_++] = pathHash;
+        }
+      }
       // 進度（只有最近閱讀知道）：細條，不寫百分比
       if (r) {
         const int by = cy + kCoverH + kBarGap;

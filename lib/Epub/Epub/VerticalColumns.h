@@ -37,6 +37,10 @@ struct ColumnUnit {
   float crossOff;  // 跨軸（欄內）位移：Cell 若非全形要置中；Rotated 為整串置中的偏移
   UnitKind kind;
   bool gluedToPrev;  // 禁則造成的黏合（既有機制在【切詞期】就決定了，這裡只是讀結果）
+  // 上標（註腳號碼）：半尺寸、靠欄的右端（JLREQ 4.2.3 行中合印「行の右端にそろえて」）。
+  // 只有直立的 unit 會是 true —— 旋轉串沒有縮小的畫法，排版時就拿掉 SUP（見 ParsedTextVertical.cpp）。
+  // 放在 bool 後面吃 padding，ColumnUnit 大小不變。
+  bool small;
   // ⭐ 行尾點號懸掛（ぶら下げ組）：這個 unit 結尾是可懸掛的句讀時，它的推進量。
   //    0 ＝ 不可懸掛。放不下時可以只算 advance − hangTail，讓最後那個句讀掛到版心外。
   float hangTail;
@@ -223,14 +227,22 @@ inline void evenDistribute(const std::vector<ColumnUnit>& units, ColumnBreaks& b
     for (size_t i = begin; i < end; ++i) used += units[i].advance;
     const float slack = grid.columnLength - (br.alongOff[begin] + used);
     if (slack <= 0.5f) continue;
-    const float step = slack / static_cast<float>(end - begin - 1);
+    // v388：上標（合印）前面的字距不撐開 —— 合印要貼著它標的字（JLREQ 4.2.3），
+    //   撐開最多 0.15em（46px 字級約 7px）就看得出號碼跟前一個字分開了（codex 複查）。
+    //   沒有上標的欄 gaps ＝ end − begin − 1，行為逐位元組不變。
+    size_t gaps = 0;
+    for (size_t i = begin + 1; i < end; ++i) {
+      if (!units[i].small) ++gaps;
+    }
+    if (gaps == 0) continue;
+    const float step = slack / static_cast<float>(gaps);
     // 每格撐開超過 em 的這個比例就不勻 —— 勻了反而比留白難看。
     const float em =
         (grid.charsPerColumn > 0) ? grid.columnLength / static_cast<float>(grid.charsPerColumn) : grid.columnLength;
     if (step > em * maxPerGapRatio) continue;
     float extra = 0.0f;
     for (size_t i = begin + 1; i < end; ++i) {
-      extra += step;
+      if (!units[i].small) extra += step;
       br.alongOff[i] += extra;
     }
   }

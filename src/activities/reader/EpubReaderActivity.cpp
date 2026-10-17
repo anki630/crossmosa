@@ -2425,6 +2425,9 @@ void EpubReaderActivity::render(RenderLock&& lock) {
     if (!pendingAnchor.empty()) {
       // Resolve from the pages laid out so far and/or the on-disk map (finalized or partial).
       const auto page = section->findAnchor(pendingAnchor);
+      // v390：錨點跳轉的證人（註腳往返落在哪頁）。miss＝這章的 anchor map 裡沒有它 → 停在章首。
+      DiagLog::line("ANCHOR jump spine=%d id=%.48s page=%d", currentSpineIndex, pendingAnchor.c_str(),
+                    page ? static_cast<int>(*page) : -1);
       if (page) {
         section->currentPage = *page;
         LOG_DBG("ERS", "Resolved anchor '%s' to page %d", pendingAnchor.c_str(), *page);

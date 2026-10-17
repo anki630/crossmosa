@@ -93,12 +93,18 @@ class BookshelfActivity final : public Activity {
   // 局部重畫：只有「這一頁內移動選取」那一次 render 可以只擦舊框、畫新框（螢幕上的畫面就是快取，不重讀封面）。
   //   其他所有 render（進場、翻頁、從選單回來、淺睡眠醒來重畫）一律整頁重畫 —— 那時螢幕上可能是彈窗或桌布。
   std::atomic<bool> partialOk_{false};
-  bool tabHoldUsed_ = false;         // 這次按住已經換過分頁了（分頁列上長按不連發）
-  bool tabsByBack_ = false;          // 選取是用 ⑤ 跳上分頁列的（不是繞圈繞上來的）
-  std::atomic<int> shownPage_{0};    // 選取在分頁列時畫面停在哪一頁（主任務寫、render 讀；v368）
-  std::atomic<int> drawnPage_{-1};   // render 任務：上一次整頁畫的是哪一頁（-1＝要整頁重畫）；moveSelection 在主任務讀
-  int drawnSel_ = -1;                // render 任務：上一次畫選取的位置（可以是 kOnTabs）
-  uint32_t drawnEpoch_ = 0;          // render 任務：上一次整頁畫的時候的螢幕世代（ActivityManager::screenEpoch）
+  bool tabHoldUsed_ = false;        // 這次按住已經換過分頁了（分頁列上長按不連發）
+  bool tabsByBack_ = false;         // 選取是用 ⑤ 跳上分頁列的（不是繞圈繞上來的）
+  std::atomic<int> shownPage_{0};   // 選取在分頁列時畫面停在哪一頁（主任務寫、render 讀；v368）
+  std::atomic<int> drawnPage_{-1};  // render 任務：上一次整頁畫的是哪一頁（-1＝要整頁重畫）；moveSelection 在主任務讀
+  int drawnSel_ = -1;               // render 任務：上一次畫選取的位置（可以是 kOnTabs）
+  uint32_t drawnEpoch_ = 0;         // render 任務：上一次整頁畫的時候的螢幕世代（ActivityManager::screenEpoch）
+  // render 任務專用：這次停留已經補產過縮圖的書（路徑雜湊，成功或失敗都算）。v389（diag388）：補產失敗也要整頁重畫
+  //   擦掉「載入中」彈窗，而重畫又會再補產 → 無限迴圈。一本書一次停留只試一次；每次進書架都是新物件，下次再試（v165）。
+  //   固定大小、不配置：低記憶體時縮圖失敗之後不能再因為記一筆而 abort（codex 複查）。
+  static constexpr int kThumbTriedMax = 16;  // 最近閱讀最多 10 本
+  uint32_t thumbTried_[kThumbTriedMax] = {};
+  int thumbTriedCount_ = 0;
   unsigned long confirmDownAt_ = 0;  // 確認鍵按下的時間（長按判斷）
   uint32_t scanMs_ = 0;
   uint32_t scanVisited_ = 0;

@@ -267,19 +267,23 @@ void TextBlock::renderVertical(const GfxRenderer& renderer, const int fontId, co
   uint16_t nextSwap = 0;
   char zbuf[zhuyin::kSwapWordBuffer];
   for (uint16_t i = 0; i < numWords; i++) {
-    const char* word = drawnWord(i, swaps, swapN, nextSwap, zbuf, sizeof(zbuf));
     const uint8_t raw = static_cast<uint8_t>(wordStyle(i));
     const bool rotated = (raw & vtext::STYLE_BIT_ROTATED) != 0;
     // ⚠️ 傳給字型之前必須遮掉第 7 位，否則字型會拿到它不認得的位元。
-    // ⚠️⚠️ 而且要**再遮掉直排沒有實作的四個裝飾位**（UNDERLINE/STRIKETHROUGH/SUP/SUB）。
-    //    先前只寫在註解裡說「不要用 SUP/SUB」—— 但註解攔不住 EPUB：
-    //    `<sup>` 會讓 drawText 走 renderCharScaled，而那條路**沒有 glyphIntersectsStrip
-    //    剪枝**，灰階七帶會對同一個字重複解碼七次；底線／刪除線則是橫排 render() 才畫，
-    //    直排靜默不畫。留著位元只會讓行為在兩邊都說不清。
-    //    → V1 明確地【不支援】：遮掉，行為與註解一致。要做就走直排自己的基線位移。
+    // ⚠️⚠️ 而且要**再遮掉直排沒有實作的裝飾位**。底線／刪除線是橫排 render() 才畫，直排靜默不畫；
+    //    下標直排不做。留著位元只會讓行為在兩邊都說不清。
+    // v388：上標（註腳號碼）放行 —— 排版端已經把它排成半格、靠欄右端（ParsedTextVertical.cpp），
+    //    renderCharScaled 也補上了分帶剪枝。⚠️ 只對直立的字：旋轉串沒有縮小的畫法，
+    //    排版端也已經對旋轉串拿掉 SUP；這裡再遮一次是防舊快取／未來的呼叫端。
     constexpr uint8_t VERTICAL_UNSUPPORTED_STYLE_BITS =
-        EpdFontFamily::UNDERLINE | EpdFontFamily::STRIKETHROUGH | EpdFontFamily::SUP | EpdFontFamily::SUB;
-    const auto style = static_cast<EpdFontFamily::Style>(raw & vtext::STYLE_MASK & ~VERTICAL_UNSUPPORTED_STYLE_BITS);
+        EpdFontFamily::UNDERLINE | EpdFontFamily::STRIKETHROUGH | EpdFontFamily::SUB;
+    const uint8_t unsupported =
+        rotated ? (VERTICAL_UNSUPPORTED_STYLE_BITS | EpdFontFamily::SUP) : VERTICAL_UNSUPPORTED_STYLE_BITS;
+    const auto style = static_cast<EpdFontFamily::Style>(raw & vtext::STYLE_MASK & ~unsupported);
+    // 注音換字一定要呼叫（它推進 nextSwap 游標），但上標不用換後的字：
+    // 注音字形比原字寬，縮成半尺寸塞不進半格，而註腳號碼也不需要讀音。
+    const char* drawn = drawnWord(i, swaps, swapN, nextSwap, zbuf, sizeof(zbuf));
+    const char* word = (style & EpdFontFamily::SUP) != 0 ? wordText(i) : drawn;
     const int along = xposArr[i];
     const int cross = focusPresent ? static_cast<int>(focusSuffixXArr[i]) : 0;
     if (rotated) {

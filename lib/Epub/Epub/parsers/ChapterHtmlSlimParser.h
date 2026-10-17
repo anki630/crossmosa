@@ -146,8 +146,51 @@ class ChapterHtmlSlimParser {
   // Anchor-to-page mapping: tracks which page each HTML id attribute lands on
   int completedPageCount = 0;
   std::vector<std::pair<std::string, uint16_t>> anchorData;
-  std::string pendingAnchorId;          // deferred until after previous text block is flushed
+  // v390：區塊／容器／圖／TOC 的 id 先暫存，等版面【實際】決定「目前區塊排完、開新區塊」還是「沿用目前區塊」
+  //   （startNewTextBlock 的兩條早退路徑、finishParse、放圖前）才決定怎麼歸頁（flushPendingAnchors）。
+  //   以前是單一槽位，連續兩個 id 會互相擠出；現在是清單。
+  struct PendingAnchor {
+    std::string id;
+    uint32_t offset;
+    bool toc;
+  };
+  std::vector<PendingAnchor> pendingAnchors_;
   std::vector<std::string> tocAnchors;  // the list of anchors that are TOC chapter boundaries
+  // v390：TOC 以外的錨點，頁碼交給版面決定。上游在「下一個區塊開始」時記 completedPageCount ——
+  //   段落中間的 <a id="back-1">（約四成的書，註腳返回點是這種）因此記成【段落結尾】那頁，段落跨頁就錯頁；
+  //   段落開頭的 id，第一行若被擠到下一頁也會落在前一頁；章末容器（<aside id>）落在它的最後一頁。
+  //   改成記下錨點出現時的位置，由之後放進頁面的元素結算（placeLineAnchors）。位置有兩個座標：
+  //   - seq：第幾個文字區塊（blockSeq_；一個區塊整個排完 endBlockAnchors 才加一）。
+  //   - offset：visibleTextOffset。只用它不夠 —— 段尾的錨點與下一段段首同一個 offset；
+  //     清單記號、表格標頭是合成字、不佔 offset，不同元素會同起點（codex 第二輪，皆以 layout-host 重現）。
+  //   三種：
+  //   - InSentence（所在區塊已經有字的行內 id）：在區塊 seq 裡、等到起點 > offset 的行 → 上一個元素那頁；
+  //     區塊排完還沒等到（段尾）→ 該區塊最後一個元素那頁。
+  //   - Forward（容器 id、所在區塊還沒有字的行內 id、圖）：之後第一個「在它後面」的元素 ——
+  //     seq 更大，或同一個 seq 且起點 >= offset。
+  //   - ForwardStrict：保留給日後；目前不產生（區塊 id 改由 flushPendingAnchors 在版面實際開新區塊之後才排進來，
+  //     那時 blockSeq_ 已經前進，Forward 就夠了 —— codex 第三輪：在讀到標籤時猜「會不會開新區塊」會猜錯）。
+  //   ⚠️ 已知不精確：直排把一個過長的 token（沒有空白的長英文串）切成好幾欄時，每欄回報的起點都是 token 起點
+  //     （ParsedTextVertical 的 visibleOffsetAt(unitSrcWord[begin])），藏在那串字中間的錨點會歸到它的最後一欄。
+  //     要修得改欄的 offset，而那也是 TXT 的閱讀進度來源 —— 不值得為這個邊角動它。
+  enum class AnchorKind : uint8_t { InSentence, Forward, ForwardStrict };
+  struct LineAnchor {
+    std::string id;
+    uint32_t offset;  // 錨點出現時的 visibleTextOffset ＝ 它後面第一個可見字的位置
+    uint32_t seq;     // 錨點出現時的 blockSeq_
+    AnchorKind kind;
+  };
+  std::vector<LineAnchor> lineAnchors_;
+  uint32_t blockSeq_ = 0;
+  int lastElementPage_ = 0;       // 上一個放進頁面的元素在哪一頁
+  uint16_t spanAnchorCount_ = 0;  // <span id> 另有上限，免得擠掉註腳錨點（見 MAX_SPAN_ANCHORS_PER_CHAPTER）
+  void queueLineAnchor(const char* id, AnchorKind kind);
+  // 一個元素（行／欄／圖／分隔線）即將放進 currentPage（換頁判斷之後）時呼叫；elementOffset ＝ 它第一個字的位置。
+  void placeLineAnchors(uint32_t elementOffset);
+  // 目前的文字區塊整個排完（makePages 之後）：結算它的段尾錨點，區塊序號加一。
+  void endBlockAnchors();
+  void recordAnchor(std::string&& id, int page);
+  void flushLineAnchors(int page);
   uint16_t xpathParagraphIndex = 0;
   uint16_t xpathListItemIndex = 0;
   // Canonical reading-position counter: zero-based Unicode codepoints in visible
@@ -187,7 +230,12 @@ class ChapterHtmlSlimParser {
   void updateEffectiveInlineStyle();
   // v194：失敗立刻回 false。latch 不等於離開 callback，呼叫點必須同步 return。
   bool startNewTextBlock(const BlockStyle& blockStyle);
-  void flushPendingAnchor();
+  // blockFinished：目前區塊已經整個排完（新區塊要開始）。否則是沿用目前區塊 —— 它若已經有字，錨點就落在句子裡。
+  // tocBreak：TOC 錨點要不要先強制換頁。不換的只有兩處「後面已經沒有內容」的收尾：<hr> 放置前（正常已在
+  //   startNewTextBlock 換過）與 finishParse（章末再換只會多一張空白頁）。
+  void flushPendingAnchors(bool blockFinished, bool tocBreak = true);
+  bool blockHasText() const;
+  bool settlePendingAnchorsAtContent();
   void flushPartWordBuffer();
   void setCurrentPageVisibleOffset(uint32_t offset);
   void makePages();

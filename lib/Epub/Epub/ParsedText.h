@@ -284,6 +284,9 @@ class ParsedText {
   // v220：西文整串旋轉、以及懸掛的實際落點（兩者都只在實機看得到）
   static inline uint8_t vertWordRotLogged = 0;
   static inline uint8_t vertHungLogged = 0;
+  // v388：直排上標（註腳號碼）的落點證人
+  static inline uint8_t vertSupLogged = 0;
+  static inline uint8_t vertSupPosLogged = 0;
   void layoutAndExtractColumns(const GfxRenderer& renderer, int fontId, uint16_t columnLength,
                                // ⚠️ 第三個參數是**這一欄用掉幾個 token**，不是幾個格子。
                                //    註腳歸頁的佇列是用 token 索引排的，而直排一個 token

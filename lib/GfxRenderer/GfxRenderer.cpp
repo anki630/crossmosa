@@ -353,10 +353,6 @@ static void renderCharScaled(const GfxRenderer& renderer, GfxRenderer::RenderMod
   const EpdGlyph* glyph = fontFamily.getGlyph(cp, style);
   if (!glyph) return;
 
-  const EpdFontData* fontData = fontFamily.getData(style);
-  const uint8_t* bitmap = renderer.getGlyphBitmap(fontData, glyph);
-  if (!bitmap) return;
-
   const int srcW = glyph->width;
   const int srcH = glyph->height;
   const int dstW = (srcW + 1) / 2;  // ceil so odd-width glyphs aren't clipped
@@ -365,6 +361,19 @@ static void renderCharScaled(const GfxRenderer& renderer, GfxRenderer::RenderMod
   // pixel offset from the (already-shifted) cursor position.
   const int baseX = cursorX + glyph->left / 2;
   const int baseY = cursorY - glyph->top / 2;
+
+  // v388：分帶剪枝（與 renderCharImpl 同一個判準，放在解碼之前）。
+  //   原本沒有 → 灰階七帶對同一個上標字解碼七次；直排開始畫上標（註腳號碼）之後補上。
+  //   框就是下面兩個迴圈畫得到的範圍 [baseX, baseX+dstW) × [baseY, baseY+dstH)，
+  //   所以剪掉的只是本來就畫不進這一帶的字 —— 畫面逐像素不變（橫排的上標也一樣）。
+  if (dstW <= 0 || dstH <= 0) return;
+  if (!renderer.glyphIntersectsStrip(baseX, baseY, baseX + dstW - 1, baseY + dstH - 1)) {
+    return;
+  }
+
+  const EpdFontData* fontData = fontFamily.getData(style);
+  const uint8_t* bitmap = renderer.getGlyphBitmap(fontData, glyph);
+  if (!bitmap) return;
 
   if (fontData->is2Bit) {
     // 2-bit packed format: 4 pixels per byte, MSB first, 2 bits per pixel.

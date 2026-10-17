@@ -63,6 +63,12 @@ constexpr size_t TEXT_BLOCK_SOFT_FLUSH_WORDS_WITH_CSS = 320;
 // every text fragment (e.g. Kobo KePub spans). The cap prevents unbounded heap growth
 // on resource-constrained devices (~380KB heap). TOC anchors bypass this cap.
 constexpr size_t MAX_ANCHORS_PER_CHAPTER = 1024;
+// v390：<span id> 改成會記（約五分之一的書把註腳返回點放在 span 上，例如 footnote-1-backlink；
+//   以前一律不記 → 點返回跳回章節第一頁）。Kobo 每句一個的 koboSpan 照舊不記；
+//   其餘 span 另設上限，避免某種轉檔工具的 span 擠掉後面真正的註腳錨點。
+//   書庫普查：排除 koboSpan 後，一個檔最多 53 個 span id。
+constexpr uint16_t MAX_SPAN_ANCHORS_PER_CHAPTER = 256;
+constexpr size_t MAX_ANCHOR_ID_BYTES = 255;  // v390：超過就不記（合法文件不會有；字串本身是一次配置）
 // v275：一行最少要放得下幾個字（見 maxTotalHorizontalInset）。8 是取捨：
 //   再高就會把正常的引文縮排（左右各 2em）也削掉，再低就救不了「一行 4 個字」那種書。
 constexpr int MIN_CHARS_PER_LINE = 8;
@@ -134,8 +140,9 @@ const char* getAttribute(const XML_Char** atts, const char* attrName) {
   return nullptr;
 }
 
-// Returns true if the HTML element is a purely inline, non-navigable wrapper.
-// IDs on these elements are never meaningful navigation targets in epub content.
+// Returns true if the HTML element is a purely inline wrapper (<span>).
+// v390：上游認為這種 id 從來不是連結目標 —— 書庫普查推翻了這點（約五分之一的書，註腳返回點在 span 上），
+//   所以現在只用來挑出「要另外設上限、要排除 koboSpan」的那一類（見 MAX_SPAN_ANCHORS_PER_CHAPTER）。
 // Reading-system converters (Kobo KePub, Calibre, etc.) frequently inject thousands
 // of such IDs for progress tracking or internal bookkeeping, and recording each one
 // as a navigation anchor exhausts the heap on memory-constrained devices.
@@ -146,6 +153,20 @@ const char* getAttribute(const XML_Char** atts, const char* attrName) {
 bool isNonNavigableInlineElement(const char* rawName) {
   const char* const name = xmlLocalName(rawName);
   return strcmp(name, "span") == 0;
+}
+
+// v390：class 裡有沒有 koboSpan 這個詞（以空白分隔的 token，不是子字串）。
+bool hasKoboSpanClass(const char* cls) {
+  if (!cls) return false;
+  static constexpr char kKobo[] = "koboSpan";
+  constexpr size_t n = sizeof(kKobo) - 1;
+  for (const char* p = cls; *p;) {
+    while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r' || *p == '\f') ++p;
+    const char* const start = p;
+    while (*p && *p != ' ' && *p != '\t' && *p != '\n' && *p != '\r' && *p != '\f') ++p;
+    if (static_cast<size_t>(p - start) == n && strncmp(start, kKobo, n) == 0) return true;
+  }
+  return false;
 }
 
 bool isInternalEpubLink(const char* href) {
@@ -165,6 +186,18 @@ bool isHeaderOrBlock(const char* name) {
 bool isTableStructuralTag(const char* name) {
   const char* const tag = xmlLocalName(name);
   return strcmp(tag, "table") == 0 || strcmp(tag, "tr") == 0 || strcmp(tag, "td") == 0 || strcmp(tag, "th") == 0;
+}
+
+// v390：句子裡的元素 —— 它的 id 就在句子裡，頁碼要看它在句子的哪個位置（InSentence）。
+//   用排除法（codex 第二輪：白名單漏了 <strike> 這類照樣當行內處理的元素，兩張表必然分岔）：
+//   會開新區塊的、表格、容器、以及圖（圖自己是一個元素，id 跟著圖走 → Forward）以外，都算句子裡。
+bool isPhrasingAnchorElement(const char* rawName) {
+  static constexpr const char* kNotPhrasing[] = {
+      "section", "article", "aside", "nav",   "header", "footer", "main",    "figure",  "figcaption", "body",
+      "html",    "dl",      "dt",    "dd",    "hr",     "pre",    "address", "details", "summary",    "center",
+      "caption", "thead",   "tbody", "tfoot", "img",    "image",  "svg",     "math",    "hgroup",     "table"};
+  return !isHeaderOrBlock(rawName) && !isTableStructuralTag(rawName) &&
+         !matches(rawName, kNotPhrasing, std::size(kNotPhrasing));
 }
 
 void ChapterHtmlSlimParser::applyDirectionToEntry(StyleStackEntry& entry, const CssStyle& css) {
@@ -282,22 +315,127 @@ bool ChapterHtmlSlimParser::ensureCurrentPage(const char* where) {
   return true;
 }
 
-void ChapterHtmlSlimParser::flushPendingAnchor() {
-  if (pendingAnchorId.empty()) return;
+// v390：成長前先看連續塊（同 pendingFootnotes）。-fno-exceptions 下 vector 配不到就是 abort；
+//   丟掉一個錨點只是「點了跳章首」，遠比在建置視窗重開機好。
+template <typename V>
+static bool roomToGrow(const V& v) {
+  if (v.size() < v.capacity()) return true;
+  const size_t nextCap = v.capacity() ? v.capacity() * 2 : 4;
+  return heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT) >= nextCap * sizeof(v[0]) + 2048;
+}
 
-  // If the pending anchor is a TOC chapter boundary, force a page break after the previous
+void ChapterHtmlSlimParser::queueLineAnchor(const char* id, const AnchorKind kind) {
+  if (!roomToGrow(lineAnchors_)) return;
+  lineAnchors_.push_back({id, visibleTextOffset, blockSeq_, kind});
+}
+
+bool ChapterHtmlSlimParser::blockHasText() const {
+  // wordsExtractedInBlock 也要看：長段落中途排出去的行不在 currentTextBlock 裡了。
+  return currentTextBlock && (!currentTextBlock->isEmpty() || partWordBufferIndex > 0 || wordsExtractedInBlock > 0);
+}
+
+// v390：可見內容（第一個非空白字、或 <ruby> 的底字）要進來了，暫存的錨點此刻結算。
+//   TOC 錨點而目前區塊已經有字：照 TOC 的語意斷開區塊（排完前面的字、換頁），新內容從新頁開始。
+//   回傳 false ＝ 建置已中止，呼叫點要立刻 return。
+bool ChapterHtmlSlimParser::settlePendingAnchorsAtContent() {
+  bool anyToc = false;
+  for (const auto& pa : pendingAnchors_) anyToc = anyToc || pa.toc;
+  if (anyToc && blockHasText()) {
+    if (partWordBufferIndex > 0) flushPartWordBuffer();
+    if (!startNewTextBlock(currentTextBlock->getBlockStyle())) return false;
+  } else {
+    flushPendingAnchors(false);
+  }
+  return !buildAborted_;
+}
+
+void ChapterHtmlSlimParser::flushPendingAnchors(const bool blockFinished, const bool tocBreak) {
+  if (pendingAnchors_.empty()) return;
+
+  // If a pending anchor is a TOC chapter boundary, force a page break after the previous
   // block is flushed so the chapter starts on a fresh page.
-  if (std::find(tocAnchors.begin(), tocAnchors.end(), pendingAnchorId) != tocAnchors.end()) {
-    if (currentPage && !currentPage->elements.empty()) {
-      completePageFn(std::move(currentPage), xpathParagraphIndex, xpathListItemIndex, currentPageVisibleOffset);
-      completedPageCount++;
-      if (!ensureCurrentPage("Page:flushPendingAnchor")) return;
-    }
+  bool anyToc = false;
+  for (const auto& p : pendingAnchors_) anyToc = anyToc || p.toc;
+  if (anyToc && tocBreak && currentPage && !currentPage->elements.empty()) {
+    completePageFn(std::move(currentPage), xpathParagraphIndex, xpathListItemIndex, currentPageVisibleOffset);
+    completedPageCount++;
+    if (!ensureCurrentPage("Page:flushPendingAnchor")) return;
   }
 
-  // Record deferred anchor after previous block is flushed (and any TOC page break)
-  anchorData.push_back({std::move(pendingAnchorId), static_cast<uint16_t>(completedPageCount)});
-  pendingAnchorId.clear();
+  const bool inSentence = !blockFinished && blockHasText();
+  for (auto& p : pendingAnchors_) {
+    if (p.toc) {
+      // Record deferred anchor after previous block is flushed (and any TOC page break)
+      recordAnchor(std::move(p.id), completedPageCount);
+    } else if (roomToGrow(lineAnchors_)) {
+      lineAnchors_.push_back(
+          {std::move(p.id), p.offset, blockSeq_, inSentence ? AnchorKind::InSentence : AnchorKind::Forward});
+    }
+  }
+  std::vector<PendingAnchor>().swap(pendingAnchors_);
+}
+
+void ChapterHtmlSlimParser::recordAnchor(std::string&& id, const int page) {
+  if (!roomToGrow(anchorData)) return;
+  anchorData.push_back({std::move(id), static_cast<uint16_t>(page)});
+}
+
+// v390：錨點歸頁（規則見標頭的 LineAnchor）。
+//   InSentence 在同一區塊裡等到起點 > offset 的行：剛好在某行第一個字上（offset == 起點）不算「之後」→
+//   歸那一行，換頁邊界因此歸到後一頁。
+void ChapterHtmlSlimParser::placeLineAnchors(const uint32_t elementOffset) {
+  if (!lineAnchors_.empty()) {
+    size_t keep = 0;
+    for (size_t i = 0; i < lineAnchors_.size(); ++i) {
+      LineAnchor& a = lineAnchors_[i];
+      int page = -1;
+      switch (a.kind) {
+        case AnchorKind::InSentence:
+          if (blockSeq_ > a.seq || elementOffset > a.offset) page = lastElementPage_;
+          break;
+        case AnchorKind::Forward:
+          if (blockSeq_ > a.seq || elementOffset >= a.offset) page = completedPageCount;
+          break;
+        case AnchorKind::ForwardStrict:
+          if (blockSeq_ > a.seq) page = completedPageCount;
+          break;
+      }
+      if (page >= 0) {
+        recordAnchor(std::move(a.id), page);
+      } else {
+        if (keep != i) lineAnchors_[keep] = std::move(a);
+        ++keep;
+      }
+    }
+    lineAnchors_.resize(keep);
+    // 一段開頭堆了很多 id 的書（索引頁）會把佇列撐大；清空時把容量還回去，別跟 anchorData 一起常駐。
+    if (keep == 0 && lineAnchors_.capacity() > 16) std::vector<LineAnchor>().swap(lineAnchors_);
+  }
+  lastElementPage_ = completedPageCount;
+}
+
+void ChapterHtmlSlimParser::endBlockAnchors() {
+  if (!lineAnchors_.empty()) {
+    size_t keep = 0;
+    for (size_t i = 0; i < lineAnchors_.size(); ++i) {
+      LineAnchor& a = lineAnchors_[i];
+      if (a.kind == AnchorKind::InSentence && a.seq <= blockSeq_) {
+        recordAnchor(std::move(a.id), lastElementPage_);  // 段尾：這個區塊最後一個元素那頁
+      } else {
+        if (keep != i) lineAnchors_[keep] = std::move(a);
+        ++keep;
+      }
+    }
+    lineAnchors_.resize(keep);
+  }
+  ++blockSeq_;
+}
+
+void ChapterHtmlSlimParser::flushLineAnchors(const int page) {
+  for (auto& a : lineAnchors_) {
+    recordAnchor(std::move(a.id), a.kind == AnchorKind::InSentence ? lastElementPage_ : page);
+  }
+  std::vector<LineAnchor>().swap(lineAnchors_);
 }
 
 void ChapterHtmlSlimParser::setCurrentPageVisibleOffset(const uint32_t offset) {
@@ -373,7 +511,7 @@ bool ChapterHtmlSlimParser::startNewTextBlock(const BlockStyle& blockStyle) {
 
       currentTextBlock->setBlockStyle(style.getCombinedBlockStyle(incoming, BlockStyle::CombineAxis::Vertical));
 
-      flushPendingAnchor();
+      flushPendingAnchors(false);  // v390：沿用目前區塊（可能還有暫存的字，見 blockHasText）
       return !buildAborted_;
     }
 
@@ -384,11 +522,13 @@ bool ChapterHtmlSlimParser::startNewTextBlock(const BlockStyle& blockStyle) {
       const auto style = currentTextBlock->getBlockStyle();
       currentTextBlock->setBlockStyle(style.getCombinedBlockStyle(blockStyle, BlockStyle::CombineAxis::Vertical));
       listItemBulletOnly = false;
-      flushPendingAnchor();
+      flushPendingAnchors(false);  // v390：沿用目前區塊（清單記號跟子元素的字同一行）
       return !buildAborted_;
     }
 
     makePages();
+    if (buildAborted_) return false;  // v390：latch 之後不再碰錨點清單（會配置）
+    endBlockAnchors();                // v390
   }
   // v150（codex 抓到的提交縫）：makePages 期間 latch 之後，這裡的 flushPendingAnchor
   // 若帶著 TOC anchor 會把【掉了行的當前頁】強制完成並送進 LUT。XML_StopParser 不會
@@ -397,7 +537,7 @@ bool ChapterHtmlSlimParser::startNewTextBlock(const BlockStyle& blockStyle) {
   if (buildAborted_) return false;
   // If the pending anchor is a TOC chapter boundary, force a page break after the previous
   // block is flushed so the chapter starts on a fresh page.
-  flushPendingAnchor();
+  flushPendingAnchors(true);
   if (buildAborted_) return false;
   // v194：nothrow；失敗 latch，呼叫點必須立刻 return，不能再配 string／vector／shared_ptr。
   currentTextBlock.reset(new (std::nothrow)
@@ -466,15 +606,12 @@ void ChapterHtmlSlimParser::emitHorizontalRule(const BlockStyle& blockStyle) {
     latchBuildAborted();
     return;
   }
+  flushPendingAnchors(false, /*tocBreak=*/false);  // v390：<hr> 自己的 id（currentTextBlock 不存在時才會留到這裡）
+  placeLineAnchors(visibleTextOffset);             // v390
   currentPage->elements.push_back(pageRule);
   setCurrentPageVisibleOffset(visibleTextOffset);
   currentPageNextY = static_cast<int16_t>(currentPageNextY + ruleThickness + bottomSpacing);
   verticalEndIsolated();  // 直排：<hr> 獨占這一頁
-
-  if (!pendingAnchorId.empty()) {
-    anchorData.push_back({std::move(pendingAnchorId), static_cast<uint16_t>(completedPageCount)});
-    pendingAnchorId.clear();
-  }
 }
 
 void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char* name, const XML_Char** atts) {
@@ -533,6 +670,7 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
   std::string classAttr;
   std::string styleAttr;
   std::string dirAttr;
+  const char* idAttr = nullptr;
   bool hasHiddenAttr = false;
   // v362：<ol start="5">、<li value="3">（書庫約 6%／2% 的書用到）。夾在合理範圍，壞值當沒有。
   bool hasListNumberAttr = false;
@@ -547,27 +685,7 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
       } else if (strcmp(atts[i], "style") == 0) {
         styleAttr = atts[i + 1];
       } else if (strcmp(atts[i], "id") == 0) {
-        // Defer both anchor recording and TOC page breaks until startNewTextBlock,
-        // after the previous block is flushed to pages via makePages().
-        //
-        // Skip IDs on non-navigable inline elements (e.g. <span>): these are never
-        // link targets in epub content, but reading-system converters can inject tens
-        // of thousands of them per chapter, exhausting the heap. TOC anchors are
-        // always recorded regardless of element type, since they drive page breaks.
-        const char* idValue = atts[i + 1];
-        const bool isTocAnchor =
-            std::find(self->tocAnchors.begin(), self->tocAnchors.end(), idValue) != self->tocAnchors.end();
-        if (isTocAnchor || (!isNonNavigableInlineElement(name) && self->anchorData.size() < MAX_ANCHORS_PER_CHAPTER)) {
-          // Flush a displaced anchor before overwriting. Consecutive non-block elements
-          // (e.g. <aside id="fn1">text</aside><aside id="fn2">) with no intervening block
-          // never trigger startNewTextBlock, so fn1 gets silently overwritten. That leaves
-          // fn1 missing from the anchor map -> getPageForAnchor returns nullopt -> reader
-          // lands at page 0 (section start) instead of the footnote.
-          if (!self->pendingAnchorId.empty()) {
-            self->flushPendingAnchor();
-          }
-          self->pendingAnchorId = idValue;
-        }
+        idAttr = atts[i + 1];  // v390：迴圈後才處理 —— 要先知道 class（koboSpan）
       } else if (strcmp(atts[i], "dir") == 0) {
         dirAttr = atts[i + 1];
       } else if (strcmp(atts[i], "hidden") == 0) {
@@ -656,6 +774,38 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
     self->skipUntilDepth = self->depth;
     self->depth += 1;
     return;
+  }
+
+  // v390：放在 display:none 判斷之後 —— hidden／display:none 的元素不記（沒有頁可去，還會佔上限）；
+  //   <script>／<style> 這類不可見元素（nonVisibleTextDepth）與巢狀表格（內容整個丟掉）也不記，TOC 錨點一樣。
+  //   超長的 id 不記（合法文件不會有；字串本身也是一次配置）。
+  const bool nestedTable = self->tableDepth > 1 || (self->tableDepth == 1 && strcmp(element, "table") == 0);
+  if (idAttr && (self->insideBody || strcmp(element, "body") == 0) && self->nonVisibleTextDepth == 0 && !nestedTable &&
+      strlen(idAttr) <= MAX_ANCHOR_ID_BYTES) {
+    // TOC anchors are always recorded regardless of element type, since they drive page breaks.
+    // Other IDs are capped per chapter: converters can inject tens of thousands of them.
+    const bool isTocAnchor =
+        std::find(self->tocAnchors.begin(), self->tocAnchors.end(), idAttr) != self->tocAnchors.end();
+    const bool underCap =
+        self->anchorData.size() + self->lineAnchors_.size() + self->pendingAnchors_.size() < MAX_ANCHORS_PER_CHAPTER;
+    // v390：span 的 id 照記（約五分之一的書，註腳返回點在 span 上），只排除 Kobo 每句一個的 koboSpan，
+    //   而且另有上限（MAX_SPAN_ANCHORS_PER_CHAPTER）。
+    const bool isSpan = isNonNavigableInlineElement(name);
+    const bool spanOk =
+        !isSpan || (!hasKoboSpanClass(classAttr.c_str()) && self->spanAnchorCount_ < MAX_SPAN_ANCHORS_PER_CHAPTER);
+    const bool heapOk = heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT) >= strlen(idAttr) + 2048;
+    if (heapOk && (isTocAnchor || (underCap && spanOk))) {
+      if (isSpan && !isTocAnchor) self->spanAnchorCount_++;
+      if (!isTocAnchor && isPhrasingAnchorElement(name)) {
+        // 句子裡的 id（<a id="back-1">、<span id="…-backlink">）：所在區塊已經有字就卡在句子裡，否則屬於後面的字。
+        self->queueLineAnchor(idAttr, self->blockHasText() ? AnchorKind::InSentence : AnchorKind::Forward);
+      } else if (roomToGrow(self->pendingAnchors_)) {
+        // Defer both anchor recording and TOC page breaks until the layout decides whether the
+        // current block ends here (startNewTextBlock) or continues (its reuse paths, an image,
+        // finishParse) —— 見 flushPendingAnchors。
+        self->pendingAnchors_.push_back({idAttr, self->visibleTextOffset, isTocAnchor});
+      }
+    }
   }
 
   // Special handling for tables/cells: flatten into per-cell paragraphs with a prefixed header.
@@ -988,6 +1138,10 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                   }
                 }
 
+                // v390（codex 第二輪）：TOC 錨點寫在圖上（或圖前沒有文字的容器上）—— 原本要等下一個
+                //   startNewTextBlock 才記，那時圖那頁已經交出去 → 記到圖的下一頁。在放圖之前結算。
+                self->flushPendingAnchors(false);
+                if (self->buildAborted_) return;
                 // 直排：圖片走橫排游標，必須隔離成獨立一頁（見 verticalBeginIsolated）。
                 if (!self->verticalBeginIsolated(self->currentPageVisibleOffset)) return;
 
@@ -1085,6 +1239,7 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                   self->latchBuildAborted();
                   return;
                 }
+                self->placeLineAnchors(self->visibleTextOffset);  // v390
                 self->currentPage->elements.push_back(pageImage);
                 self->setCurrentPageVisibleOffset(self->visibleTextOffset);
                 self->currentPageNextY += displayHeight + imageMarginBottom;
@@ -1154,6 +1309,11 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
 
   // Ruby tag handling
   if (strcmp(element, "ruby") == 0) {
+    // v390：ruby 的底字是內容 —— 暫存的錨點在記 rubyStartWordIndex 之前結算（之後就不能換區塊了）。
+    if (!self->pendingAnchors_.empty() && self->insideBody && self->nonVisibleTextDepth == 0 &&
+        !self->settlePendingAnchorsAtContent()) {
+      return;
+    }
     // <ruby> is an inline element: a base that follows text with no whitespace between them
     // continues the same visual word, exactly like <b>/<i> handling in endElement().
     if (self->partWordBufferIndex > 0) {
@@ -1233,6 +1393,14 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
       entry.hasTextDecoration = true;
       entry.textDecoration = CssTextDecoration::Underline;
       applyDirectionToEntry(entry, cssStyle);
+      // v388：直排時照出版社寫在 <a> 上的 `vertical-align: super`（`a.noteref`、`.ref`）把註腳號碼排成上標
+      //   —— 直排畫不出底線，這是它唯一的標示。這條路跳過了下面的 CSS 處理，所以要在這裡補。
+      //   橫排刻意不動（底線照舊，維持既有外觀）。寫在內層 span／<sup> 的上標本來就會生效。
+      if (self->renderer.isVerticalLayout() && cssStyle.hasVerticalAlign() &&
+          cssStyle.verticalAlign == CssVerticalAlign::Super) {
+        entry.hasSup = true;
+        entry.sup = true;
+      }
       self->inlineStyleStack.push_back(entry);
       self->updateEffectiveInlineStyle();
 
@@ -1520,6 +1688,20 @@ void XMLCALL ChapterHtmlSlimParser::characterData(void* userData, const XML_Char
   // Middle of skip
   if (self->skipUntilDepth < self->depth) {
     return;
+  }
+
+  // v390（codex 第四輪）：暫存的容器 id（<section id>／<aside id> 裡直接放字、不再包 <p>）沒有區塊開頭可等 ——
+  //   第一個真正的字進來時就交給版面。只看非空白：元素之間的換行縮排不算（否則 <section id>\n<p> 會提早結算）。
+  //   TOC 錨點而目前區塊已經有字：照 TOC 的語意在這裡斷開區塊（排完前面的字、換頁），新內容從新頁開始。
+  //   ⚠️ ruby 裡面不做（codex 第五輪）：rubyStartWordIndex 是目前區塊的字詞序號，這裡換掉區塊，</rt> 就拿舊序號
+  //   套到新區塊 → 注音靜默消失、行高變了分頁也變。<ruby> 開始時（序號還沒記）就先結算（見 startElement）。
+  if (!self->pendingAnchors_.empty() && countVisibleOffsets && self->rubyStartWordIndex < 0 &&
+      !self->collectingRubyText) {
+    bool visible = false;
+    for (int i = 0; i < len && !visible; ++i) {
+      visible = !(s[i] == ' ' || s[i] == '\t' || s[i] == '\n' || s[i] == '\r');
+    }
+    if (visible && !self->settlePendingAnchorsAtContent()) return;
   }
 
   // Collect ruby text instead of normal word processing
@@ -2135,7 +2317,10 @@ bool ChapterHtmlSlimParser::finishParse() {
 
   // Process last page if there is still text
   if (currentTextBlock) {
+    // v390：章末沒有下一個區塊來結算暫存的 id（例如 <aside id> 裡直接是字）—— 在排這最後一段之前交給版面。
+    flushPendingAnchors(false, /*tocBreak=*/false);
     makePages();
+    if (!buildAborted_) endBlockAnchors();  // v390：latch 之後不再碰錨點清單（會配置）
     // v150：makePages 期間 latch 的話，下面的 completePageFn 會把掉行的最後一頁提交進
     // build tmp。tmp 反正會被 suspendBuild(aborted) 丟掉，但不提交更乾淨、也省一次寫入。
     if (buildAborted_) {
@@ -2143,16 +2328,16 @@ bool ChapterHtmlSlimParser::finishParse() {
       currentTextBlock.reset();
       return false;
     }
-    if (!pendingAnchorId.empty()) {
-      anchorData.push_back({std::move(pendingAnchorId), static_cast<uint16_t>(completedPageCount)});
-      pendingAnchorId.clear();
-    }
+    flushLineAnchors(completedPageCount);  // v390：章末還沒等到下一個元素的錨點
     setCurrentPageVisibleOffset(visibleTextOffset);
     completePageFn(std::move(currentPage), xpathParagraphIndex, xpathListItemIndex, currentPageVisibleOffset);
     completedPageCount++;
     currentPage.reset();
     currentTextBlock.reset();
   }
+  // v390：沒有收尾頁可放（章末是圖或分隔線，最後一頁已經交出去）→ 歸最後一頁。
+  flushPendingAnchors(false, /*tocBreak=*/false);
+  if (!lineAnchors_.empty()) flushLineAnchors(completedPageCount > 0 ? completedPageCount - 1 : 0);
 
   // v149：低記憶體丟過字就不算成功 —— Section 據此不提交本章（保留既有 partial）。
   return !buildAborted_;
@@ -2201,6 +2386,7 @@ void ChapterHtmlSlimParser::addLineToPage(std::shared_ptr<TextBlock> line, const
 
   // Apply horizontal left inset (margin + padding) as x position offset
   const int16_t xOffset = line->getBlockStyle().leftInset();
+  placeLineAnchors(visibleOffset);  // v390
   currentPage->elements.push_back(std::make_shared<PageLine>(line, xOffset, currentPageNextY));
   currentPageNextY += lineHeight;
   ++vspaceLines_;  // v276：這個區塊吐了幾行（儀器用；makePages 那行會印出來）
@@ -2367,6 +2553,7 @@ void ChapterHtmlSlimParser::addColumnToPage(std::shared_ptr<TextBlock> column, c
   // ⚠️ 用 layoutCurrentBlock 夾限過的那個值，**不要重新讀一次 style** ——
   //    兩處各自讀就可能不一致，而不變量 colTop + colLen <= viewportHeight 正是靠它們一致。
   const int16_t colTop = verticalColTop;
+  placeLineAnchors(visibleOffset);  // v390
   currentPage->elements.push_back(std::make_shared<PageLine>(column, colLeft, colTop));
   currentPageNextX = colLeft;
 }

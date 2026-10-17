@@ -3,6 +3,7 @@
 #include <GfxRenderer.h>
 #include <I18n.h>
 
+#include "ReleaseCodename.h"
 #include "fontIds.h"
 #include "images/LogoBear240.h"
 
@@ -24,6 +25,6 @@ void BootActivity::onEnter() {
   renderer.drawImageGray(LogoBearGray240, logoX, logoY, LOGO_BEAR_240_SIZE, LOGO_BEAR_240_SIZE);
   renderer.drawCenteredText(UI_10_FONT_ID, textY, tr(STR_CROSSPOINT), true, EpdFontFamily::BOLD);
   renderer.drawCenteredText(UI_10_FONT_ID, textY + 25, tr(STR_BOOTING));
-  renderer.drawCenteredText(UI_10_FONT_ID, pageHeight - 30, CROSSPOINT_VERSION);
+  renderer.drawCenteredText(UI_10_FONT_ID, pageHeight - 30, CROSSPOINT_VERSION " " RELEASE_CODENAME);
   renderer.displayBuffer();
 }

@@ -70,12 +70,24 @@ void ensureThumbs(GfxRenderer& renderer, std::vector<RecentBook>& books, const i
         }
       }
       if (needsThumb) {
-        reliefIfLow();
+        reliefIfLow();  // 要在 Epub::load 之前：load 本身也要一塊（v175）
         // If epub, try to load the metadata for title/author and cover
         if (FsHelpers::hasEpubExtension(book.path)) {
           Epub epub(book.path, DataDir::path());
           // Skip loading css since we only need metadata here
-          epub.load(false, true);
+          const bool loaded = epub.load(false, true);
+          // v389（diag388）：讀過的書重新上傳＝上傳時清掉整個快取，最近閱讀卻還記著它 → 這裡永遠 cache-missing。
+          //   以前照樣彈「載入中」、失敗後要求重畫，書架的重畫又再試一次 → 每 1.2 秒閃一次、直到使用者開一次書。
+          //   沒有 book.bin 就什麼都做不了（索引要等開書時建；不在這裡建：繪製任務裡沒有閱讀器借 framebuffer 那層保護，
+          //   大書建索引可能配置失敗＝abort，codex 複查 v389）→ 不彈窗、不要求重畫，畫面維持書脊佔位圖。
+          //   路徑用固定緩衝：這是低記憶體也會走的失敗路徑，不配置 std::string（v196 同理）。
+          char bookBin[160];
+          const int bn = snprintf(bookBin, sizeof(bookBin), "%s/book.bin", epub.getCachePath().c_str());
+          if (!loaded && bn > 0 && static_cast<size_t>(bn) < sizeof(bookBin) && !Storage.exists(bookBin)) {
+            DiagLog::line("THUMBSKIP h=%d why=no-index %s", coverHeight, book.path.c_str());
+            progress++;
+            continue;
+          }
 
           // Try to generate thumbnail image for Continue Reading card
           if (!showingLoading) {
