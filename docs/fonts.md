@@ -7,10 +7,10 @@ CrossMosa 的中文字型分成兩種：
 
 ## ⬇ 下載：挑一杯
 
-- **[⬇ 中杯](https://github.com/anki630/crossmosa/releases/download/fonts-2026-09/crossmosa-sd-fonts-2026-09.zip)**：適合大多數人。
-- **[⬇ 大杯](https://github.com/anki630/crossmosa/releases/download/fonts-2026-09/crossmosa-sd-fonts-large-2026-09.zip)**：字大一點，看久了眼睛比較輕鬆。
-- **[⬇ 特大杯](https://github.com/anki630/crossmosa/releases/download/fonts-2026-09/crossmosa-sd-fonts-xl-2026-10.zip)**：最大的字。
-- **[⬇ 兒童杯](https://github.com/anki630/crossmosa/releases/download/zhuyin-2026-09/crossmosa-zhuyin-2026-09.zip)**：每個字旁都有注音，孩子也能自己讀。
+- **[⬇ 中杯](https://github.com/anki630/crossmosa/releases/download/fonts-2026-09/crossmosa-sd-fonts-2026-09.zip)**（16–22 pt）：適合大多數人。
+- **[⬇ 大杯](https://github.com/anki630/crossmosa/releases/download/fonts-2026-09/crossmosa-sd-fonts-large-2026-09.zip)**（24–28 pt）：字大一點，看久了眼睛比較輕鬆。
+- **[⬇ 特大杯](https://github.com/anki630/crossmosa/releases/download/fonts-2026-09/crossmosa-sd-fonts-xl-2026-10.zip)**（32 pt）：最大的字。
+- **[⬇ 兒童杯](https://github.com/anki630/crossmosa/releases/download/zhuyin-2026-09/crossmosa-zhuyin-2026-09.zip)**（26–32 pt）：每個字旁都有注音，孩子也能自己讀。
 
 看不清楚小字？先試大杯，還不夠再換特大杯。
 
@@ -86,10 +86,10 @@ CrossMosa uses two kinds of Chinese fonts:
 
 ## ⬇ Download: pick a size
 
-- **[⬇ Regular](https://github.com/anki630/crossmosa/releases/download/fonts-2026-09/crossmosa-sd-fonts-2026-09.zip)**: right for most readers.
-- **[⬇ Large](https://github.com/anki630/crossmosa/releases/download/fonts-2026-09/crossmosa-sd-fonts-large-2026-09.zip)**: bigger text that's easier on your eyes.
-- **[⬇ Extra Large](https://github.com/anki630/crossmosa/releases/download/fonts-2026-09/crossmosa-sd-fonts-xl-2026-10.zip)**: the biggest text.
-- **[⬇ Kids](https://github.com/anki630/crossmosa/releases/download/zhuyin-2026-09/crossmosa-zhuyin-2026-09.zip)**: zhuyin beside every character, so children can read on their own.
+- **[⬇ Regular](https://github.com/anki630/crossmosa/releases/download/fonts-2026-09/crossmosa-sd-fonts-2026-09.zip)** (16–22 pt): right for most readers.
+- **[⬇ Large](https://github.com/anki630/crossmosa/releases/download/fonts-2026-09/crossmosa-sd-fonts-large-2026-09.zip)** (24–28 pt): bigger text that's easier on your eyes.
+- **[⬇ Extra Large](https://github.com/anki630/crossmosa/releases/download/fonts-2026-09/crossmosa-sd-fonts-xl-2026-10.zip)** (32 pt): the biggest text.
+- **[⬇ Kids](https://github.com/anki630/crossmosa/releases/download/zhuyin-2026-09/crossmosa-zhuyin-2026-09.zip)** (26–32 pt): zhuyin beside every character, so children can read on their own.
 
 Small text hard to read? Start with Large. If that's not enough, try Extra Large.
 
