@@ -86,6 +86,16 @@ void HalPowerManager::startDeepSleep(HalGPIO& gpio) const {
   // guarantees that ordering).
   freeink::PowerManager::powerDownRailsForSleep();
 
+#if FREEINK_DEVICE_METALIO_EINK4
+  // ESP deep sleep leaves the whole Metalio board powered (main and screen/SD
+  // rails, 4G modem, audio module). Pulse the power-switch chip the way the
+  // vendor firmware does; the power button then cold-boots. USB can keep the
+  // board alive, so fall through to deep sleep if power is still on.
+  for (int i = 0; i < 3; i++) {
+    freeink::metalio::powerOff();
+  }
+#endif
+
   // Waits for the power button to be physically released (so holding it doesn't
   // immediately wake the device again), then arms the wake source and sleeps.
   freeink::PowerManager::deepSleepUntilPowerButton();
