@@ -87,8 +87,8 @@ SD 卡
 ## 步驟 3：開機
 
 1. 開機就是繁體中文。想換英文介面：設定 → 系統 → 語言 → English。
-2. 選字型：設定 → 閱讀器 → 閱讀字型，選剛剛放進去的那套。清單上沒看到的話，檢查字型資料夾是不是放在 `fonts/字型名稱/`。
-3. 選字級：設定 → 閱讀器 → 閱讀字級。
+2. 選字型：設定 → 閱讀器 → 文字設定 → 字型，選剛剛放進去的那套。清單上沒看到的話，檢查字型資料夾是不是放在 `fonts/字型名稱/`。
+3. 選字級：設定 → 閱讀器 → 文字設定 → 字級。
 4. 在剛剛下載韌體的那一頁，下載使用手冊 `CrossMosa.epub`，放進 SD 卡，打開它，一邊讀一邊按。
 5. 機器會在 SD 卡上建一個 `.crossmosa` 資料夾，放進度、書籤和設定。不要刪它。
 
@@ -192,9 +192,9 @@ To compare fonts or install Large, Extra Large, or zhuyin fonts, see [Fonts](fon
 ## Step 3: Start the device
 
 1. The device starts in Traditional Chinese. To use the English interface, open 設定 → 系統 → 語言 → English.
-2. Choose a font at Settings → Reader → Reader Font Family. Select the family you copied. If it is not listed, check that its folder is at `fonts/font-name/`.
-3. Choose a text size at Settings → Reader → Reader Font Size.
-4. On the firmware download page you used earlier, download the `CrossMosa.epub` user guide (in Traditional Chinese). Put it on the SD card and open it. Read along and try each control.
+2. Choose a font at Settings → Reader → Text Settings → Font. Select the family you copied. If it is not listed, check that its folder is at `fonts/font-name/`.
+3. Choose a text size at Settings → Reader → Text Settings → Size.
+4. On the firmware download page you used earlier, download the `CrossMosa.epub` user guide. It is in Traditional Chinese, but its pictures show the main steps. Put it on the SD card, open it, and try each control as you go.
 5. The device creates a `.crossmosa` folder on the SD card for progress, bookmarks, and settings. Do not delete it.
 
 The startup screen and Settings page show the version number. Confirm that it matches the version you installed.

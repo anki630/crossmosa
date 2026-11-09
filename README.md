@@ -59,6 +59,18 @@
 
 樣張是模擬畫面：用機器上的字型檔，照螢幕原本的解析度排出來。範文為朱自清〈背影〉、李白〈靜夜思〉、孟浩然〈春曉〉。
 
+## 想讀的書，一眼就找到
+
+首頁換上書的封面。正在讀的書、最近讀過的三本，打開就在眼前，還看得到讀了多久。
+
+卡上的書排在書架上，最近讀的在最前面，不用再一層層打開資料夾。喜歡的書，長按就能加入最愛。沒有封面的書，也會配上一張插畫封面。
+
+| 首頁 | 書架 |
+|:---:|:---:|
+| <img src="docs/promo/cover-home.jpg" width="300" alt="Formosa Cover 首頁：正在讀的書與最近讀過的三本"> | <img src="docs/promo/cover-shelf.jpg" width="300" alt="Formosa Cover 書架：一頁六本封面"> |
+
+到「設定 → 顯示 → 介面主題」選 Formosa Cover，就能換上。
+
 ## 零碎時間，拿起來就讀
 
 通勤、午休、睡前。你還在讀這一頁，下一頁已經備好；下次打開，從上次的地方繼續。
@@ -68,6 +80,8 @@
 **直排的書，照直排讀。**由上而下、由右而左，像翻一本真正的書。
 
 **註腳，一按就到。** 再按一下就回到原處。譯注多的書，終於好讀了。
+
+**繪本和畫冊，整個螢幕都是畫。** 整頁是圖的書，畫面貼齊螢幕邊緣。
 
 **書，傳過去就好。** 打開瀏覽器，把書拖進去。書都在 Calibre 的話，機器也能直接連上你的書庫。
 
@@ -86,6 +100,8 @@
 
 <p align="center"><a href="https://anki630.github.io/crossmosa/masterpieces.html">每一幅畫的故事 →</a></p>
 
+五十幅畫的故事，也做成了一本電子書，可以放進閱讀器慢慢看。[下載《口袋裡的小美術館》→](https://github.com/anki630/crossmosa/releases/tag/wallpapers-masterpieces-2026-10)
+
 <a id="開始使用"></a>
 
 ## 三步驟，今晚就能開始讀
@@ -100,7 +116,7 @@
    - **X3**：左側的上一頁鍵＋電源鍵
    - **X4**：右側上面那顆鍵＋電源鍵。沒有反應的話，接上 USB 電源再試一次。
 2. **放字型**：下載[字型包](https://github.com/anki630/crossmosa/releases/tag/fonts-2026-09)，在 SD 卡最外層建一個 `fonts` 資料夾，把字型包裡的資料夾放進去。沒有字型，書會顯示成方塊。
-3. **開始讀**：在剛剛下載韌體的那一頁，下載使用手冊 `CrossMosa.epub`，放進 SD 卡。到「設定 → 閱讀器 → 閱讀字型」選一套字型，打開手冊，一邊讀一邊按。
+3. **開始讀**：在剛剛下載韌體的那一頁，下載使用手冊 `CrossMosa.epub`，放進 SD 卡。到「設定 → 閱讀器 → 文字設定 → 字型」選一套字型，打開手冊，一邊讀一邊按。
 
 **以後更新，不用重刷。** 把新版傳進機器，到「設定 → 系統 → SD 卡韌體更新」選它就好，不用再按鍵開機。[詳細步驟](docs/update.md)
 
@@ -285,6 +301,18 @@ Serif for long reads, sans for clarity, rounded for comfort, handwritten for war
 
 The samples are simulated: the device's own font files, laid out at the screen's native resolution. Texts: Zhu Ziqing's "Back View", Li Bai's "Quiet Night Thoughts", and Meng Haoran's "Spring Morning".
 
+## Find the book you want, at a glance
+
+The home screen shows your covers. The book you're reading and the last three you opened are right there when you pick it up, along with how long you've been reading.
+
+Your books sit in one library, most recent first. No more opening folder after folder. Hold a book to add it to Favorites. Books without a cover get an illustrated one.
+
+| Home | Library |
+|:---:|:---:|
+| <img src="docs/promo/cover-home.jpg" width="300" alt="Formosa Cover home: the current book and the last three"> | <img src="docs/promo/cover-shelf.jpg" width="300" alt="Formosa Cover library: six covers per page"> |
+
+To switch, go to Settings → Display → UI Theme and choose Formosa Cover.
+
 ## Spare moments, ready to read
 
 On the commute, at lunch, before bed. While you read this page, the next one is already prepared. Open it later and pick up where you left off.
@@ -294,6 +322,8 @@ On the commute, at lunch, before bed. While you read this page, the next one is 
 **Vertical books, read vertically.** Top to bottom, right to left, like turning the pages of a real book.
 
 **Footnotes, one press away.** Press again to return to where you were. Books full of translator's notes are finally easy to read.
+
+**Picture books, edge to edge.** Pages that are all picture fill the whole screen.
 
 **Books, just send them over.** Open a browser and drag them in. If your books are in Calibre, the device can connect to your library directly.
 
@@ -312,6 +342,8 @@ When you close it, the screen shows a famous painting. Van Gogh today, Hokusai t
 
 <p align="center"><a href="https://anki630.github.io/crossmosa/masterpieces.html">See all fifty paintings →</a></p>
 
+The stories of all fifty paintings are also an e-book (in Chinese) you can read on the device. [Get the e-book →](https://github.com/anki630/crossmosa/releases/tag/wallpapers-masterpieces-2026-10)
+
 <a id="getting-started"></a>
 
 ## Three steps. Start reading tonight.
@@ -326,7 +358,7 @@ You already have the device, and the SD card is already in it. Three steps are a
    - **X3:** the previous-page key on the left edge + the power button
    - **X4:** the upper key on the right edge + the power button. If nothing happens, connect USB power and try again.
 2. **Add fonts:** Download the [font pack](https://github.com/anki630/crossmosa/releases/tag/fonts-2026-09). Create a `fonts` folder in the root of the SD card and put the folders from the pack inside it. Without fonts, books show up as boxes.
-3. **Start reading:** The device starts in Traditional Chinese. To switch to English, go to 設定 → 系統 → 語言 → English. Choose a font under Settings → Reader → Reader Font Family. The release page also has a short manual, `CrossMosa.epub` (in Chinese): put it on the card, open it, and follow along.
+3. **Start reading:** The device starts in Traditional Chinese. To switch to English, go to 設定 → 系統 → 語言 → English. Choose a font under Settings → Reader → Text Settings → Font. The release page also has a manual, `CrossMosa.epub`. It is in Chinese, but its pictures show the main steps, so you can follow along.
 
 **Later updates don't need a reflash.** Copy the new `update.bin` to the card, from a phone or computer browser with the device's File Transfer page or with a card reader, then go to Settings → System → SD Card Firmware Update and pick the file. No key combination. [Detailed steps](docs/update.md#updating-english)
 

@@ -10,6 +10,8 @@
 
 兩台的螢幕尺寸不同，請下載跟你的機器相同的那一包。
 
+這五十幅畫的故事，也做成了一本電子書《口袋裡的小美術館》：[下載 X3 版](https://github.com/anki630/crossmosa/releases/download/wallpapers-masterpieces-2026-10/crossmosa-masterpieces-book-x3.epub) · [下載 X4 版](https://github.com/anki630/crossmosa/releases/download/wallpapers-masterpieces-2026-10/crossmosa-masterpieces-book-x4.epub)。放進 SD 卡就能讀；畫要用整個螢幕顯示，需要 2.2.0 以後的韌體。
+
 ## 安裝
 
 1. 解壓縮。
@@ -35,6 +37,8 @@ Fifty famous paintings. Each one is a public-domain work from Wikimedia Commons 
 [Download for X3](https://github.com/anki630/crossmosa/releases/download/wallpapers-masterpieces-2026-09/crossmosa-wallpapers-masterpieces-x3-2026-09.zip) · [Download for X4](https://github.com/anki630/crossmosa/releases/download/wallpapers-masterpieces-2026-09/crossmosa-wallpapers-masterpieces-x4-2026-09.zip)
 
 The two devices have different screen sizes. Download the pack for your device.
+
+The stories of all fifty paintings are also an e-book (in Chinese): [X3](https://github.com/anki630/crossmosa/releases/download/wallpapers-masterpieces-2026-10/crossmosa-masterpieces-book-x3.epub) · [X4](https://github.com/anki630/crossmosa/releases/download/wallpapers-masterpieces-2026-10/crossmosa-masterpieces-book-x4.epub). Copy it to the SD card to read it. Full-screen paintings need firmware 2.2.0 or later.
 
 ## Installation
 

@@ -33,13 +33,13 @@ CrossMosa 的中文字型分成兩種：
 
 ## 看不清小字：大杯和特大杯
 
-[大杯](https://github.com/anki630/crossmosa/releases/download/fonts-2026-09/crossmosa-sd-fonts-large-2026-09.zip)和[特大杯](https://github.com/anki630/crossmosa/releases/download/fonts-2026-09/crossmosa-sd-fonts-xl-2026-10.zip)都有明體、黑體、圓體和芫荽。裝法跟其他字型一樣，裝好之後在「閱讀字型」裡選它。
+[大杯](https://github.com/anki630/crossmosa/releases/download/fonts-2026-09/crossmosa-sd-fonts-large-2026-09.zip)和[特大杯](https://github.com/anki630/crossmosa/releases/download/fonts-2026-09/crossmosa-sd-fonts-xl-2026-10.zip)都有明體、黑體、圓體和芫荽。裝法跟其他字型一樣，裝好之後在「文字設定 → 字型」裡選它。
 
 ## 給孩子：兒童杯
 
 每個字旁都有注音，給剛開始自己讀書的孩子。[下載兒童杯](https://github.com/anki630/crossmosa/releases/download/zhuyin-2026-09/crossmosa-zhuyin-2026-09.zip)，裝法跟其他字型一樣。
 
-注音字型的名稱是 ZhuyinKai（注音楷書），裝好之後在「閱讀字型」裡選它。需要 2.1.0-beta.5 或更新的版本。在沒看過的書上實測，注音引擎每千字平均約 4 字讀錯。
+注音字型的名稱是 ZhuyinKai（注音楷書），裝好之後在「文字設定 → 字型」裡選它。需要 2.1.0-beta.5 或更新的版本。在沒看過的書上實測，注音引擎每千字平均約 4 字讀錯。
 
 破音字判斷只在 ZhuyinKai 上有效，自己轉的注音字型會照字型本身的預設讀音顯示。
 
@@ -114,13 +114,13 @@ If space is limited, each text size is a separate file. The number in the filena
 
 ## Large and Extra Large
 
-[Large](https://github.com/anki630/crossmosa/releases/download/fonts-2026-09/crossmosa-sd-fonts-large-2026-09.zip) and [Extra Large](https://github.com/anki630/crossmosa/releases/download/fonts-2026-09/crossmosa-sd-fonts-xl-2026-10.zip) both come in serif, sans serif, rounded, and Iansui. Install them like any other font, then select one under Settings → Reader → Reader Font Family.
+[Large](https://github.com/anki630/crossmosa/releases/download/fonts-2026-09/crossmosa-sd-fonts-large-2026-09.zip) and [Extra Large](https://github.com/anki630/crossmosa/releases/download/fonts-2026-09/crossmosa-sd-fonts-xl-2026-10.zip) both come in serif, sans serif, rounded, and Iansui. Install them like any other font, then select one under Settings → Reader → Text Settings → Font.
 
 ## Kids: zhuyin
 
 This font places zhuyin beside each character for children who are beginning to read independently. [Download Kids](https://github.com/anki630/crossmosa/releases/download/zhuyin-2026-09/crossmosa-zhuyin-2026-09.zip) and install it like any other font.
 
-The font is named ZhuyinKai. After installation, select it under Settings → Reader → Reader Font Family. It requires version 2.1.0-beta.5 or later. In testing with previously unseen books, the zhuyin engine misread an average of about 4 characters per thousand.
+The font is named ZhuyinKai. After installation, select it under Settings → Reader → Text Settings → Font. It requires version 2.1.0-beta.5 or later. In testing with previously unseen books, the zhuyin engine misread an average of about 4 characters per thousand.
 
 Context-based pronunciation for characters with multiple readings works only with ZhuyinKai. Zhuyin fonts you convert yourself use the default pronunciations stored in the font.
 

@@ -104,10 +104,17 @@ PYEOF
 }
 
 # ---------------------------------------------------------------------------
-# Version — single source of truth is platformio.ini
+# Version — single source of truth is the VERSION file (older trees: platformio.ini)
 # ---------------------------------------------------------------------------
-VERSION_FULL="$(sed -n 's/^[[:space:]]*version[[:space:]]*=[[:space:]]*//p' platformio.ini | head -1)"
-[ -n "$VERSION_FULL" ] || die "could not read 'version =' from platformio.ini"
+if [ -f VERSION ]; then
+  VERSION_FULL="$(head -1 VERSION | tr -d '[:space:]')"
+else
+  VERSION_FULL="$(sed -n 's/^[[:space:]]*version[[:space:]]*=[[:space:]]*//p' platformio.ini | head -1)"
+fi
+[ -n "$VERSION_FULL" ] || die "could not read the version from VERSION or platformio.ini"
+# Release codename shown next to the version on the device (2.2.0-beta.4 onward).
+CODENAME="$(sed -n 's/^#define RELEASE_CODENAME "\(.*\)"$/\1/p' src/ReleaseCodename.h 2>/dev/null | head -1)"
+VERSION_SHOWN="$VERSION_FULL${CODENAME:+ $CODENAME}"
 VERSION="${VERSION_FULL%% *}"          # "1.0.0 (cp1.4.1 build 113)" -> "1.0.0"
 case "$VERSION" in
   [0-9]*.[0-9]*.[0-9]*) : ;;
@@ -217,9 +224,10 @@ CrossMosa $VERSION_FULL — 刷機說明
 
   步驟 1  刷這個 zip 裡的 update.bin(方法 A 直接用,不用改名)
   步驟 2  到下載頁的「字型包」下載中文字型,整個字型資料夾
-          複製到 SD 卡的 /.fonts/ 底下(例如 /.fonts/NotoSerifTC/)
+          複製到 SD 卡最外層的 fonts 資料夾(例如 /fonts/NotoSerifTC/)。
+          想讓「資料夾」畫面只看到書,改放 .fonts(隱藏資料夾)也可以
   步驟 3  把這個 zip 裡的《歡迎使用CrossMosa.epub》一起複製到 SD 卡,
-          刷完之後第一本就讀它——十三章,一邊讀一邊按,約 10 分鐘。
+          刷完之後第一本就讀它——十四章,一邊讀一邊按,約 10 分鐘。
 
 USB-locked 機器須知
 ----------------------------------------------------------------
@@ -261,8 +269,8 @@ bootloader.bin 與 partitions.bin 只有在做完整重刷(從 0x0 起)時才需
 第一次開機
 ----------------------------------------------------------------
 1. 開機就是繁體中文(要英文介面:設定 → 系統 → 語言 → English)
-2. 選內文字型:設定 → 閱讀器 → 閱讀字型(選你複製進去的那套)
-3. 版號應顯示 $VERSION_FULL(開機畫面下緣與設定頁右上角)
+2. 選內文字型:設定 → 閱讀器 → 文字設定 → 字型(選你複製進去的那套)
+3. 版號應顯示 $VERSION_SHOWN(開機畫面下緣與設定頁右上角)
 
 本次建置
 ----------------------------------------------------------------
@@ -403,10 +411,10 @@ their licence."
   cat > "$SD_STAGE/README.txt" <<EOF
 CrossMosa $VERSION — SD 卡內文字型
 ================================================================
-把你要用的**整個資料夾**複製到 SD 卡的 /.fonts/ 底下:
+把你要用的**整個資料夾**複製到 SD 卡最外層的 fonts 資料夾:
 
   SD 卡根目錄/
-  └── .fonts/
+  └── fonts/
       ├── NotoSerifTC/           ← 明體,建議先裝這套
       ├── NotoSansTC/            ← 黑體,有粗體
       ├── Iansui/                ← 硬筆楷書(芫荽),只有 Regular
@@ -421,7 +429,9 @@ CrossMosa $VERSION — SD 卡內文字型
 選它會整頁躺著——只在要直排時用。
 
 只裝一套也可以(整包解開約 252 MB,多數人只會用一兩套)。
-裝好後在裝置上:設定 → 閱讀器 → 閱讀字型。
+裝好後在裝置上:設定 → 閱讀器 → 文字設定 → 字型。
+想讓機器上的「資料夾」畫面只看到書,把 fonts 改名成 .fonts(隱藏
+資料夾)也可以,兩個機器都會讀。
 資料夾名稱不可含空格(上游已知會 crash)。字型是按需從 SD 讀的,
 不佔 RAM;裝多套只花 SD 空間。
 

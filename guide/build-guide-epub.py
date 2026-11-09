@@ -85,22 +85,34 @@ COVER_W, COVER_H = 528, 792
 # renaming a source file cannot silently reorder the book.
 CHAPTERS = [
     ("01-keys.xhtml", "1　你已經會翻頁了"),
-    ("02-fonts.xhtml", "2　換一套字"),
-    ("03-bookmark.xhtml", "3　書籤"),
-    ("04-contents.xhtml", "4　選擇章節"),
-    ("05-footnote.xhtml", "5　註腳"),
-    ("06-power-key.xhtml", "6　右上角那顆鍵"),
-    ("07-images.xhtml", "7　圖片與灰階"),
-    ("08-getting-books.xhtml", "8　書怎麼進來"),
-    ("09-wallpaper.xhtml", "9　桌布"),
-    ("10-prefetch.xhtml", "10　為什麼翻頁變快了"),
-    ("11-missing-glyphs.xhtml", "11　遇到方塊字"),
-    ("12-support.xhtml", "12　如果它讓你的 X3 變好用了"),
-    ("13-closing.xhtml", "13　把機器還給書"),
+    ("02-home.xhtml", "2　首頁與書架"),
+    ("03-long-press.xhtml", "3　試試長按"),
+    ("04-favorites.xhtml", "4　把書放進最愛"),
+    ("05-fonts.xhtml", "5　換一套字"),
+    ("06-bookmark.xhtml", "6　在這一頁夾書籤"),
+    ("07-contents-footnotes.xhtml", "7　找章節與註腳"),
+    ("08-vertical-zhuyin.xhtml", "8　直排與注音"),
+    ("09-images.xhtml", "9　看圖片與整頁圖"),
+    ("10-getting-books.xhtml", "10　把書放進 CrossMosa"),
+    ("11-sleep-wallpaper.xhtml", "11　休眠與待機畫面"),
+    ("12-update.xhtml", "12　更新韌體"),
+    ("13-missing-glyphs.xhtml", "13　遇到方塊字"),
+    ("14-thanks.xhtml", "14　謝謝你"),
+    ("80-advanced-rescue.xhtml", "進階　更新出問題時"),
     ("90-notes.xhtml", "註釋"),
 ]
 
 FIGURE_NAME = "greyscale.png"
+
+# Full-screen teaching figures (2.2.0+): guide/images/fig-*.png, 528x792, 2-bit grey, made by the
+# maintainer's figure script from X3 screenshots. A chapter places one with a line of its own:
+#     <figure-page src="fig-home-cover" alt="…"/>
+# The chapter is split there: the figure becomes its own spine document marked
+# rendition:layout-pre-paginated (the firmware shows it full-screen, 1:1 on X3, scaled on X4),
+# and the text after it continues in "<chapter>-N.xhtml". A fixed-layout page must hold
+# nothing but the image — the firmware demotes one with text back to normal layout.
+FIG_DIR = GUIDE_DIR / "images"
+FIG_RE = re.compile(r'^\s*<figure-page src="(fig-[a-z0-9-]+)" alt="([^"]*)"/>\s*$', re.M)
 
 
 # ---------------------------------------------------------------------------
@@ -216,6 +228,21 @@ XHTML_WRAPPER = """<?xml version="1.0" encoding="utf-8"?>
 """
 
 
+FIG_WRAPPER = """<?xml version="1.0" encoding="utf-8"?>
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops" xml:lang="{lang}" lang="{lang}">
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8"/>
+<meta name="viewport" content="width={w}, height={h}"/>
+<title>{title}</title>
+</head>
+<body>
+<div><img src="images/{src}.png" alt="{alt}"/></div>
+</body>
+</html>
+"""
+
+
 def read_chapter(filename: str) -> str:
     path = CHAPTER_DIR / filename
     if not path.is_file():
@@ -242,10 +269,35 @@ def build_documents() -> dict:
         + '"/></div>',
     ).encode("utf-8")
 
+    spine_docs = []  # (filename, is_figure) in reading order
+    first_doc = {}  # chapter filename -> first spine document (the TOC target)
+    figures = []
     for filename, label in CHAPTERS:
-        docs[f"OEBPS/{filename}"] = XHTML_WRAPPER.format(
-            lang=BOOK_LANG, title=label, body=read_chapter(filename)
-        ).encode("utf-8")
+        stem = filename.rsplit(".", 1)[0]
+        text = read_chapter(filename)
+        pieces = FIG_RE.split(text)  # [text, src, alt, text, src, alt, ..., text]
+        part = 1
+        for i in range(0, len(pieces), 3):
+            body = pieces[i].strip()
+            if body:
+                fn = filename if part == 1 else f"{stem}-{part}.xhtml"
+                part += 1
+                docs[f"OEBPS/{fn}"] = XHTML_WRAPPER.format(lang=BOOK_LANG, title=label, body=body).encode("utf-8")
+                spine_docs.append((fn, False))
+                first_doc.setdefault(filename, fn)
+            if i + 1 < len(pieces):
+                src, alt = pieces[i + 1], pieces[i + 2]
+                png = FIG_DIR / f"{src}.png"
+                if not png.is_file():
+                    sys.exit(f"missing figure: {png}")
+                docs[f"OEBPS/images/{src}.png"] = png.read_bytes()
+                fn = f"{src}.xhtml"
+                docs[f"OEBPS/{fn}"] = FIG_WRAPPER.format(
+                    lang=BOOK_LANG, title=alt, w=COVER_W, h=COVER_H, src=src, alt=alt
+                ).encode("utf-8")
+                spine_docs.append((fn, True))
+                first_doc.setdefault(filename, fn)
+                figures.append(src)
 
     manifest = [
         '    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>',
@@ -257,21 +309,25 @@ def build_documents() -> dict:
         f'    <item id="fig-greyscale" href="images/{FIGURE_NAME}" media-type="image/png"/>',
         '    <item id="coverpage" href="cover.xhtml" media-type="application/xhtml+xml"/>',
     ]
+    for src in figures:
+        manifest.append(f'    <item id="img-{src}" href="images/{src}.png" media-type="image/png"/>')
     spine = ['    <itemref idref="coverpage"/>']
-    for filename, _ in CHAPTERS:
-        item_id = "ch-" + filename.rsplit(".", 1)[0]
-        manifest.append(f'    <item id="{item_id}" href="{filename}" media-type="application/xhtml+xml"/>')
-        spine.append(f'    <itemref idref="{item_id}"/>')
+    for fn, is_fig in spine_docs:
+        item_id = "ch-" + fn.rsplit(".", 1)[0]
+        manifest.append(f'    <item id="{item_id}" href="{fn}" media-type="application/xhtml+xml"/>')
+        props = ' properties="rendition:layout-pre-paginated"' if is_fig else ""
+        spine.append(f'    <itemref idref="{item_id}"{props}/>')
 
     nl = "\n"
     docs["OEBPS/content.opf"] = f"""<?xml version="1.0" encoding="utf-8"?>
-<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="bookid">
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="bookid" prefix="rendition: http://www.idpf.org/vocab/rendition/#">
   <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
     <dc:identifier id="bookid">{BOOK_ID}</dc:identifier>
     <dc:title>{BOOK_TITLE}</dc:title>
     <dc:creator>{BOOK_AUTHOR}</dc:creator>
     <dc:language>{BOOK_LANG}</dc:language>
     <meta name="cover" content="cover-image"/>
+    <meta property="rendition:spread">none</meta>
   </metadata>
   <manifest>
 {nl.join(manifest)}
@@ -285,7 +341,7 @@ def build_documents() -> dict:
     )
 
     nav_items = nl.join(
-        f'      <li><a href="{fn}">{label}</a></li>' for fn, label in CHAPTERS
+        f'      <li><a href="{first_doc[fn]}">{label}</a></li>' for fn, label in CHAPTERS
     )
     docs["OEBPS/nav.xhtml"] = f"""<?xml version="1.0" encoding="utf-8"?>
 <!DOCTYPE html>
@@ -307,7 +363,7 @@ def build_documents() -> dict:
     nav_points = nl.join(
         f"""    <navPoint id="np{i + 1}" playOrder="{i + 1}">
       <navLabel><text>{label}</text></navLabel>
-      <content src="{fn}"/>
+      <content src="{first_doc[fn]}"/>
     </navPoint>"""
         for i, (fn, label) in enumerate(CHAPTERS)
     )
@@ -374,7 +430,9 @@ def write_epub(path: Path, docs: dict, epoch: int) -> None:
             k for k in docs if k != "META-INF/container.xml"
         ):
             zi = zipfile.ZipInfo(name, date_time=dt)
-            zi.compress_type = zipfile.ZIP_DEFLATED
+            # PNGs are already zlib streams; storing them also spares the reader the 32 KB
+            # inflate window an extra deflate layer would need on a tight heap.
+            zi.compress_type = zipfile.ZIP_STORED if name.endswith(".png") else zipfile.ZIP_DEFLATED
             zi.external_attr = 0o644 << 16
             with z.open(zi, "w") as dst:
                 dst.write(docs[name])
@@ -394,7 +452,7 @@ def load_ui_font_coverage(header: Path):
     with this font, so anything not covered is a box on screen.
     """
     txt = header.read_text(encoding="utf-8", errors="replace")
-    stem = re.search(r"static const EpdUnicodeInterval (\w+?)Intervals\[\]", txt).group(1)
+    stem = re.search(r"static (?:const|constexpr) EpdUnicodeInterval (\w+?)Intervals\[\]", txt).group(1)
     iv_body = re.search(re.escape(stem) + r"Intervals\[\] = \{(.*?)\};", txt, re.S).group(1)
     intervals = [
         tuple(int(x, 0) for x in m)
@@ -528,8 +586,16 @@ def verify(epub_path: Path) -> int:
                 problems.append(f"spine references unknown id {idref}")
                 continue
             spine_files.append(manifest[idref].get("href"))
-        if len(spine_files) != len(CHAPTERS) + 1:
-            problems.append(f"spine has {len(spine_files)} items, expected {len(CHAPTERS) + 1}")
+        if len(spine_files) < len(CHAPTERS) + 1:
+            problems.append(f"spine has {len(spine_files)} items, expected at least {len(CHAPTERS) + 1}")
+        fxl = [r for r in opf.findall(".//opf:spine/opf:itemref", ns) if "rendition:layout-pre-paginated" in (r.get("properties") or "")]
+        for r in fxl:
+            href = manifest[r.get("idref")].get("href")
+            body = ET.fromstring(z.read("OEBPS/" + href)).find(".//x:body", ns)
+            if body is None or "".join(body.itertext()).strip():
+                problems.append(f"{href}: fixed-layout page has text — the firmware would demote it")
+            if len(body.findall(".//x:img", ns)) != 1:
+                problems.append(f"{href}: fixed-layout page must hold exactly one image")
 
         # -- cover: both the EPUB 2 and EPUB 3 declarations ------------------
         meta_cover = opf.find(".//opf:metadata/opf:meta[@name='cover']", ns)
@@ -592,7 +658,7 @@ def verify(epub_path: Path) -> int:
                 problems.append(f"{src_file}: footnote label {label!r} exceeds FOOTNOTE_NUMBER_LEN-1")
             path, _, anchor = href.partition("#")
             target_file = src_file if not path else path.split("/")[-1]
-            if path and target_file not in [f for f, _ in CHAPTERS] + ["cover.xhtml"]:
+            if path and target_file not in spine_shortnames:
                 problems.append(f"{src_file}: href {href!r} resolves to no spine document")
             elif anchor and anchor not in ids_by_file.get(target_file, set()):
                 problems.append(
@@ -617,8 +683,14 @@ def verify(epub_path: Path) -> int:
                     problems.append(f"{where}: U+{cp:04X} '{ch}' is not in the built-in UI font — renders as a box")
 
         # -- images -----------------------------------------------------------
-        for img in ("OEBPS/images/cover.png", f"OEBPS/images/{FIGURE_NAME}"):
+        for img in ["OEBPS/images/cover.png", f"OEBPS/images/{FIGURE_NAME}"] + sorted(
+            n for n in names if n.startswith("OEBPS/images/fig-")
+        ):
             check_png(img, z.read(img), problems)
+            if img.startswith("OEBPS/images/fig-"):
+                w, h, depth, colour = struct.unpack(">IIBB", z.read(img)[16:26])
+                if (w, h) != (COVER_W, COVER_H) or (depth, colour) != (2, 0):
+                    problems.append(f"{img}: want {COVER_W}x{COVER_H} 2-bit grey, got {w}x{h} depth {depth} colour {colour}")
 
     # -- every 設定 → … path is on-screen wording, character for character ------
     # The book is only useful if its instructions match the device. UI strings move;
@@ -627,7 +699,7 @@ def verify(epub_path: Path) -> int:
     paths = check_settings_paths(problems)
 
     print(f"\nverify: {epub_path.name}")
-    print(f"  spine documents      {len(spine_files)}")
+    print(f"  spine documents      {len(spine_files)} ({len(fxl)} full-screen figures)")
     print(f"  footnote links       {footnotes} (internal <a href> in spine documents)")
     print(f"  UI-font coverage     {len(ui_chars)} distinct non-ASCII characters checked")
     print(f"  settings paths       {paths} checked against zh-hant.yaml")

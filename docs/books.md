@@ -13,6 +13,8 @@
 - **Calibre 無線傳書**：在機器的「檔案傳輸」選「Calibre 無線傳書」，照螢幕上的設定步驟在電腦的 Calibre 裡連上機器，就能把書直接送過去。
 - **主畫面的「OPDS 書庫」**：先到「設定 → 系統 → OPDS 伺服器」加入你的書庫網址，就能在機器上瀏覽、下載、開書。Calibre 的書庫網址後面要加 `/opds`。
 
+**傳完去哪裡找**：用 Formosa Cover 主題的話，書都在首頁的「書架」；其他主題在「瀏覽檔案」。
+
 ![在機器上瀏覽中文書庫](promo/photo-opds.jpg)
 
 書請從正版管道取得，選沒有 DRM 的電子書。本專案不提供、也不代找書籍內容。
@@ -33,6 +35,8 @@
 
 - **Calibre Wireless:** Under File Transfer on the device, select Calibre Wireless. Follow the on-screen setup instructions to connect from Calibre on your computer, then send books directly to the device.
 - **OPDS Browser on the Home screen:** First open Settings → System → OPDS Servers and add your library URL. You can then browse, download, and open books on the device. Add `/opds` to the end of a Calibre library URL.
+
+**Finding your books:** With the Formosa Cover theme, they are all in Library on the Home screen. With other themes, use Browse Files.
 
 ![Browsing a Chinese book library on the device](promo/photo-opds.jpg)
 
