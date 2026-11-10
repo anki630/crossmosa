@@ -15,7 +15,7 @@
 免費開源・機器免接電腦<br>
 觸控的 X4 Pro 不適用。
 
-![CrossMosa 實機：全繁中主畫面、明體內文、名畫待機](docs/promo/hero-photo.jpg)
+![CrossMosa：書架首頁、明體內文、名畫待機](docs/promo/hero-photo.jpg)
 
 ## 想讀的書，一眼就找到
 
@@ -257,7 +257,7 @@ Reading time is short enough. It shouldn't go to fighting the device.
 Free and open source · No computer connection needed<br>
 Not for the touchscreen X4 Pro.
 
-![CrossMosa on real hardware: a Traditional Chinese home screen, serif body text, and a painting on the sleep screen](docs/promo/hero-photo.jpg)
+![CrossMosa: a bookshelf home screen, serif body text, and a painting on the sleep screen](docs/promo/hero-photo.jpg)
 
 ## Find the book you want, at a glance
 
