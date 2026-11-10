@@ -15,7 +15,7 @@
 免費開源・機器免接電腦<br>
 觸控的 X4 Pro 不適用。
 
-![CrossMosa：書架首頁、明體內文、名畫待機](docs/promo/hero-photo.jpg)
+![CrossMosa：書架首頁、明體內文、名畫待機](docs/promo/hero-2026-11.jpg)
 
 ## 想讀的書，一眼就找到
 
@@ -25,7 +25,7 @@
 
 | 首頁 | 書架 |
 |:---:|:---:|
-| <img src="docs/promo/cover-home.jpg" width="300" alt="Formosa Cover 首頁：正在讀的書與最近讀過的三本"> | <img src="docs/promo/cover-shelf.jpg" width="300" alt="Formosa Cover 書架：一頁六本封面"> |
+| <img src="docs/promo/cover-home-photo.jpg" width="300" alt="Formosa Cover 首頁：正在讀的書與最近讀過的三本"> | <img src="docs/promo/cover-shelf-photo.jpg" width="300" alt="Formosa Cover 書架：一頁六本封面"> |
 
 首頁的樣子，可以在「設定 → 顯示 → 介面主題」換。
 
@@ -257,7 +257,7 @@ Reading time is short enough. It shouldn't go to fighting the device.
 Free and open source · No computer connection needed<br>
 Not for the touchscreen X4 Pro.
 
-![CrossMosa: a bookshelf home screen, serif body text, and a painting on the sleep screen](docs/promo/hero-photo.jpg)
+![CrossMosa: a bookshelf home screen, serif body text, and a painting on the sleep screen](docs/promo/hero-2026-11.jpg)
 
 ## Find the book you want, at a glance
 
@@ -267,7 +267,7 @@ Your books sit in one library, most recent first. No more opening folder after f
 
 | Home | Library |
 |:---:|:---:|
-| <img src="docs/promo/cover-home.jpg" width="300" alt="Formosa Cover home: the current book and the last three"> | <img src="docs/promo/cover-shelf.jpg" width="300" alt="Formosa Cover library: six covers per page"> |
+| <img src="docs/promo/cover-home-photo.jpg" width="300" alt="Formosa Cover home: the current book and the last three"> | <img src="docs/promo/cover-shelf-photo.jpg" width="300" alt="Formosa Cover library: six covers per page"> |
 
 You can change how the home screen looks in Settings → Display → UI Theme.
 
