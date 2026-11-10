@@ -331,8 +331,32 @@ void WebDAVHandler::handleGet(WebServer& s) {
   s.setContentLength(file.size());
   s.send(200, contentType.c_str(), "");
 
+  // v395：這裡原本是 `client.write(file)`，實際只送出一個位元組（0x01）。
+  // HalFile 繼承 Print 而不是 Stream，對不上 NetworkClient::write(Stream&)，
+  // 編譯器改走 HalFile::operator bool()，把 true 當成一個 uint8_t 送出去；每一步都是合法轉換，沒有警告。
+  // 回應標頭帶的是真的 Content-Length，所以電腦端會一直等，最後回報傳輸中斷（看起來像網路不穩）。
+  // 改用跟網頁下載（CrossPointWebServer 的下載處理）同一套迴圈：4 KB 分塊、處理部分寫入、餵看門狗。
   NetworkClient client = s.client();
-  client.write(file);
+  constexpr size_t chunkSize = 4096;
+  uint8_t buffer[chunkSize];
+  bool ok = true;
+  while (ok && file.available()) {
+    const int result = file.read(buffer, chunkSize);
+    if (result <= 0) break;
+    const size_t bytesRead = static_cast<size_t>(result);
+    size_t totalWritten = 0;
+    while (totalWritten < bytesRead) {
+      resetTaskWatchdogIfSubscribed();
+      const size_t wrote = client.write(buffer + totalWritten, bytesRead - totalWritten);
+      if (wrote == 0) {
+        ok = false;
+        break;
+      }
+      totalWritten += wrote;
+    }
+  }
+  if (!ok) LOG_ERR("DAV", "GET %s: client stopped accepting data", path.c_str());
+  client.clear();
   file.close();
 }
 

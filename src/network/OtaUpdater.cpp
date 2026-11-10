@@ -1,5 +1,7 @@
 #include "OtaUpdater.h"
 
+#include <CrossPointVersion.h>
+
 // clang-format off
 // HttpDownloader.h pulls Arduino/SdFat, whose macros collide with lwip's
 // ip4_addr.h unless seen first. Pin this order; clang-format would otherwise sort

@@ -247,7 +247,8 @@ TokenPlan planToken(const GfxRenderer& renderer, const int fontId, const std::st
 
 void ParsedText::layoutAndExtractColumns(
     const GfxRenderer& renderer, const int fontId, const uint16_t columnLength,
-    const std::function<void(std::shared_ptr<TextBlock>, uint32_t, int)>& processColumn, const bool includeLastColumn) {
+    const std::function<void(std::shared_ptr<TextBlock>, uint32_t, int)>& processColumn, const bool includeLastColumn,
+    const int32_t layoutEmFP, const float layoutHangNeed) {
   if (words.empty()) return;
   // v252 BUILDPROF：整段排版（RAII：所有出口都計，含 consumeAllAndBail）。
   struct LayProf {
@@ -301,7 +302,9 @@ void ParsedText::layoutAndExtractColumns(
   // em 的探測有備援鏈：U+3000 表意空格 → U+4E00「一」（任何中文字型都有）。
   // ⚠️ 原本只探 U+3000 就放棄 —— 而字型【可以】沒有它（SD 字型是我們自己產的，
   //    字集由 --additional-intervals 決定，表意空格不在常用字表裡是完全可能的）。
-  const int32_t emFP = vtext::probeEmFP(renderer, fontId);
+  // EPUB 與 TXT 都由幾何建立點凍結 em。v308 已讓 probe 本身只走整數像素路徑，但把值明確傳進來
+  // 才能結構性保證 pitch、cells 與 section 檔頭永遠同源；預設值只留給測試與獨立呼叫者。
+  const int32_t emFP = layoutEmFP > 16 ? layoutEmFP : vtext::probeEmFP(renderer, fontId);
   const float em = static_cast<float>(emFP) / 16.0f;
   if (em <= 1.0f) {
     consumeAllAndBail("no-em");
@@ -361,21 +364,12 @@ void ParsedText::layoutAndExtractColumns(
   // JLREQ 3.8.2：「**版面に接して**，指定の行長よりはみ出して配置する」——
   // 懸掛的字是【貼著版心邊】，所以需要的餘量只是那個字的**墨水高度**，
   // 而且是用 getGlyphInkBox 從**實際字形**量的（五套字型的句讀墨水高度不同）。
-  float hangNeed = 1.0f;
-  for (const uint32_t hc : {0x3001u, 0xFF0Cu, 0x3002u}) {
-    int gw = 0, gh = 0, gl = 0, gt = 0;
-    if (renderer.getGlyphInkBox(fontId, hc, EpdFontFamily::REGULAR, &gw, &gh, &gl, &gt)) {
-      if (static_cast<float>(gh) > hangNeed) hangNeed = static_cast<float>(gh);
-    }
-  }
+  const float hangNeed = layoutHangNeed >= 1.0f ? layoutHangNeed : vtext::measureHangNeed(renderer, fontId);
   // 餘量不夠就讓出一格來換懸掛（使用者明確選了懸掛，「只有某些字級有效」更難用）。
-  auto grid2 = grid;
-  if (grid2.hangRoom < hangNeed && grid2.charsPerColumn > 2) {
-    grid2.charsPerColumn -= 1;
-    grid2.columnLength = static_cast<float>(grid2.charsPerColumn) * em;
-    grid2.hangRoom = static_cast<float>(columnLength) - grid2.columnLength;
-  }
-  const bool hangAllowed = grid2.hangRoom >= hangNeed;
+  // makeCenteredColumnGrid 同時供繪製端取同一份 grid2；這裡只消費它的排版欄位，不套位移。
+  const auto centeredGrid = vtext::makeCenteredColumnGrid(static_cast<float>(columnLength), em, hangNeed);
+  const auto& grid2 = centeredGrid.grid;
+  const bool hangAllowed = centeredGrid.hangAllowed;
   if (!vertHangLogged) {
     vertHangLogged = true;
     ParsedText::vertDiag("VERTHANG allowed=%d room=%d need=%d cells=%d->%d", hangAllowed ? 1 : 0,

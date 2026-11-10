@@ -50,6 +50,9 @@ namespace txtengine {
 
 struct Params {
   int fontId = 0;
+  // recomputeGeometry 凍結的 12.4 em；直排每一個 soft flush 都必須沿用同一值。
+  int32_t emFP = -1;
+  float hangNeed = -1.0f;
   // 橫排＝視窗寬度；直排＝欄長。
   uint16_t extent = 0;
   // 一頁裝得下幾個單位（橫排＝幾行，直排＝幾欄）。

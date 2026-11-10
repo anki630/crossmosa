@@ -267,7 +267,8 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   // Defaults to Disabled so shortcut-based bookmark toggling remains opt-in.
   uint8_t longPressMenuFunction = LP_MENU_DISABLED;
   // UI Theme
-  uint8_t uiTheme = FORMOSA_PRO;  // v183：首次刷機（無 settings.json）預設 Formosa Pro（維護者拍板）
+  uint8_t uiTheme = FORMOSA_COVER;  // v396：首次刷機（無 settings.json）預設 Formosa Cover（v183–v395 是
+                                    // Pro；維護者拍板）。已有 settings.json 的照存檔，不遷移
   // Sunlight fading compensation
   uint8_t fadingFix = 0;
   // Power button return from footnotes (1 = enabled, 0 = disabled)

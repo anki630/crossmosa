@@ -1,6 +1,7 @@
 #include "SettingsActivity.h"
 
 #include <BoardConfig.h>
+#include <CrossPointVersion.h>
 #include <GfxRenderer.h>
 #include <Logging.h>
 #include <Memory.h>

@@ -10,8 +10,11 @@
 // 規格來源：`tools/vertical-oracle/vlayout.py`（已在像素上驗過的 V0 桌面預言機）。
 // 決策與依據：`docs/specs/2026-08-25-feature-parity-ledger.md` 搜「中文直排」。
 
+#include <algorithm>
 #include <cstdint>
 #include <vector>
+
+#include "VerticalText.h"  // ZHUYIN_COLUMN_EXTRA_EM（columnCellPx）
 
 namespace vtext {
 
@@ -66,6 +69,72 @@ inline ColumnGrid makeColumnGrid(const float availableLength, const float em) {
   g.columnLength = static_cast<float>(g.charsPerColumn) * em;
   g.hangRoom = availableLength - g.columnLength;
   return g;
+}
+
+// JLREQ 2.4 的直排基本版面置中只看【版面欄格】。欄由右往左放，零頭原本全留在
+// 左邊，故整塊往左移半個零頭；奇數零頭用整數除法取下半，兩側最多差 1 px。
+inline int centeredReverseGridOffset(const int availableLength, const int pitch, const float cellPx) {
+  // ⚠️ 置中的是【墨水的版面】，不是 cols×pitch（v392 實機截圖：左 49、右 76 px）。
+  //    每一欄的字貼著欄的左緣，欄距多出來的行間在字的右邊 → 最右一欄的右邊多一個行間。
+  //    JLREQ 的版面寬 ＝ 行數×字寬＋(行數−1)×行間，最外面兩欄外側沒有行間。
+  //    cellPx ＝ 一欄字面的寬（一般字 em；注音字型含注音 1.5 em）。
+  if (availableLength <= 0 || pitch <= 0 || cellPx <= 0.0f) return 0;
+  const int cols = availableLength / pitch;
+  if (cols < 1) return 0;
+  const int remainder = availableLength - cols * pitch;  // 原本最左一欄的左緣
+  const float span = static_cast<float>((cols - 1) * pitch) + cellPx;
+  if (span > static_cast<float>(availableLength)) return 0;
+  const float wantLeft = (static_cast<float>(availableLength) - span) / 2.0f;
+  const float d = wantLeft - static_cast<float>(remainder);
+  return static_cast<int>(d < 0.0f ? d - 0.5f : d + 0.5f);
+}
+
+// 一欄字面的寬（直排跨欄方向）：注音字型的格把注音也算進去（欄距同樣多 0.5 em，VerticalText.h）。
+inline float columnCellPx(const float em, const bool zhuyinCells) {
+  return em * (1.0f + (zhuyinCells ? ZHUYIN_COLUMN_EXTRA_EM : 0.0f));
+}
+
+// 段落間隙可能讓一頁最左欄落在 [0, pitch) 的任意位置；理想置中位移不得把它
+// 推出版心左緣。TXT 雖然固定欄距，也走同一個夾限，避免日後幾何改動時失守。
+inline int clampReverseGridOffset(const int desiredOffset, const int minColumnLeft) {
+  return std::max(desiredOffset, -minColumnLeft);
+}
+
+// 沿直排欄的格線與位移必須由同一份結果產生。grid 是懸掛判定後真正用來分欄的
+// grid2；offsetPx 是繪製原點往下的常數位移。
+struct CenteredColumnGrid {
+  ColumnGrid grid;
+  int offsetPx;
+  bool hangAllowed;
+  bool hangClamped;
+};
+
+inline CenteredColumnGrid makeCenteredColumnGrid(const float availableLength, const float em, const float hangNeed) {
+  CenteredColumnGrid out{};
+  out.grid = makeColumnGrid(availableLength, em);
+
+  // JLREQ 3.8.2：餘量不夠時讓出一格，讓句讀貼著格線的外面懸掛。
+  // 這是原本 ParsedTextVertical 的 grid2 規則；放在共同純函式後，排版與繪製不會各算一份。
+  if (out.grid.hangRoom < hangNeed && out.grid.charsPerColumn > 2) {
+    out.grid.charsPerColumn -= 1;
+    out.grid.columnLength = static_cast<float>(out.grid.charsPerColumn) * em;
+    out.grid.hangRoom = availableLength - out.grid.columnLength;
+  }
+  out.hangAllowed = out.grid.hangRoom >= hangNeed;
+
+  // 四捨五入：零頭是小數（em 不是整數 px），floor 會讓上下差到接近 2 px；取最近整數則差 ≤ 1 px。
+  int offset = static_cast<int>(out.grid.hangRoom / 2.0f + 0.5f);
+  if (out.hangAllowed) {
+    // 格線可以置中，但懸掛字仍要留在版心內：移動後的格線尾端至少保留 hangNeed（這裡往下取整，不能多 1 px）。
+    const int maxOffset = static_cast<int>(out.grid.hangRoom - hangNeed);
+    if (offset > maxOffset) {
+      offset = maxOffset;
+      out.hangClamped = true;
+    }
+  }
+  if (offset < 0) offset = 0;
+  out.offsetPx = offset;
+  return out;
 }
 
 // 分欄的結果：每一欄的 [起始 token, 結束 token) 與每個 token 沿欄的位移。

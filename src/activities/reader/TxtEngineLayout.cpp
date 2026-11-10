@@ -338,7 +338,8 @@ void PageBuilder::flush(ParsedText& parsed, const bool includeLast) {
   if (params_.vertical) {
     parsed.layoutAndExtractColumns(
         renderer_, params_.fontId, params_.extent,
-        [this](std::shared_ptr<TextBlock> col, const uint32_t cp, int) { onLine(std::move(col), cp); }, includeLast);
+        [this](std::shared_ptr<TextBlock> col, const uint32_t cp, int) { onLine(std::move(col), cp); }, includeLast,
+        params_.emFP, params_.hangNeed);
   } else {
     parsed.layoutAndExtractLines(
         renderer_, params_.fontId, params_.extent,

@@ -8,6 +8,30 @@
 
 ---
 
+## 2.3.0-beta.1「雞排」(2026-11) — internal build 396
+
+> 這是 Beta 版，給想先試新功能的人；一般使用請用正式版 [2.2.0](https://github.com/anki630/crossmosa/releases/tag/v2.2.0)。
+
+### 功能 (Features)
+
+- 版號後面的代號換成「雞排」，開機和休眠畫面的黑熊戴上漁夫帽、捧著一份雞排。
+- 新安裝的 CrossMosa，首頁預設為 Formosa Cover。
+
+### 閱讀與效能 (Reading and performance)
+
+- 直排書的版面置中。
+
+### 穩定性 (Stability)
+
+- 修正用 WebDAV 下載檔案時，傳輸中斷的問題。
+
+### 升級注意 (Upgrade notes)
+
+- 從 2.2.0 升上來，書、閱讀進度、設定和主題都會保留。想換成 Formosa Cover，到「設定 → 顯示 → 介面主題」。
+- 使用手冊有更新，要重新下載 `CrossMosa.epub` 放進 SD 卡。
+
+---
+
 ## 2.2.0「珍奶」(2026-11) — internal build 391
 
 > 正式版，X3、X4 都能直接刷。

@@ -1,5 +1,7 @@
 #include "HalSystem.h"
 
+#include <CrossPointVersion.h>
+
 #include <string>
 
 #include "Arduino.h"

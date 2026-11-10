@@ -60,6 +60,7 @@ class ChapterHtmlSlimParser {
   int lineHeightPx;
   // v284：建置凍結的字身框（12.4 定點）。直排欄距也由它算 —— parser 內不再 probe。
   int32_t frozenEmFP_ = -1;
+  float frozenHangNeed_ = 1.0f;  // 同一次建置凍結的句讀墨水高（grid2 與繪製共用）
   // 直排的欄距係數（em 的倍數）。
   // ⚠️ **v284 更正**：本欄原本寫著「不能從行距反推 —— 它是 advanceY 的壓縮率，
   //    值域還隨字型家族重疊（同一個 1.0 在兩邊是不同檔位）」。**那個前提已經不成立**：
@@ -266,7 +267,7 @@ class ChapterHtmlSlimParser {
   bool zhuyinDegraded() const { return zhuyinDegraded_; }
   explicit ChapterHtmlSlimParser(
       std::shared_ptr<Epub> epub, const std::string& filepath, GfxRenderer& renderer, const int fontId,
-      const int lineHeightPx, const int32_t frozenEmFP, const bool extraParagraphSpacing,
+      const int lineHeightPx, const int32_t frozenEmFP, const float frozenHangNeed, const bool extraParagraphSpacing,
       const uint8_t paragraphAlignment, const uint16_t viewportWidth, const uint16_t viewportHeight,
       const bool hyphenationEnabled, const bool focusReadingEnabled,
       const std::function<void(std::unique_ptr<Page>, uint16_t, uint16_t, uint32_t)>& completePageFn,
@@ -291,6 +292,7 @@ class ChapterHtmlSlimParser {
         fontId(fontId),
         lineHeightPx(lineHeightPx),
         frozenEmFP_(frozenEmFP),
+        frozenHangNeed_(frozenHangNeed),
         columnPitchFactor(vtext::columnPitchForTier(columnPitchTier)),
         extraParagraphSpacing(extraParagraphSpacing),
         paragraphAlignment(paragraphAlignment),

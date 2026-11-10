@@ -4,6 +4,7 @@
 #include <BitmapHelpers.h>
 #include <BoardConfig.h>
 #include <Breadcrumb.h>
+#include <CrossPointVersion.h>
 #include <DataDir.h>
 #include <HalGPIO.h>
 #include <HalStorage.h>

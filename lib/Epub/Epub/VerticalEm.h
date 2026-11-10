@@ -29,4 +29,18 @@ namespace vtext {
 // 兩軸各留一份實作遲早會漂移。這裡保留薄包裝，讓既有呼叫點與桌面的 vertical-oracle 不必改。
 inline int32_t probeEmFP(const GfxRenderer& renderer, const int fontId) { return renderer.probeEmFP(fontId); }
 
+// 行尾懸掛要預留的實際墨水高度。排版與繪製重算 grid2 都走這一支，避免兩邊的
+// 句讀集合或取整規則漂移。量不到時沿用既有的 1 px 安全退化。
+inline float measureHangNeed(const GfxRenderer& renderer, const int fontId) {
+  float need = 1.0f;
+  for (const uint32_t cp : {0x3001u, 0xFF0Cu, 0x3002u}) {
+    int width = 0, height = 0, left = 0, top = 0;
+    if (renderer.getGlyphInkBox(fontId, cp, EpdFontFamily::REGULAR, &width, &height, &left, &top) &&
+        static_cast<float>(height) > need) {
+      need = static_cast<float>(height);
+    }
+  }
+  return need;
+}
+
 }  // namespace vtext

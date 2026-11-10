@@ -17,6 +17,18 @@
 
 ![CrossMosa 實機：全繁中主畫面、明體內文、名畫待機](docs/promo/hero-photo.jpg)
 
+## 想讀的書，一眼就找到
+
+首頁換上書的封面。正在讀的書、最近讀過的三本，打開就在眼前，還看得到讀了多久。
+
+卡上的書排在書架上，最近讀的在最前面，不用再一層層打開資料夾。喜歡的書，長按就能加入最愛。沒有封面的書，也會配上一張插畫封面。
+
+| 首頁 | 書架 |
+|:---:|:---:|
+| <img src="docs/promo/cover-home.jpg" width="300" alt="Formosa Cover 首頁：正在讀的書與最近讀過的三本"> | <img src="docs/promo/cover-shelf.jpg" width="300" alt="Formosa Cover 書架：一頁六本封面"> |
+
+首頁的樣子，可以在「設定 → 顯示 → 介面主題」換。
+
 ## 你買它是為了讀中文書，結果打開是這樣
 
 整頁都是方塊。裝好 CrossMosa，選單是中文，書頁清清楚楚。差別，看圖就好。
@@ -58,18 +70,6 @@
 </details>
 
 樣張是模擬畫面：用機器上的字型檔，照螢幕原本的解析度排出來。範文為朱自清〈背影〉、李白〈靜夜思〉、孟浩然〈春曉〉。
-
-## 想讀的書，一眼就找到
-
-首頁換上書的封面。正在讀的書、最近讀過的三本，打開就在眼前，還看得到讀了多久。
-
-卡上的書排在書架上，最近讀的在最前面，不用再一層層打開資料夾。喜歡的書，長按就能加入最愛。沒有封面的書，也會配上一張插畫封面。
-
-| 首頁 | 書架 |
-|:---:|:---:|
-| <img src="docs/promo/cover-home.jpg" width="300" alt="Formosa Cover 首頁：正在讀的書與最近讀過的三本"> | <img src="docs/promo/cover-shelf.jpg" width="300" alt="Formosa Cover 書架：一頁六本封面"> |
-
-到「設定 → 顯示 → 介面主題」選 Formosa Cover，就能換上。
 
 ## 零碎時間，拿起來就讀
 
@@ -259,6 +259,18 @@ Not for the touchscreen X4 Pro.
 
 ![CrossMosa on real hardware: a Traditional Chinese home screen, serif body text, and a painting on the sleep screen](docs/promo/hero-photo.jpg)
 
+## Find the book you want, at a glance
+
+The home screen shows your covers. The book you're reading and the last three you opened are right there when you pick it up, along with how long you've been reading.
+
+Your books sit in one library, most recent first. No more opening folder after folder. Hold a book to add it to Favorites. Books without a cover get an illustrated one.
+
+| Home | Library |
+|:---:|:---:|
+| <img src="docs/promo/cover-home.jpg" width="300" alt="Formosa Cover home: the current book and the last three"> | <img src="docs/promo/cover-shelf.jpg" width="300" alt="Formosa Cover library: six covers per page"> |
+
+You can change how the home screen looks in Settings → Display → UI Theme.
+
 ## You bought it to read Chinese books. Then you opened one.
 
 A whole page of boxes. With CrossMosa, the menus are in Chinese and every page is clear. The pictures say the rest.
@@ -300,18 +312,6 @@ Serif for long reads, sans for clarity, rounded for comfort, handwritten for war
 </details>
 
 The samples are simulated: the device's own font files, laid out at the screen's native resolution. Texts: Zhu Ziqing's "Back View", Li Bai's "Quiet Night Thoughts", and Meng Haoran's "Spring Morning".
-
-## Find the book you want, at a glance
-
-The home screen shows your covers. The book you're reading and the last three you opened are right there when you pick it up, along with how long you've been reading.
-
-Your books sit in one library, most recent first. No more opening folder after folder. Hold a book to add it to Favorites. Books without a cover get an illustrated one.
-
-| Home | Library |
-|:---:|:---:|
-| <img src="docs/promo/cover-home.jpg" width="300" alt="Formosa Cover home: the current book and the last three"> | <img src="docs/promo/cover-shelf.jpg" width="300" alt="Formosa Cover library: six covers per page"> |
-
-To switch, go to Settings → Display → UI Theme and choose Formosa Cover.
 
 ## Spare moments, ready to read
 

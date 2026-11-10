@@ -1,5 +1,6 @@
 #include "OtaUpdateActivity.h"
 
+#include <CrossPointVersion.h>
 #include <GfxRenderer.h>
 #include <I18n.h>
 #include <WiFi.h>

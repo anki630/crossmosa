@@ -2612,7 +2612,7 @@ void ChapterHtmlSlimParser::layoutCurrentBlock(const bool includeLast) {
         [this](std::shared_ptr<TextBlock> block, const uint32_t offset, const int tokens) {
           addColumnToPage(std::move(block), offset, tokens);
         },
-        includeLast);
+        includeLast, frozenEmFP_, frozenHangNeed_);
     // 區塊排完之後的空隙（CSS margin-bottom／padding-bottom）——**記著，先不套用**。
     // 下一個區塊的第一欄會拿它跟那個區塊的 margin-top 取大者（見 addColumnToPage）。
     // 沒有下一個區塊時就自然消失，正好也是 CSS 的行為（最後一段的下緣不佔版面）。

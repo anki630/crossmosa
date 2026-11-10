@@ -1,5 +1,6 @@
 #include "BootActivity.h"
 
+#include <CrossPointVersion.h>
 #include <GfxRenderer.h>
 #include <I18n.h>
 

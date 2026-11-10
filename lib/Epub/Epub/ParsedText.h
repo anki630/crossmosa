@@ -293,7 +293,12 @@ class ParsedText {
                                //    可以吐出好幾個格（禁則黏合、縮略詞逐字、混合 token 切段）
                                //    —— 拿格數去比會提前跨過門檻，註腳早一頁出現（複查抓到）。
                                const std::function<void(std::shared_ptr<TextBlock>, uint32_t, int)>& processColumn,
-                               bool includeLastColumn = true);
+                               bool includeLastColumn = true,
+                               // 排版規格凍結的 12.4 em。EPUB 來自 section 檔頭／startBuild，TXT 由
+                               // recomputeGeometry 量一次；<=16 只供舊呼叫點與測試退回現量。
+                               int32_t layoutEmFP = -1,
+                               // 同一幾何建立點量到的懸掛句讀墨水高；<1 時才退回現量。
+                               float layoutHangNeed = -1.0f);
 
   void layoutAndExtractLines(const GfxRenderer& renderer, int fontId, uint16_t viewportWidth,
                              const std::function<void(std::shared_ptr<TextBlock>, uint32_t)>& processLine,

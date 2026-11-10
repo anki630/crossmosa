@@ -4,6 +4,9 @@
 #include <DataDir.h>
 #include <Epub/Page.h>
 #include <Epub/ParsedText.h>
+#include <Epub/VerticalColumns.h>
+#include <Epub/VerticalEm.h>
+#include <Epub/VerticalText.h>
 #include <Epub/blocks/TextBlock.h>
 #include <Epub/converters/ImageToFramebufferDecoder.h>
 #include <FontCacheManager.h>
@@ -2648,8 +2651,9 @@ void EpubReaderActivity::render(RenderLock&& lock) {
         return;
       }
     }
-    // v351：固定版面頁上下置中（見 fxlCenterDy）。固定版面的四個頁邊在上面已經設成 0。
-    if (curSpineFxl_) orientedMarginTop = fxlCenterDy(*p, fxlViewportHeight_);
+    // 固定版面沿用自己的整頁置中；一般版面在同一個頁面原點加入 JLREQ 基本版面位移。
+    // 所有 PageElement、圖片灰階框與後續預取都吃這個原點，不逐一替疊加物補座標。
+    pageDrawOrigin(currentSpineIndex, *section, *p, orientedMarginLeft, orientedMarginTop, true);
 
     // Cache this page's content offset (read alongside the page, no extra file open) so
     // saveProgress and addBookmark can use it without reopening section.bin.
@@ -2998,7 +3002,10 @@ void EpubReaderActivity::prefetchNextPage(const int fontId, const int marginTop,
     }
     scope.setRetainCacheOnExit(true);
     // scan 模式：drawText 只 recordText，framebuffer 一個位元組都不會動。
-    page->render(renderer, fontId, marginLeft, marginTop);
+    int pageLeft = marginLeft;
+    int pageTop = marginTop;
+    pageDrawOrigin(currentSpineIndex, *section, *page, pageLeft, pageTop);
+    page->render(renderer, fontId, pageLeft, pageTop);
     completed = scope.endScanAndPrewarmAbortable(
         abortOnInput ? &EpubReaderActivity::prefetchShouldAbortOrInput : &EpubReaderActivity::prefetchShouldAbort,
         this);
@@ -3077,7 +3084,10 @@ bool EpubReaderActivity::prefetchIntoNextChapter(const int fontId, const int mar
       return true;
     }
     scope.setRetainCacheOnExit(true);
-    page->render(renderer, fontId, marginLeft, marginTop);  // scan 模式，framebuffer 不動
+    int pageLeft = marginLeft;
+    int pageTop = marginTop;
+    pageDrawOrigin(nextSpine, *next, *page, pageLeft, pageTop);
+    page->render(renderer, fontId, pageLeft, pageTop);  // scan 模式，framebuffer 不動
     completed = scope.endScanAndPrewarmAbortable(
         abortOnInput ? &EpubReaderActivity::prefetchShouldAbortOrInput : &EpubReaderActivity::prefetchShouldAbort,
         this);
@@ -3096,7 +3106,8 @@ bool EpubReaderActivity::prefetchIntoNextChapter(const int fontId, const int mar
   return true;
 }
 
-void EpubReaderActivity::pageDrawOrigin(const int spine, const Page& page, int& x0, int& y0) const {
+void EpubReaderActivity::pageDrawOrigin(const int spine, const Section& layoutSection, const Page& page, int& x0,
+                                        int& y0, const bool witness) {
   if (epub && epub->isSpineFixedLayout(spine)) {
     x0 = 0;  // 固定版面：畫布＝整個螢幕（v351），上下置中
     y0 = fxlCenterDy(page, fxlViewportHeight_);
@@ -3106,6 +3117,79 @@ void EpubReaderActivity::pageDrawOrigin(const int spine, const Page& page, int& 
   renderer.getOrientedViewableTRBL(&top, &right, &bottom, &left);
   x0 = left + SETTINGS.screenMargin;  // 一般版面：viewable 邊＋頁邊（同 render()）
   y0 = top + SETTINGS.screenMargin;
+
+  if (!layoutSection.hasLayoutSpec()) return;
+  const ReaderRenderSpec& spec = layoutSection.layoutSpec();
+  const int32_t emFP = layoutSection.layoutEmFP();
+  const float em = static_cast<float>(emFP) / 16.0f;
+  int dx = 0;
+  int pageDx = 0;
+  int dy = 0;
+  int cols = 0;
+  int cells = 0;
+  int pitch = 0;
+  int lineHeight = layoutSection.layoutLineHeightPx();
+  int room = 0;
+  int need = 0;
+  bool hangAllowed = false;
+  bool hangClamped = false;
+  // 直排的圖片／<hr> 由解析器隔離成獨立頁、自己置中。保險起見：只要頁上有任何非文字欄的元素就不位移
+  //   （位移的夾限只看文字欄，圖或線靠左／貼底時會被推出去 —— 複查）。
+  const bool isolated = spec.verticalLayout && (!page.hasTextLines() || page.hasNonLineElements());
+
+  if (spec.verticalLayout && em > 1.0f) {
+    pitch = vtext::columnPitchPx(em, spec.columnPitchTier, spec.zhuyinIdentity != 0);
+    if (pitch < 1) pitch = 1;
+    cols = spec.viewportWidth / pitch;
+    const float hangNeed = layoutSection.layoutHangNeed();
+    const auto grid = vtext::makeCenteredColumnGrid(static_cast<float>(spec.viewportHeight), em, hangNeed);
+    cells = grid.grid.charsPerColumn;
+    room = static_cast<int>(grid.grid.hangRoom + 0.5f);
+    need = static_cast<int>(hangNeed + 0.5f);
+    hangAllowed = grid.hangAllowed;
+    hangClamped = grid.hangClamped;
+    if (!isolated) {
+      // 欄從 viewportWidth 的右緣往左放，理想負位移把零頭平分；但段落 lead/trail gap
+      // 不是 pitch 的整數倍，必須依本頁真正的最左欄夾限，不能把欄推出版心左緣。
+      dx = vtext::centeredReverseGridOffset(spec.viewportWidth, pitch,
+                                            vtext::columnCellPx(em, spec.zhuyinIdentity != 0));
+      pageDx = vtext::clampReverseGridOffset(dx, page.minLineX());
+      dy = grid.offsetPx;
+    }
+  } else if (!spec.verticalLayout) {
+    if (lineHeight < 1) lineHeight = 1;
+    cells = spec.viewportHeight / lineHeight;
+    // JLREQ 2.4.1 的標準放法之一是「横組は天を指定、左右中央」。橫排每頁的實際
+    // 內容高度又會受標題、ruby、圖片與段落間距影響，故固定天（dy=0）；左右已由
+    // 兩端對齊平均，不再施加常數位移。
+  }
+  x0 += pageDx;
+  y0 += dy;
+
+  if (!witness) return;
+  // FNV-1a 型的小鑰匙只負責抑制重複 log；即使碰撞也不參與版面決策。
+  uint32_t key = 2166136261u;
+  const auto mix = [&key](const uint32_t value) {
+    key ^= value;
+    key *= 16777619u;
+  };
+  mix(static_cast<uint32_t>(spine));
+  mix(static_cast<uint32_t>(emFP));
+  mix(static_cast<uint32_t>(spec.viewportWidth) << 16 | spec.viewportHeight);
+  mix(static_cast<uint32_t>(pitch));
+  mix(static_cast<uint32_t>(lineHeight));
+  mix(static_cast<uint32_t>(isolated));
+  mix(static_cast<uint32_t>(pageDx));
+  if (!gridLogValid_ || gridLogKey_ != key) {
+    gridLogValid_ = true;
+    gridLogKey_ = key;
+    DiagLog::line(
+        "GRID dx=%d pagedx=%d dy=%d cols=%d cells=%d vw=%u vh=%u em16=%ld pitch=%d line=%d room=%d need=%d allowed=%d "
+        "clamp=%d src=epub spine=%d vert=%d isolated=%d",
+        dx, pageDx, dy, cols, cells, static_cast<unsigned>(spec.viewportWidth),
+        static_cast<unsigned>(spec.viewportHeight), static_cast<long>(emFP), pitch, lineHeight, room, need,
+        hangAllowed ? 1 : 0, hangClamped ? 1 : 0, spine, spec.verticalLayout ? 1 : 0, isolated ? 1 : 0);
+  }
 }
 
 namespace {
@@ -3181,6 +3265,7 @@ void EpubReaderActivity::predecodeNextImage() {
   const PredecodeInFlight inFlight;  // 保險絲：這段期間重開 → 下次進閱讀器停用預解
   const unsigned long t0 = millis();
   std::unique_ptr<Section> nextChapter;  // 跨章時暫時載入的下一章（只讀快取，不建置）
+  Section* targetSection = section.get();
   std::unique_ptr<Page> target;
   int targetSpine = spine;
   int targetPage = page + 1;
@@ -3209,6 +3294,7 @@ void EpubReaderActivity::predecodeNextImage() {
       return noteNextImgSkip(NextImgSkip::NextLoad, spine, page);
     }
     target = nextChapter->loadPage(0);
+    targetSection = nextChapter.get();
     targetSpine = nextSpine;
     targetPage = 0;
   }
@@ -3228,7 +3314,7 @@ void EpubReaderActivity::predecodeNextImage() {
 
   // 位置跟翻到時的 render 一樣（抖色相位看螢幕座標）。
   int x0 = 0, y0 = 0;
-  pageDrawOrigin(targetSpine, *target, x0, y0);
+  pageDrawOrigin(targetSpine, *targetSection, *target, x0, y0);
   const ImageBlock& block = candidate->getImageBlock();
   const int x = x0 + candidate->xPos;
   const int y = y0 + candidate->yPos;

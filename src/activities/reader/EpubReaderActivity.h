@@ -160,8 +160,10 @@ class EpubReaderActivity final : public Activity {
   uint16_t textViewportHeight_ = 0;
   uint16_t fxlViewportWidth_ = 0;
   uint16_t fxlViewportHeight_ = 0;
-  bool curSpineFxl_ = false;         // render() 開頭依 currentSpineIndex 設；renderStatusBar 看它
-  int fxlLoggedSpine_ = -1;          // FXL 證人：同一章只印一次
+  bool curSpineFxl_ = false;  // render() 開頭依 currentSpineIndex 設；renderStatusBar 看它
+  int fxlLoggedSpine_ = -1;   // FXL 證人：同一章只印一次
+  uint32_t gridLogKey_ = 0;   // GRID 證人：每章／版面參數組合只印一次
+  bool gridLogValid_ = false;
   bool imgFailPoolsDumped_ = false;  // v350：記憶體類解碼失敗的池子快照，每次開書最多一次
   uint16_t viewportWidthFor(int spine) const;
   uint16_t viewportHeightFor(int spine) const;
@@ -235,7 +237,8 @@ class EpubReaderActivity final : public Activity {
   int nextImgSkipSpine_ = -1;
   uint16_t nextImgSkipMask_ = 0;
   // v354：某一章某一頁畫在螢幕上的原點（跟 render() 同一套算法；背景預解要用同一個位置，Bayer 抖色的相位才一樣）。
-  void pageDrawOrigin(int spine, const Page& page, int& x0, int& y0) const;
+  void pageDrawOrigin(int spine, const Section& layoutSection, const Page& page, int& x0, int& y0,
+                      bool witness = false);
   void renderContents(std::unique_ptr<Page> page, int pageNo, int orientedMarginTop, int orientedMarginRight,
                       int orientedMarginBottom, int orientedMarginLeft);
   void renderStatusBar() const;

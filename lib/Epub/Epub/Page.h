@@ -137,6 +137,27 @@ class Page {
                        [](const std::shared_ptr<PageElement>& el) { return el->getTag() == TAG_PageImage; });
   }
 
+  // 直排的圖片／<hr> 由解析器隔離成獨立頁並自行置中；基本版面位移只套在有文字欄的頁。
+  bool hasTextLines() const {
+    return std::any_of(elements.begin(), elements.end(),
+                       [](const std::shared_ptr<PageElement>& el) { return el && el->getTag() == TAG_PageLine; });
+  }
+
+  bool hasNonLineElements() const {
+    return std::any_of(elements.begin(), elements.end(),
+                       [](const std::shared_ptr<PageElement>& el) { return el && el->getTag() != TAG_PageLine; });
+  }
+
+  // 直排頁最左一欄在版心座標中的左緣。段落 lead/trail gap 不是欄距整數倍，
+  // 所以不能只拿 viewportWidth % pitch 推定這個值。
+  int minLineX() const {
+    int minX = INT16_MAX;
+    for (const auto& el : elements) {
+      if (el && el->getTag() == TAG_PageLine) minX = std::min(minX, static_cast<int>(el->xPos));
+    }
+    return minX == INT16_MAX ? 0 : minX;
+  }
+
   // v267：這一頁有幾張圖。灰階帶高的預配只給【單圖頁】—— 多圖頁只有第一張能進像素快取的 RAM slot，
   //   用外框估會高估它，反而可能把尾段製造出來（見 EpubReaderActivity 的 planGrayStrip）。
   size_t imageCount() const {

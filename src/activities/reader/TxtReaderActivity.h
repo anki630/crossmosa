@@ -36,10 +36,21 @@ class TxtReaderActivity final : public Activity {
   std::vector<std::shared_ptr<TextBlock>> currentPageLines;
   int linesPerPage = 0;
   // v241 直排
-  bool vertical_ = false;           // 開書時解析的軸向（SETTINGS.documentIsVertical()）
-  int unitsPerPage_ = 1;            // 橫排＝行數、直排＝欄數
-  int columnPitch_ = 0;             // 直排欄距（px）
-  int cachedLineHeight_ = 1;        // v284：橫排行距（px），由 updateViewport 解析一次
+  bool vertical_ = false;     // 開書時解析的軸向（SETTINGS.documentIsVertical()）
+  int unitsPerPage_ = 1;      // 橫排＝行數、直排＝欄數
+  int columnPitch_ = 0;       // 直排欄距（px）
+  int cachedLineHeight_ = 1;  // v284：橫排行距（px），由 updateViewport 解析一次
+  int32_t cachedEmFP_ = -1;   // 幾何與逐頁直排共同使用的 12.4 em（只量一次）
+  float cachedHangNeed_ = 1.0f;
+  int gridDx_ = 0;      // 理想的直排基本版面位移
+  int pageGridDx_ = 0;  // 依最左欄夾限後實際使用的位移
+  int gridDy_ = 0;
+  int gridCells_ = 0;
+  int gridHangRoom_ = 0;
+  int gridHangNeed_ = 0;
+  bool gridHangAllowed_ = false;
+  bool gridHangClamped_ = false;
+  bool gridLogPending_ = false;
   bool pendingScreenshot_ = false;  // v289：選單觸發的截圖，等這一頁完整畫完才拍
   // v290：書籤。錨點是【位元組位移】（txt 的頁游標本來就是它），不是頁碼 ——
   //   改字級／行距／方向都不會讓書籤跑掉，這是 v118 位移制買到的東西。

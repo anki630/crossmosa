@@ -21,6 +21,12 @@ class Section {
   //   排版與 section 檔頭共用它 —— 兩邊各自量會寫出「檔頭宣稱 B、其實照 A 排」的錯標快取
   //   （codex 第二輪抓到，是我第一版修法自己引入的）。-1 ＝ 尚未凍結。
   int32_t frozenEmFP_ = -1;
+  // 檔頭本來就有的排版身分，在載入／建置時保留一份給繪製端重算基本版面原點。
+  // 不新增任何持久欄位，因此不改 SECTION_FILE_VERSION。
+  ReaderRenderSpec layoutSpec_{};
+  bool layoutSpecValid_ = false;
+  float layoutHangNeed_ = 1.0f;
+  int32_t layoutEmFP_ = -1;  // 繪製端用的 em：跟 layoutSpec_ 一起換（frozenEmFP_ 在 build_ 檢查前就被覆寫，不能共用）
   // 這次建置實際要用的行距（像素）。emFP 量不到時退回字型宣告的 advanceY。
   int lineHeightPxFor(const ReaderRenderSpec& spec, int32_t emFP) const;
   std::string filePath;
@@ -138,6 +144,11 @@ class Section {
   /// 呼叫端據此分流：低記憶體 -> 不要 reset、不要立刻重建（那是無退避的正回饋迴圈：
   /// 重建從章首跑到同一個長段落、再撞同一次 OOM）；真 parse error 才走原本的錯誤路徑。
   bool lastBuildWasLowMemory() const { return lastBuildWasLowMemory_; }
+  const ReaderRenderSpec& layoutSpec() const { return layoutSpec_; }
+  bool hasLayoutSpec() const { return layoutSpecValid_; }
+  int32_t layoutEmFP() const { return layoutEmFP_; }
+  float layoutHangNeed() const { return layoutHangNeed_; }
+  int layoutLineHeightPx() const { return lineHeightPxFor(layoutSpec_, layoutEmFP_); }
   uint8_t lastLoadReject() const { return lastLoadReject_; }
   // v309：見 lastFileEmFP_ 的說明。-1 表示這次沒讀到檔頭（例如版號就不符）。
   int32_t lastFileEmFP() const { return lastFileEmFP_; }

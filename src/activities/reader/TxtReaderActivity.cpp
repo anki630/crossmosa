@@ -21,6 +21,7 @@
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
 #include "Epub/ParsedText.h"
+#include "Epub/VerticalColumns.h"
 #include "Epub/VerticalEm.h"
 #include "Epub/VerticalText.h"
 #include "Epub/blocks/TextBlock.h"
@@ -207,6 +208,8 @@ bool TxtReaderActivity::loadPageAtOffset(const size_t offset, std::vector<std::s
 
   txtengine::Params tp;
   tp.fontId = cachedFontId;
+  tp.emFP = cachedEmFP_;
+  tp.hangNeed = cachedHangNeed_;
   tp.extent = static_cast<uint16_t>(vertical_ ? viewportHeight_ : viewportWidth);
   tp.maxUnits = unitsPerPage_;
   tp.vertical = vertical_;
@@ -276,6 +279,16 @@ void TxtReaderActivity::renderPage(const size_t pageOffset, const size_t pageEnd
   const int lineHeight = cachedLineHeight_;
   const int contentWidth = viewportWidth;
 
+  if (gridLogPending_) {
+    gridLogPending_ = false;
+    DiagLog::line(
+        "GRID dx=%d pagedx=%d dy=%d cols=%d cells=%d vw=%d vh=%d em16=%ld pitch=%d line=%d room=%d need=%d allowed=%d "
+        "clamp=%d src=txt vert=%d",
+        gridDx_, pageGridDx_, gridDy_, vertical_ ? unitsPerPage_ : 0, gridCells_, viewportWidth, viewportHeight_,
+        static_cast<long>(cachedEmFP_), columnPitch_, cachedLineHeight_, gridHangRoom_, gridHangNeed_,
+        gridHangAllowed_ ? 1 : 0, gridHangClamped_ ? 1 : 0, vertical_ ? 1 : 0);
+  }
+
   // v239：對齊、兩端對齊、RTL 都由排版引擎算進 TextBlock 的字位置裡（extent＝viewportWidth），
   // 這裡只負責逐行往下畫。`TextBlock::render` 的 y 與舊的 `drawText` 同語意（行頂）。
   (void)contentWidth;
@@ -285,17 +298,19 @@ void TxtReaderActivity::renderPage(const size_t pageOffset, const size_t pageEnd
     const GfxRenderer::VerticalScope axis(renderer, vertical_);
     if (vertical_) {
       // v241 直排：欄由右往左，照 ChapterHtmlSlimParser 的放欄規則 —— 第一欄左緣＝視窗右緣減欄距，
-      // 之後每欄再減一個欄距，餘數留在左邊；欄頂＝版心頂。TextBlock::render 在直排範圍內分流到
+      // 之後每欄再減一個欄距；JLREQ 位移把原本全在左邊的餘數平分。TextBlock::render 在直排範圍內分流到
       // renderVertical，x 是欄的左緣、y 是欄頂。空白單位（nullptr）照樣佔一欄。
-      int x = cachedOrientedMarginLeft + viewportWidth;
+      int x = cachedOrientedMarginLeft + viewportWidth + pageGridDx_;
       for (const auto& unit : currentPageLines) {
         x -= columnPitch_;
         if (unit) {
-          unit->render(renderer, cachedFontId, x, cachedOrientedMarginTop);
+          unit->render(renderer, cachedFontId, x, cachedOrientedMarginTop + gridDy_);
         }
       }
       return;
     }
+    // JLREQ 2.4.1：「横組は天を指定、左右中央」。TXT 橫排同 EPUB 固定天；實際行高、
+    // 空行與段落內容不拿固定 dy 往狀態列方向推。
     int y = cachedOrientedMarginTop;
     for (const auto& unit : currentPageLines) {
       if (unit) {
@@ -458,6 +473,8 @@ size_t TxtReaderActivity::findPreviousPageOffset(const size_t offset, BackStats&
 
     txtengine::Params tp;
     tp.fontId = cachedFontId;
+    tp.emFP = cachedEmFP_;
+    tp.hangNeed = cachedHangNeed_;
     tp.extent = static_cast<uint16_t>(vertical_ ? viewportHeight_ : viewportWidth);
     tp.maxUnits = unitsPerPage_;
     tp.vertical = vertical_;
@@ -663,9 +680,10 @@ void TxtReaderActivity::recomputeGeometry() {
 
   viewportWidth = renderer.getScreenWidth() - cachedOrientedMarginLeft - cachedOrientedMarginRight;
   const int viewportHeight = renderer.getScreenHeight() - cachedOrientedMarginTop - cachedOrientedMarginBottom;
-  // v284：**解析一次就存起來**（同 EPUB 走 Section::resolvedLineHeightPx 的理由）——
-  //   probeEmFP 有兩條精度不同的路，每次現算可能讓同一份文字前後差 1px。
+  // 橫排行高是既有分頁契約；不可改寫公式，否則使用者頁碼／進度會變。
   cachedLineHeight_ = renderer.getReaderLineHeight(cachedFontId, SETTINGS.getReaderLinePitchEm());
+  // 直排另存 12.4 em，供欄距與每次 soft flush 共用，不影響上面的橫排行高算法。
+  cachedEmFP_ = vtext::probeEmFP(renderer, cachedFontId);
   if (cachedLineHeight_ < 1) cachedLineHeight_ = 1;  // 這裡是 linesPerPage 的除數
   const int lineHeight = cachedLineHeight_;
 
@@ -679,17 +697,39 @@ void TxtReaderActivity::recomputeGeometry() {
   // round(em × 欄距檔位係數)，em 用 probeEmFP 實際量。欄長＝版心高。
   viewportHeight_ = viewportHeight;
   vertical_ = SETTINGS.documentIsVertical();
+  gridDx_ = 0;
+  pageGridDx_ = 0;
+  gridDy_ = 0;
+  gridCells_ = 0;
+  gridHangRoom_ = 0;
+  gridHangNeed_ = 0;
+  gridHangAllowed_ = false;
+  gridHangClamped_ = false;
   if (vertical_) {
-    const float em = static_cast<float>(vtext::probeEmFP(renderer, cachedFontId)) / 16.0f;
+    const float em = static_cast<float>(cachedEmFP_) / 16.0f;
     // 注音字型的漢字格是 1.5 em（注音在字的右邊）→ 欄距多 0.5 em，與 EPUB 同一個函式
     const int pitch = vtext::columnPitchPx(em, SETTINGS.readerColumnPitch, sdFontSystem.isZhuyinFont(cachedFontId));
     columnPitch_ = pitch > 0 ? pitch : 1;
     unitsPerPage_ = viewportWidth / columnPitch_;
     if (unitsPerPage_ < 1) unitsPerPage_ = 1;
+    gridDx_ = vtext::centeredReverseGridOffset(viewportWidth, columnPitch_,
+                                               vtext::columnCellPx(em, sdFontSystem.isZhuyinFont(cachedFontId)));
+    const int minColumnLeft = viewportWidth - unitsPerPage_ * columnPitch_;
+    pageGridDx_ = vtext::clampReverseGridOffset(gridDx_, minColumnLeft);
+    cachedHangNeed_ = vtext::measureHangNeed(renderer, cachedFontId);
+    const auto grid = vtext::makeCenteredColumnGrid(static_cast<float>(viewportHeight_), em, cachedHangNeed_);
+    gridDy_ = grid.offsetPx;
+    gridCells_ = grid.grid.charsPerColumn;
+    gridHangRoom_ = static_cast<int>(grid.grid.hangRoom + 0.5f);
+    gridHangNeed_ = static_cast<int>(cachedHangNeed_ + 0.5f);
+    gridHangAllowed_ = grid.hangAllowed;
+    gridHangClamped_ = grid.hangClamped;
   } else {
     columnPitch_ = 0;
     unitsPerPage_ = linesPerPage;
+    gridCells_ = linesPerPage;
   }
+  gridLogPending_ = true;
 
   // 幾何變了,每頁的位元組數也會變 —— 估計值重新累積,免得沿用舊字級的平均值。
   avgBytesPerPage_ = 0;
@@ -1457,8 +1497,8 @@ void TxtReaderActivity::prefetchNextPage(const size_t nextOffset) {
     // 面板上仍是剛顯示出去的那一頁。座標傳真值只是為了誠實。
     const int lineHeight = cachedLineHeight_;
     const GfxRenderer::VerticalScope axis(renderer, vertical_);
-    int x = cachedOrientedMarginLeft + viewportWidth;
-    int y = cachedOrientedMarginTop;
+    int x = cachedOrientedMarginLeft + viewportWidth + pageGridDx_;
+    int y = cachedOrientedMarginTop + (vertical_ ? gridDy_ : 0);
     for (const auto& unit : lines) {
       if (vertical_) x -= columnPitch_;
       if (unit) {

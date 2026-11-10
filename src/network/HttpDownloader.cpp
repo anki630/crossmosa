@@ -1,6 +1,7 @@
 #include "HttpDownloader.h"
 
 #include <Arduino.h>
+#include <CrossPointVersion.h>
 #include <Logging.h>
 #include <Memory.h>
 #include <base64.h>

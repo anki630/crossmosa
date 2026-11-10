@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include <BoardConfig.h>
+#include <CrossPointVersion.h>
 #include <DataDir.h>
 #include <Epub.h>
 #include <Epub/ParsedText.h>

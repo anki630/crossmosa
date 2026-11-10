@@ -15,6 +15,7 @@
 #include "Epub/css/CssParser.h"
 #include "Page.h"
 #include "ParsedText.h"
+#include "VerticalEm.h"
 #include "hyphenation/Hyphenator.h"
 #include "parsers/ChapterHtmlSlimParser.h"
 
@@ -244,6 +245,9 @@ void Section::writeSectionFileHeader(const ReaderRenderSpec& spec) {
 }
 
 bool Section::loadSectionFile(const ReaderRenderSpec& spec) {
+  int32_t loadedEmFP = -1;  // 檔頭驗過的 em；整份檔案驗完才交給繪製端（見函式尾）
+  // 任何失敗路徑都不准留下上一份版面身分（複查）：先作廢，整份驗過才填。
+  layoutSpecValid_ = false;
   if (!Storage.openFileForRead("SCT", filePath, file)) {
     return false;
   }
@@ -325,6 +329,7 @@ bool Section::loadSectionFile(const ReaderRenderSpec& spec) {
       clearCache();
       return false;
     }
+    loadedEmFP = fileEmFP;
     // v187：這份版面是在 CSS 撞地板、規則集被截斷（或根本載不到）的情況下排的（樣式打折）。當時是為了
     // 「書開得起來」，不是永久正確。現在記憶體寬裕（門檻高於過濾模式地板 20KB 很多）就丟掉重排【一次】：
     // 重建若又截斷會寫 CSS_STATE_TRUNCATED_FINAL，之後不再為此重排（複查：沒有這條會每次開章都重排）。
@@ -372,6 +377,14 @@ bool Section::loadSectionFile(const ReaderRenderSpec& spec) {
     partial_ = true;
     partialPageCount_ = pageCount;
   }
+
+  // 驗過的檔頭值就是這份 Page 當初排版使用的單一真相來源。保留在 Section 執行期，
+  // 繪製置中不必再 probe，也不必為純位移增加 section 持久格式。只在整份檔案都驗過之後才填。
+  frozenEmFP_ = loadedEmFP;
+  layoutEmFP_ = loadedEmFP;
+  layoutSpec_ = spec;
+  layoutSpecValid_ = true;
+  layoutHangNeed_ = vtext::measureHangNeed(renderer, spec.fontId);
 
   // Explicit close() required: member variable persists beyond function scope
   file.close();
@@ -433,6 +446,11 @@ bool Section::startBuild(const ReaderRenderSpec& spec, const std::function<void(
     LOG_ERR("SCT", "startBuild called while a build is already active");
     return false;
   }
+  // 繪製端的版面身分：檢查過「沒有建置在跑」之後才換，否則正在跑的 parser 用 A、繪製卻照 B 算原點（複查）。
+  layoutEmFP_ = frozenEmFP_;
+  layoutSpec_ = spec;
+  layoutSpecValid_ = true;
+  layoutHangNeed_ = vtext::measureHangNeed(renderer, spec.fontId);
   buildComplete_ = false;
   builtPageCount_ = 0;
   // Pages from a loaded partial stay readable (from filePath) while this build writes
@@ -586,7 +604,7 @@ bool Section::startBuild(const ReaderRenderSpec& spec, const std::function<void(
   // context for the parser's whole lifetime.
   BuildContext* ctxPtr = ctx.get();
   ctx->parser = makeUniqueNoThrow<ChapterHtmlSlimParser>(
-      epub, ctxPtr->parsePath, renderer, spec.fontId, lineHeightPxFor(spec, frozenEmFP_), frozenEmFP_,
+      epub, ctxPtr->parsePath, renderer, spec.fontId, lineHeightPxFor(spec, frozenEmFP_), frozenEmFP_, layoutHangNeed_,
       spec.extraParagraphSpacing, spec.paragraphAlignment, spec.viewportWidth, spec.viewportHeight,
       spec.hyphenationEnabled, spec.focusReadingEnabled,
       [this, ctxPtr](std::unique_ptr<Page> page, const uint16_t paragraphIndex, const uint16_t listItemIndex,
