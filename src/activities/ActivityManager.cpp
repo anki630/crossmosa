@@ -8,6 +8,7 @@
 
 #include "CrossPointSettings.h"
 #include "OpdsServerStore.h"
+#include "anki/AnkiDeckListActivity.h"
 #include "boot_sleep/BootActivity.h"
 #include "boot_sleep/SleepActivity.h"
 #include "browser/OpdsBookBrowserActivity.h"
@@ -241,6 +242,10 @@ void ActivityManager::goToRecentBooks() {
   replaceActivity(std::make_unique<RecentBooksActivity>(renderer, mappedInput));
 }
 
+void ActivityManager::goToAnki(std::string selectPath) {
+  replaceActivity(std::make_unique<AnkiDeckListActivity>(renderer, mappedInput, std::move(selectPath)));
+}
+
 void ActivityManager::goToBrowser() {
   const auto& servers = OPDS_STORE.getServers();
   // Skip the server picker when there's only one server configured
@@ -282,6 +287,8 @@ void ActivityManager::goHome(HomeMenuItem initialMenuItem) {
       initialMenuItem = HomeMenuItem::FILE_TRANSFER;
     } else if (activityName == "Settings") {
       initialMenuItem = HomeMenuItem::SETTINGS_MENU;
+    } else if (activityName == "AnkiDecks" || activityName == "AnkiReview") {
+      initialMenuItem = HomeMenuItem::ANKI;
     }
   }
   // 2026-10-07：Formosa Cover 主題的首頁是另一個 Activity（封面首頁）；其他主題的首頁一行不動

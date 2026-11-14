@@ -17,7 +17,7 @@
 class Activity;    // forward declaration
 class RenderLock;  // forward declaration
 
-enum class HomeMenuItem { NONE, FILE_BROWSER, RECENTS, OPDS_BROWSER, FILE_TRANSFER, SETTINGS_MENU };
+enum class HomeMenuItem { NONE, FILE_BROWSER, RECENTS, OPDS_BROWSER, FILE_TRANSFER, SETTINGS_MENU, ANKI };
 
 /**
  * ActivityManager
@@ -98,6 +98,8 @@ class ActivityManager {
   // 閱讀器的「回書庫」：Formosa Cover 沒有瀏覽檔案，書庫就是書架；其他主題進瀏覽檔案（path＝要停在哪個檔／資料夾）
   void goToLibrary(std::string path = {});
   void goToBrowser();
+  // 單字卡（Anki 牌組）清單。selectPath＝要停在哪一副（.xdk 路徑；空＝第一副）
+  void goToAnki(std::string selectPath = {});
   // v280：goToReader 被呼叫的時刻（喚醒路徑分項計時）。
   // ⚠️ **取走即清空**（複查抓到）：不清的話，之後任何一次沒有經過 goToReader 的 `onEnter`
   //    （從註腳／選單回到閱讀器）都會拿到上一次的時刻，印出一個看起來合理、實際上毫無意義的

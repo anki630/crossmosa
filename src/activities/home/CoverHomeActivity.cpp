@@ -119,8 +119,9 @@ int CoverHomeActivity::zoneSize(const Zone z) const {
 }
 
 CoverHomeActivity::Tool CoverHomeActivity::toolAt(const int i) const {
-  if (i == 0) return Tool::Transfer;
-  if (hasOpds_ && i == 1) return Tool::Opds;
+  if (i == 0) return Tool::Anki;
+  if (i == 1) return Tool::Transfer;
+  if (hasOpds_ && i == 2) return Tool::Opds;
   return Tool::Settings;
 }
 
@@ -139,11 +140,14 @@ void CoverHomeActivity::onEnter() {
     case HomeMenuItem::RECENTS:
       focus_ = {Zone::Shelf, 0};
       break;
-    case HomeMenuItem::FILE_TRANSFER:
+    case HomeMenuItem::ANKI:
       focus_ = {Zone::Tools, 0};
       break;
+    case HomeMenuItem::FILE_TRANSFER:
+      focus_ = {Zone::Tools, 1};
+      break;
     case HomeMenuItem::OPDS_BROWSER:
-      focus_ = {Zone::Tools, hasOpds_ ? 1 : 0};
+      focus_ = {Zone::Tools, hasOpds_ ? 2 : 1};
       break;
     case HomeMenuItem::SETTINGS_MENU:
       focus_ = {Zone::Tools, toolCount() - 1};
@@ -227,6 +231,9 @@ void CoverHomeActivity::activate() {
       return;
     case Zone::Tools:
       switch (toolAt(focus_.index)) {
+        case Tool::Anki:
+          activityManager.goToAnki();
+          return;
         case Tool::Transfer:
           activityManager.goToFileTransfer();
           return;
@@ -454,9 +461,10 @@ void CoverHomeActivity::drawToolCell(const int i, const bool inverted) const {
   renderer.fillSmoothRoundedRect(tx + 4, ty + 4, tw - 8, th - 8, 10, CoverTile::kSmoothing,
                                  inverted ? Color::Black : Color::White);
   const Tool tool = toolAt(i);
-  const char* label = tool == Tool::Transfer ? tr(STR_FILE_TRANSFER)
-                      : tool == Tool::Opds   ? tr(STR_OPDS_BROWSER)
-                                             : tr(STR_SETTINGS_TITLE);
+  const char* label = tool == Tool::Anki       ? tr(STR_ANKI_TITLE)
+                      : tool == Tool::Transfer ? tr(STR_FILE_TRANSFER)
+                      : tool == Tool::Opds     ? tr(STR_OPDS_BROWSER)
+                                               : tr(STR_SETTINGS_TITLE);
   // 工具格只寫字、置中（v368 減法）
   const int lw = renderer.getTextWidth(UI_10_FONT_ID, label);
   renderer.drawText(UI_10_FONT_ID, tx + (tw - lw) / 2, ty + (th - renderer.getLineHeight(UI_10_FONT_ID)) / 2, label,

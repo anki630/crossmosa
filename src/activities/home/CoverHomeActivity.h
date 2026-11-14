@@ -40,7 +40,7 @@ class CoverHomeActivity final : public Activity {
     int index = 0;
     bool operator==(const Focus& o) const { return zone == o.zone && index == o.index; }
   };
-  enum class Tool : uint8_t { Transfer, Opds, Settings };
+  enum class Tool : uint8_t { Anki, Transfer, Opds, Settings };
 
   void loadRecents();
   bool zoneAvailable(Zone z) const;
@@ -53,7 +53,7 @@ class CoverHomeActivity final : public Activity {
   void toggleFavoriteLocked();  // 呼叫端持繪製鎖
   void removeFromRecents();     // 自己拿鎖（SD 在鎖外）
   std::vector<RecentBook> collectRecents() const;
-  int toolCount() const { return hasOpds_ ? 3 : 2; }
+  int toolCount() const { return hasOpds_ ? 4 : 3; }  // 單字卡、傳輸、(OPDS)、設定
   Tool toolAt(int i) const;
   // 版面（全部由螢幕寬高與字型行高算出來；render 與局部重畫共用）
   void focusRect(const Focus& f, int& x, int& y, int& w, int& h) const;

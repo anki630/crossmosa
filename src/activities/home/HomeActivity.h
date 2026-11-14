@@ -38,13 +38,15 @@ class HomeActivity final : public Activity {
   const HomeMenuItem initialMenuItem;
 
   // Convert HomeMenuItem to menu index (used in onEnter)
-  // v275：順序＝最近閱讀、瀏覽檔案、(OPDS)、檔案傳輸、設定。**三處必須一致**
+  // v275：順序＝最近閱讀、瀏覽檔案、單字卡、(OPDS)、檔案傳輸、設定。**三處必須一致**
   //   （這裡、下面的 indexToMenuItem、HomeActivity.cpp 的 menuItems/menuIcons）。
   static int menuItemToIndex(HomeMenuItem item, bool hasOpdsUrl) {
     int i = 0;
     if (item == HomeMenuItem::RECENTS) return i;
     ++i;
     if (item == HomeMenuItem::FILE_BROWSER) return i;
+    ++i;
+    if (item == HomeMenuItem::ANKI) return i;
     ++i;
     if (item == HomeMenuItem::OPDS_BROWSER) return hasOpdsUrl ? i : 0;
     if (hasOpdsUrl) ++i;
@@ -59,6 +61,7 @@ class HomeActivity final : public Activity {
     int i = 0;
     if (idx == i++) return HomeMenuItem::RECENTS;
     if (idx == i++) return HomeMenuItem::FILE_BROWSER;
+    if (idx == i++) return HomeMenuItem::ANKI;
     if (hasOpdsUrl && idx == i++) return HomeMenuItem::OPDS_BROWSER;
     if (idx == i++) return HomeMenuItem::FILE_TRANSFER;
     if (idx == i) return HomeMenuItem::SETTINGS_MENU;
@@ -70,6 +73,7 @@ class HomeActivity final : public Activity {
   void onSettingsOpen();
   void onFileTransferOpen();
   void onOpdsBrowserOpen();
+  void onAnkiOpen();
 
   int getMenuItemCount() const;
   bool storeCoverBuffer();    // Store frame buffer for cover image
