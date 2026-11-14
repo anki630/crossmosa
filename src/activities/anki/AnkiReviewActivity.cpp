@@ -299,8 +299,8 @@ void AnkiReviewActivity::loop() {
         undo();
         return;
       }
-      const bool flip = confirmUp | released(B::Left) | released(B::Right) | released(B::PageForward) |
-                        released(B::PageBack);
+      const bool flip =
+          confirmUp | released(B::Left) | released(B::Right) | released(B::PageForward) | released(B::PageBack);
       if (flip) {
         RenderLock lock(*this);
         setPhase(Phase::Answer);
@@ -451,7 +451,8 @@ void AnkiReviewActivity::drawCard() {
   const int W = renderer.getScreenWidth();
   const int top = bodyTop();
   const size_t from = static_cast<size_t>(pageStarts_[static_cast<size_t>(page_)]);
-  const size_t to = page_ + 1 < pageCount_ ? static_cast<size_t>(pageStarts_[static_cast<size_t>(page_ + 1)]) : rows_.size();
+  const size_t to =
+      page_ + 1 < pageCount_ ? static_cast<size_t>(pageStarts_[static_cast<size_t>(page_ + 1)]) : rows_.size();
   int y = top;
   for (size_t i = from; i < to; ++i) {
     const Row& row = rows_[i];

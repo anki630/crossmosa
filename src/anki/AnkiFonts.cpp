@@ -45,7 +45,7 @@ void CardFonts::unload(GfxRenderer& renderer) {
   if (!loaded_) return;
   loaded_ = false;
   if (dedicated_) {
-    manager_.unloadAll(renderer);  // 連 UI 備援一起清
+    manager_.unloadAll(renderer);         // 連 UI 備援一起清
     sdFontSystem.ensureLoaded(renderer);  // 閱讀字型＋UI 備援裝回去
     dedicated_ = false;
   }

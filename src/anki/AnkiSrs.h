@@ -51,8 +51,8 @@ struct CardRec {
   uint8_t reps = 0;    // 複習次數（到 255 停）
 
   bool operator==(const CardRec& o) const {
-    return state == o.state && step == o.step && ease == o.ease && due == o.due && ivl == o.ivl &&
-           lapses == o.lapses && reps == o.reps;
+    return state == o.state && step == o.step && ease == o.ease && due == o.due && ivl == o.ivl && lapses == o.lapses &&
+           reps == o.reps;
   }
   bool isLearning() const { return state == CardState::Learning || state == CardState::Relearning; }
 };
@@ -244,10 +244,10 @@ struct SrsHeader {
   uint16_t revToday = 0;
   uint16_t newPerDay = 20;
   uint16_t maxReviews = 200;
-  uint32_t lastEpoch = 0;     // 上一次寫入時的本地 epoch 秒（時鐘不可信時當下限用）
-  uint32_t newRemaining = 0;  // 還沒學過的卡
-  uint32_t histBaseDay = 0;   // hist[0] 是哪一天（更早到期的也算在 hist[0]）
-  uint16_t learnCount = 0;    // 學習中／重學中的卡
+  uint32_t lastEpoch = 0;         // 上一次寫入時的本地 epoch 秒（時鐘不可信時當下限用）
+  uint32_t newRemaining = 0;      // 還沒學過的卡
+  uint32_t histBaseDay = 0;       // hist[0] 是哪一天（更早到期的也算在 hist[0]）
+  uint16_t learnCount = 0;        // 學習中／重學中的卡
   uint16_t hist[kHistDays] = {};  // 複習卡依到期日的張數（histBaseDay 起算，超過 64 天不記）
 
   // 今天（day）的新卡額度與已到期的複習數 —— 牌組清單只讀檔頭就能顯示

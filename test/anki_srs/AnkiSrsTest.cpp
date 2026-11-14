@@ -178,8 +178,8 @@ CardRec learning(uint32_t due) {
 TEST(AnkiQueue, QuotasAndInterleave) {
   StudyQueue q;
   q.begin(kToday, 2, 4);
-  for (uint32_t i = 0; i < 10; ++i) q.offer(i, CardRec{});           // 新卡 0..9，只取 2 張
-  for (uint32_t i = 10; i < 20; ++i) q.offer(i, reviewCard(3));      // 到期的複習 10..19，只取 4 張
+  for (uint32_t i = 0; i < 10; ++i) q.offer(i, CardRec{});       // 新卡 0..9，只取 2 張
+  for (uint32_t i = 10; i < 20; ++i) q.offer(i, reviewCard(3));  // 到期的複習 10..19，只取 4 張
   CardRec future = reviewCard(3);
   future.due = kToday + 1;
   q.offer(20, future);  // 明天才到期：不出
@@ -203,8 +203,8 @@ TEST(AnkiQueue, LearningDueFirstThenWait) {
   StudyQueue q;
   q.begin(kToday, 0, 10);
   q.offer(1, reviewCard(3));
-  q.offer(2, learning(kNow - 5));        // 已到期
-  q.offer(3, learning(kNow + 3600));     // 一小時後
+  q.offer(2, learning(kNow - 5));                   // 已到期
+  q.offer(3, learning(kNow + 3600));                // 一小時後
   q.offer(4, learning(anki::dayEnd(kToday) + 10));  // 明天：不算今天
   q.finish();
   EXPECT_EQ(q.learnLeft(), 2u);

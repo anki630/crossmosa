@@ -61,8 +61,7 @@ bool readDeckInfo(const std::string& xdkPath, DeckInfo& out) {
   if (Storage.exists(out.srsPath.c_str()) && Storage.openFileForRead("ANKI", out.srsPath, s)) {
     uint8_t sh[kHeaderSize];
     SrsHeader hdr;
-    if (readExact(s, sh, sizeof(sh)) && hdr.decode(sh) && hdr.deckId == out.deckId &&
-        hdr.cardCount == out.cardCount) {
+    if (readExact(s, sh, sizeof(sh)) && hdr.decode(sh) && hdr.deckId == out.deckId && hdr.cardCount == out.cardCount) {
       out.progress = hdr;
       out.hasProgress = true;
     }
@@ -230,7 +229,8 @@ bool DeckSession::scan(void (*fn)(void* ctx, uint32_t index, const CardRec& rec)
       LOG_ERR("ANKI", "scan read failed at %u", static_cast<unsigned>(index));
       return false;
     }
-    for (uint32_t i = 0; i < n; ++i) fn(ctx, index + i, decodeRec(buf.get() + i * kRecSize));
+    const uint8_t* base = buf.get();
+    for (uint32_t i = 0; i < n; ++i) fn(ctx, index + i, decodeRec(&base[i * kRecSize]));
     index += n;
   }
   return true;

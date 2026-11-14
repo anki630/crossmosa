@@ -89,9 +89,8 @@ void AnkiDeckListActivity::openOptions() {
   const char* options[] = {a, b};
   pendingOption_ = Option::None;
   pickerFor_ = Option::None;
-  popup_.show(d.name.c_str(), options, 2, 0, [this](const int idx) {
-    pendingOption_ = idx == 0 ? Option::NewPerDay : Option::MaxReviews;
-  });
+  popup_.show(d.name.c_str(), options, 2, 0,
+              [this](const int idx) { pendingOption_ = idx == 0 ? Option::NewPerDay : Option::MaxReviews; });
   requestUpdate();
 }
 
@@ -222,8 +221,8 @@ void AnkiDeckListActivity::render(RenderLock&&) {
 
   if (decks_.empty()) {
     renderer.drawText(UI_12_FONT_ID, metrics.contentSidePadding, contentTop + 20, tr(STR_ANKI_NO_DECKS));
-    const auto lines = renderer.wrappedText(UI_10_FONT_ID, tr(STR_ANKI_NO_DECKS_HINT),
-                                            W - 2 * metrics.contentSidePadding, 6);
+    const auto lines =
+        renderer.wrappedText(UI_10_FONT_ID, tr(STR_ANKI_NO_DECKS_HINT), W - 2 * metrics.contentSidePadding, 6);
     int y = contentTop + 20 + renderer.getLineHeight(UI_12_FONT_ID) + 12;
     for (const auto& ln : lines) {
       renderer.drawText(UI_10_FONT_ID, metrics.contentSidePadding, y, ln.c_str());
@@ -233,8 +232,7 @@ void AnkiDeckListActivity::render(RenderLock&&) {
     GUI.drawList(
         renderer, Rect{0, contentTop, W, contentHeight}, static_cast<int>(decks_.size()), selected_,
         [this](int i) { return decks_[static_cast<size_t>(i)].name; },
-        [this](int i) { return subtitleFor(decks_[static_cast<size_t>(i)]); },
-        [](int) { return UIIcon::Book; });
+        [this](int i) { return subtitleFor(decks_[static_cast<size_t>(i)]); }, [](int) { return UIIcon::Book; });
   }
 
   int fy = H - metrics.buttonHintsHeight - metrics.verticalSpacing - footerH;
@@ -250,8 +248,8 @@ void AnkiDeckListActivity::render(RenderLock&&) {
     popup_.processRender(renderer, mappedInput);  // 畫選單＋選單自己的按鍵提示，然後送上面板
     return;
   }
-  const auto labels = mappedInput.mapLabels(tr(STR_HOME), decks_.empty() ? "" : tr(STR_ANKI_STUDY), tr(STR_DIR_UP),
-                                            tr(STR_DIR_DOWN));
+  const auto labels =
+      mappedInput.mapLabels(tr(STR_HOME), decks_.empty() ? "" : tr(STR_ANKI_STUDY), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
   renderer.displayBuffer();
 }
